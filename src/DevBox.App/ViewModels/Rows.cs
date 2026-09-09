@@ -119,6 +119,15 @@ public sealed class RuntimeRowViewModel(RuntimeInstallation runtime)
     public string InstallPath { get; } = runtime.InstallPath;
 }
 
+public sealed class PhpExtensionRowViewModel(PhpExtensionState extension)
+{
+    public string Name { get; } = extension.Name;
+    public bool Enabled { get; } = extension.Enabled;
+    public bool BinaryAvailable { get; } = extension.BinaryAvailable;
+    public string Status { get; } = extension.Enabled ? "Enabled" : extension.BinaryAvailable ? "Disabled" : "Configured only";
+    public string ActionText { get; } = extension.Enabled ? "Disable" : "Enable";
+}
+
 public sealed class DiagnosticRowViewModel(DiagnosticCheck check)
 {
     public string Category { get; } = check.Category;
