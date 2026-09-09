@@ -31,6 +31,7 @@ All notable changes to DevBox Windows are documented here.
 - ADDONS installation keeps the previous version until configuration succeeds and rolls back on configuration failure.
 - ADDONS checksum verification consistently accepts valid SHA-256 values with surrounding whitespace.
 - ADDONS manifests validate required fields before duplicate-key processing and reject installation directly into the shared `www` root.
+- ADDONS PHP extension requirements are normalized and validated before they can be written to `php.ini`, preventing malformed directive injection and false prerequisite failures.
 - phpMyAdmin Repair now regenerates an incomplete or damaged `config.inc.php`.
 - phpMyAdmin local cookie authentication permits the intentionally passwordless local MySQL root account.
 - Conflicting duplicate hosts-file entries for a DevBox domain are normalized to one loopback mapping.
