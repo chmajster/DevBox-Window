@@ -89,6 +89,106 @@ public sealed class AddonCatalogTests
     }
 
     [Fact]
+    public void Manifest_MissingKey_IsRejectedAsInvalidData()
+    {
+        var root = TempRoot();
+        try
+        {
+            var catalog = new AddonCatalog(root);
+            Directory.CreateDirectory(Path.GetDirectoryName(catalog.CatalogPath)!);
+            File.WriteAllText(catalog.CatalogPath, """
+[
+  {
+    "displayName": "Broken",
+    "description": "test",
+    "installRelativePath": "www/broken",
+    "entryPointRelativePath": "www/broken/index.php",
+    "localUrl": "http://broken.test",
+    "requiredPhpExtensions": [],
+    "version": "1.0",
+    "downloadUrl": "https://example.test/broken.zip",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "archiveRootDirectory": "package"
+  }
+]
+""");
+
+            Assert.Throws<InvalidDataException>(() => catalog.GetAddons());
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void Manifest_MissingSha256_IsRejectedAsInvalidData()
+    {
+        var root = TempRoot();
+        try
+        {
+            var catalog = new AddonCatalog(root);
+            Directory.CreateDirectory(Path.GetDirectoryName(catalog.CatalogPath)!);
+            File.WriteAllText(catalog.CatalogPath, """
+[
+  {
+    "key": "broken",
+    "displayName": "Broken",
+    "description": "test",
+    "installRelativePath": "www/broken",
+    "entryPointRelativePath": "www/broken/index.php",
+    "localUrl": "http://broken.test",
+    "requiredPhpExtensions": [],
+    "version": "1.0",
+    "downloadUrl": "https://example.test/broken.zip",
+    "archiveRootDirectory": "package"
+  }
+]
+""");
+
+            Assert.Throws<InvalidDataException>(() => catalog.GetAddons());
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void Manifest_WwwRootInstallPath_IsRejected()
+    {
+        var root = TempRoot();
+        try
+        {
+            var catalog = new AddonCatalog(root);
+            Directory.CreateDirectory(Path.GetDirectoryName(catalog.CatalogPath)!);
+            File.WriteAllText(catalog.CatalogPath, """
+[
+  {
+    "key": "unsafe",
+    "displayName": "Unsafe",
+    "description": "test",
+    "installRelativePath": "www",
+    "entryPointRelativePath": "www/index.php",
+    "localUrl": "http://unsafe.test",
+    "requiredPhpExtensions": [],
+    "version": "1.0",
+    "downloadUrl": "https://example.test/unsafe.zip",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "archiveRootDirectory": "package"
+  }
+]
+""");
+
+            Assert.Throws<InvalidDataException>(() => catalog.GetAddons());
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public void RuntimeLayout_DoesNotCreateAddonOwnedVhost()
     {
         var root = TempRoot();
