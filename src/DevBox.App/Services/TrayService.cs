@@ -80,17 +80,16 @@ public sealed class TrayService : ITrayService
 
     private async Task RunAllAsync(ServiceAction action)
     {
-        try
+        var errors = new List<string>();
+        foreach (var definition in _catalog.GetDefaultServices())
         {
-            var definitions = _catalog.GetDefaultServices();
-            var ordered = action == ServiceAction.Stop ? definitions.Reverse() : definitions;
-            foreach (var definition in ordered)
+            if (action != ServiceAction.Stop && !File.Exists(definition.ExecutablePath))
             {
-                if (action != ServiceAction.Stop && !File.Exists(definition.ExecutablePath))
-                {
-                    continue;
-                }
+                continue;
+            }
 
+            try
+            {
                 _ = action switch
                 {
                     ServiceAction.Start => await _processManager.StartAsync(definition).ConfigureAwait(false),
@@ -99,10 +98,16 @@ public sealed class TrayService : ITrayService
                     _ => throw new ArgumentOutOfRangeException(nameof(action))
                 };
             }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or FileNotFoundException or System.ComponentModel.Win32Exception)
+            {
+                errors.Add($"{definition.DisplayName}: {ex.Message}");
+            }
         }
-        catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+
+        if (errors.Count > 0)
         {
-            System.Windows.Application.Current.Dispatcher.Invoke(() => _dialogs.Error("Service operation failed", ex.Message));
+            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                _dialogs.Error("Service operation failed", string.Join(Environment.NewLine, errors)));
         }
     }
 
