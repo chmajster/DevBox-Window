@@ -106,6 +106,40 @@ public sealed class AddonInstallerTests
     }
 
     [Fact]
+    public async Task RepairAsync_LegacyNoPasswordFalse_RegeneratesPasswordlessConfig()
+    {
+        var root = TempRoot();
+        try
+        {
+            var addon = Definition(root, new string('0', 64));
+            Directory.CreateDirectory(addon.InstallPath);
+            File.WriteAllText(addon.EntryPointPath, "<?php echo 'ok';");
+            var configPath = Path.Combine(addon.InstallPath, "config.inc.php");
+            File.WriteAllText(configPath, """
+<?php
+$cfg['blowfish_secret'] = 'legacy';
+$i = 1;
+$cfg['Servers'][$i]['auth_type'] = 'cookie';
+$cfg['Servers'][$i]['host'] = '127.0.0.1';
+$cfg['Servers'][$i]['port'] = '3306';
+$cfg['Servers'][$i]['AllowNoPassword'] = false;
+$cfg['TempDir'] = 'tmp';
+""");
+            using var installer = new AddonInstaller(root, new HttpClient(new StaticResponseHandler(Array.Empty<byte>())));
+
+            await installer.RepairAsync(addon);
+
+            var repaired = File.ReadAllText(configPath);
+            Assert.Contains("$cfg['Servers'][$i]['AllowNoPassword'] = true;", repaired, StringComparison.Ordinal);
+            Assert.DoesNotContain("$cfg['Servers'][$i]['AllowNoPassword'] = false;", repaired, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public async Task UninstallAsync_RemovesAddonDirectoryAndOwnedVhostOnly()
     {
         var root = TempRoot();
