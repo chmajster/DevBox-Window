@@ -83,6 +83,11 @@ public sealed class AddonCatalog
             throw new InvalidDataException($"Addon '{entry.Key}' entry point must be inside its install directory.");
         }
 
+        var requiredPhpExtensions = (entry.RequiredPhpExtensions ?? Array.Empty<string>())
+            .Select(NormalizeRequiredPhpExtension)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
         return new AddonDefinition(
             entry.Key,
             entry.DisplayName,
@@ -90,7 +95,7 @@ public sealed class AddonCatalog
             installPath,
             entryPointPath,
             entry.LocalUrl,
-            entry.RequiredPhpExtensions ?? Array.Empty<string>(),
+            requiredPhpExtensions,
             entry.Version,
             entry.DownloadUrl,
             entry.Sha256.Trim(),
@@ -189,6 +194,37 @@ public sealed class AddonCatalog
         {
             throw new InvalidDataException($"Addon '{entry.Key}' archive root is unsafe.");
         }
+
+        foreach (var extension in entry.RequiredPhpExtensions ?? Array.Empty<string>())
+        {
+            _ = NormalizeRequiredPhpExtension(extension);
+        }
+    }
+
+    private static string NormalizeRequiredPhpExtension(string extension)
+    {
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            throw new InvalidDataException("Addon PHP extension names cannot be empty.");
+        }
+
+        var normalized = extension.Trim().ToLowerInvariant();
+        if (normalized.StartsWith("php_", StringComparison.Ordinal))
+        {
+            normalized = normalized[4..];
+        }
+        if (normalized.EndsWith(".dll", StringComparison.Ordinal))
+        {
+            normalized = normalized[..^4];
+        }
+
+        if (normalized.Length == 0 || normalized.Any(character =>
+                character is not (>= 'a' and <= 'z') and not (>= '0' and <= '9') and not '_'))
+        {
+            throw new InvalidDataException($"Addon PHP extension name '{extension}' is invalid.");
+        }
+
+        return normalized;
     }
 
     private static readonly IReadOnlyList<AddonManifestEntry> DefaultManifest =
