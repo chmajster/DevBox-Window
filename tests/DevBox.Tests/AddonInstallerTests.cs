@@ -28,7 +28,10 @@ public sealed class AddonInstallerTests
             Assert.Equal("<?php echo 'ok';", File.ReadAllText(addon.EntryPointPath));
             var config = Path.Combine(addon.InstallPath, "config.inc.php");
             Assert.True(File.Exists(config));
-            Assert.Contains("blowfish_secret", File.ReadAllText(config), StringComparison.Ordinal);
+            var configContent = File.ReadAllText(config);
+            Assert.Contains("blowfish_secret", configContent, StringComparison.Ordinal);
+            Assert.Contains("$cfg['Servers'][$i]['auth_type'] = 'cookie';", configContent, StringComparison.Ordinal);
+            Assert.Contains("$cfg['Servers'][$i]['AllowNoPassword'] = true;", configContent, StringComparison.Ordinal);
             Assert.True(Directory.Exists(Path.Combine(addon.InstallPath, "tmp")));
 
             var vhost = Path.Combine(root, "config", "nginx", "sites-enabled", "phpmyadmin.test.conf");
@@ -54,6 +57,25 @@ public sealed class AddonInstallerTests
 
             await Assert.ThrowsAsync<InvalidDataException>(() => installer.InstallAsync(addon));
             Assert.False(File.Exists(addon.EntryPointPath));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void VerifySha256_ValidHashWithWhitespace_IsAccepted()
+    {
+        var root = TempRoot();
+        try
+        {
+            Directory.CreateDirectory(root);
+            var file = Path.Combine(root, "payload.bin");
+            File.WriteAllText(file, "payload");
+            var hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(file))).ToLowerInvariant();
+
+            AddonInstaller.VerifySha256(file, $"  {hash}\r\n");
         }
         finally
         {
