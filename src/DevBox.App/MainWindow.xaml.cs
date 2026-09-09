@@ -46,5 +46,10 @@ public partial class MainWindow : Window
     {
         _viewModel.Dispose();
         base.OnClosed(e);
+
+        if (!App.IsExiting)
+        {
+            App.RequestExit();
+        }
     }
 }
