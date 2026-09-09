@@ -108,7 +108,7 @@ public sealed class SiteRowViewModel(SiteDefinition site)
     public string Name { get; } = site.Name;
     public string Domain { get; } = site.Domain;
     public string DocumentRoot { get; } = site.DocumentRoot;
-    public string Url { get; } = $"http://{site.Domain}";
+    public string Url { get; } = site.HttpsEnabled ? $"https://{site.Domain}" : $"http://{site.Domain}";
 }
 
 public sealed class RuntimeRowViewModel(RuntimeInstallation runtime)
@@ -117,15 +117,6 @@ public sealed class RuntimeRowViewModel(RuntimeInstallation runtime)
     public string Version { get; } = runtime.Version;
     public string Status { get; } = !runtime.IsValid ? "Broken" : runtime.IsActive ? "Active" : "Installed";
     public string InstallPath { get; } = runtime.InstallPath;
-}
-
-public sealed class PhpExtensionRowViewModel(PhpExtensionState extension)
-{
-    public string Name { get; } = extension.Name;
-    public bool Enabled { get; } = extension.Enabled;
-    public bool BinaryAvailable { get; } = extension.BinaryAvailable;
-    public string Status { get; } = extension.Enabled ? "Enabled" : extension.BinaryAvailable ? "Disabled" : "Configured only";
-    public string ActionText { get; } = extension.Enabled ? "Disable" : "Enable";
 }
 
 public sealed class DiagnosticRowViewModel(DiagnosticCheck check)
