@@ -16,8 +16,10 @@ public partial class MainWindow : Window
     private readonly IReadOnlyDictionary<string, ServiceDefinition> _definitions;
     private readonly IReadOnlyDictionary<string, AddonDefinition> _addonDefinitions;
     private readonly AddonCatalog _addonCatalog;
+    private readonly AddonInstaller _addonInstaller;
     private readonly ObservableCollection<ServiceRow> _rows = new();
     private readonly ObservableCollection<AddonRow> _addonRows = new();
+    private readonly HashSet<string> _installingAddons = new(StringComparer.OrdinalIgnoreCase);
     private readonly DispatcherTimer _refreshTimer;
 
     public MainWindow()
@@ -33,6 +35,7 @@ public partial class MainWindow : Window
         }
 
         _addonCatalog = new AddonCatalog(App.DevBoxRoot);
+        _addonInstaller = new AddonInstaller(App.DevBoxRoot);
         _addonDefinitions = _addonCatalog.GetDefaultAddons()
             .ToDictionary(x => x.Key, StringComparer.OrdinalIgnoreCase);
 
@@ -90,6 +93,40 @@ public partial class MainWindow : Window
         RefreshAddonStatuses();
     }
 
+    private async void InstallAddon_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryGetAddon(sender, out var addon) || !_installingAddons.Add(addon.Key))
+        {
+            return;
+        }
+
+        var row = _addonRows.First(x => x.Key.Equals(addon.Key, StringComparison.OrdinalIgnoreCase));
+        row.SetInstalling();
+
+        try
+        {
+            await _addonInstaller.InstallAsync(addon);
+            RefreshAddonStatuses();
+
+            MessageBox.Show(
+                this,
+                $"{addon.DisplayName} {addon.Version} installed successfully.\n\nPath: {addon.InstallPath}\nURL: {addon.LocalUrl}",
+                $"{addon.DisplayName} installed",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            row.SetError();
+            MessageBox.Show(this, ex.Message, $"{addon.DisplayName} installation failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            _installingAddons.Remove(addon.Key);
+            RefreshAddonStatuses();
+        }
+    }
+
     private void OpenAddon_Click(object sender, RoutedEventArgs e)
     {
         if (!TryGetAddon(sender, out var addon))
@@ -101,7 +138,7 @@ public partial class MainWindow : Window
         {
             MessageBox.Show(
                 this,
-                $"{addon.DisplayName} is not installed. Expected entry point:\n{addon.EntryPointPath}",
+                $"{addon.DisplayName} is not installed. Use Install first.",
                 $"{addon.DisplayName} not installed",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -221,6 +258,11 @@ public partial class MainWindow : Window
     {
         foreach (var row in _addonRows)
         {
+            if (_installingAddons.Contains(row.Key))
+            {
+                continue;
+            }
+
             row.Apply(_addonCatalog.IsInstalled(_addonDefinitions[row.Key]));
         }
     }
@@ -294,6 +336,7 @@ public partial class MainWindow : Window
     private sealed class AddonRow : INotifyPropertyChanged
     {
         private string _status = "Not installed";
+        private string _installAction = "Install";
 
         public AddonRow(AddonDefinition definition)
         {
@@ -303,6 +346,7 @@ public partial class MainWindow : Window
             InstallPath = definition.InstallPath;
             LocalUrl = definition.LocalUrl;
             Requirements = string.Join(", ", definition.RequiredPhpExtensions);
+            VersionText = $"Version {definition.Version}";
         }
 
         public string Key { get; }
@@ -311,6 +355,7 @@ public partial class MainWindow : Window
         public string InstallPath { get; }
         public string LocalUrl { get; }
         public string Requirements { get; }
+        public string VersionText { get; }
 
         public string Status
         {
@@ -318,9 +363,31 @@ public partial class MainWindow : Window
             private set => SetField(ref _status, value);
         }
 
+        public string InstallAction
+        {
+            get => _installAction;
+            private set => SetField(ref _installAction, value);
+        }
+
         public event PropertyChangedEventHandler? PropertyChanged;
 
-        public void Apply(bool installed) => Status = installed ? "Installed" : "Not installed";
+        public void Apply(bool installed)
+        {
+            Status = installed ? "Installed" : "Not installed";
+            InstallAction = installed ? "Reinstall" : "Install";
+        }
+
+        public void SetInstalling()
+        {
+            Status = "Installing...";
+            InstallAction = "Installing...";
+        }
+
+        public void SetError()
+        {
+            Status = "Install failed";
+            InstallAction = "Retry";
+        }
 
         private void SetField(ref string field, string value, [CallerMemberName] string? propertyName = null)
         {
