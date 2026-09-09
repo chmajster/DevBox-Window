@@ -2,6 +2,15 @@
 
 All notable changes to DevBox Windows are documented here.
 
+## 0.2.1 - 2026-09-09
+
+### Fixed
+
+- Closing the First Run dialog no longer shuts down DevBox before the main dashboard is shown.
+- `Continue to DevBox` now closes only the setup dialog and continues into the main window.
+- First Run runtime `Install` buttons now use an explicit ancestor binding to the setup ViewModel command.
+- `Install` is disabled for checks that are already ready or require manual action, including MySQL when no verified automatic package is available.
+
 ## 0.2.0 - 2026-09-09
 
 ### Added

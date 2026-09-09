@@ -10,4 +10,9 @@ public partial class FirstRunWindow : Window
         InitializeComponent();
         DataContext = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
     }
+
+    private void Continue_Click(object sender, RoutedEventArgs e)
+    {
+        DialogResult = true;
+    }
 }
