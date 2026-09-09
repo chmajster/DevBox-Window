@@ -37,6 +37,7 @@ All notable changes to DevBox Windows are documented here.
 - Expired/replaced local TLS certificates are removed from the current-user trusted root store during rotation.
 - The Windows autostart setting is synchronized with the actual `HKCU\...\Run` registration.
 - Site document roots are constrained to the DevBox `www` directory.
+- Invalid or unsafe `config/sites.json` metadata is quarantined to a backup instead of crashing DevBox during startup or site refresh.
 - PHP extension configuration now matches only the exact `extension=` directive, so `extension_dir=` is never mistaken for a loaded module.
 - PHP extension parsing recognizes inline `php.ini` comments and extension toggling collapses duplicate entries to a single canonical directive.
 - PHP extension checks report the runtime as unavailable when PHP CLI cannot be started, including corrupt or non-executable runtime files.
