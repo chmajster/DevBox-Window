@@ -139,8 +139,14 @@ public partial class MainWindow : Window
 
     private bool TryGetAddon(object sender, out AddonDefinition addon)
     {
+        if (sender is Button { Tag: string key } && _addonDefinitions.TryGetValue(key, out var found))
+        {
+            addon = found;
+            return true;
+        }
+
         addon = null!;
-        return sender is Button { Tag: string key } && _addonDefinitions.TryGetValue(key, out addon!);
+        return false;
     }
 
     private async Task RunAsync(
