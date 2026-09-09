@@ -140,7 +140,8 @@ public sealed class AddonInstaller : IDisposable
 
     internal static void VerifySha256(string filePath, string expectedSha256)
     {
-        if (string.IsNullOrWhiteSpace(expectedSha256) || expectedSha256.Length != 64)
+        var normalizedExpectedSha256 = expectedSha256?.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedExpectedSha256) || normalizedExpectedSha256.Length != 64)
         {
             throw new InvalidDataException("Invalid expected SHA-256 value.");
         }
@@ -148,7 +149,7 @@ public sealed class AddonInstaller : IDisposable
         byte[] expected;
         try
         {
-            expected = Convert.FromHexString(expectedSha256.Trim());
+            expected = Convert.FromHexString(normalizedExpectedSha256);
         }
         catch (FormatException ex)
         {
@@ -201,6 +202,7 @@ public sealed class AddonInstaller : IDisposable
             "$cfg['Servers'][$i]['auth_type']",
             "$cfg['Servers'][$i]['host']",
             "$cfg['Servers'][$i]['port']",
+            "$cfg['Servers'][$i]['AllowNoPassword'] = true",
             "$cfg['TempDir']"
         };
         return requiredFragments.All(fragment => content.Contains(fragment, StringComparison.Ordinal));
@@ -237,7 +239,7 @@ $cfg['Servers'][$i]['auth_type'] = 'cookie';
 $cfg['Servers'][$i]['host'] = '127.0.0.1';
 $cfg['Servers'][$i]['port'] = '3306';
 $cfg['Servers'][$i]['compress'] = false;
-$cfg['Servers'][$i]['AllowNoPassword'] = false;
+$cfg['Servers'][$i]['AllowNoPassword'] = true;
 $cfg['TempDir'] = 'tmp';
 """;
         AtomicWrite(configPath, config.Replace("\n", Environment.NewLine));

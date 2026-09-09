@@ -37,6 +37,7 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         return Directory.GetDirectories(runtimeRoot)
             .Where(path => !Path.GetFileName(path).Equals("current", StringComparison.OrdinalIgnoreCase))
             .Where(path => !Path.GetFileName(path).StartsWith(".", StringComparison.Ordinal))
+            .Where(path => !Path.GetFileName(path).Contains(".backup-", StringComparison.OrdinalIgnoreCase))
             .Select(path =>
             {
                 var version = Path.GetFileName(path);

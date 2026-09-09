@@ -28,7 +28,10 @@ public sealed class AddonInstallerTests
             Assert.Equal("<?php echo 'ok';", File.ReadAllText(addon.EntryPointPath));
             var config = Path.Combine(addon.InstallPath, "config.inc.php");
             Assert.True(File.Exists(config));
-            Assert.Contains("blowfish_secret", File.ReadAllText(config), StringComparison.Ordinal);
+            var configContent = File.ReadAllText(config);
+            Assert.Contains("blowfish_secret", configContent, StringComparison.Ordinal);
+            Assert.Contains("$cfg['Servers'][$i]['auth_type'] = 'cookie';", configContent, StringComparison.Ordinal);
+            Assert.Contains("$cfg['Servers'][$i]['AllowNoPassword'] = true;", configContent, StringComparison.Ordinal);
             Assert.True(Directory.Exists(Path.Combine(addon.InstallPath, "tmp")));
 
             var vhost = Path.Combine(root, "config", "nginx", "sites-enabled", "phpmyadmin.test.conf");
@@ -62,6 +65,25 @@ public sealed class AddonInstallerTests
     }
 
     [Fact]
+    public void VerifySha256_ValidHashWithWhitespace_IsAccepted()
+    {
+        var root = TempRoot();
+        try
+        {
+            Directory.CreateDirectory(root);
+            var file = Path.Combine(root, "payload.bin");
+            File.WriteAllText(file, "payload");
+            var hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(file))).ToLowerInvariant();
+
+            AddonInstaller.VerifySha256(file, $"  {hash}\r\n");
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public async Task InstallAsync_ZipSlipEntry_IsRejected()
     {
         var root = TempRoot();
@@ -76,6 +98,40 @@ public sealed class AddonInstallerTests
             await Assert.ThrowsAsync<InvalidDataException>(() => installer.InstallAsync(addon));
             Assert.False(File.Exists(Path.Combine(root, "tmp", "addons", "escape.txt")));
             Assert.False(File.Exists(addon.EntryPointPath));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task RepairAsync_LegacyNoPasswordFalse_RegeneratesPasswordlessConfig()
+    {
+        var root = TempRoot();
+        try
+        {
+            var addon = Definition(root, new string('0', 64));
+            Directory.CreateDirectory(addon.InstallPath);
+            File.WriteAllText(addon.EntryPointPath, "<?php echo 'ok';");
+            var configPath = Path.Combine(addon.InstallPath, "config.inc.php");
+            File.WriteAllText(configPath, """
+<?php
+$cfg['blowfish_secret'] = 'legacy';
+$i = 1;
+$cfg['Servers'][$i]['auth_type'] = 'cookie';
+$cfg['Servers'][$i]['host'] = '127.0.0.1';
+$cfg['Servers'][$i]['port'] = '3306';
+$cfg['Servers'][$i]['AllowNoPassword'] = false;
+$cfg['TempDir'] = 'tmp';
+""");
+            using var installer = new AddonInstaller(root, new HttpClient(new StaticResponseHandler(Array.Empty<byte>())));
+
+            await installer.RepairAsync(addon);
+
+            var repaired = File.ReadAllText(configPath);
+            Assert.Contains("$cfg['Servers'][$i]['AllowNoPassword'] = true;", repaired, StringComparison.Ordinal);
+            Assert.DoesNotContain("$cfg['Servers'][$i]['AllowNoPassword'] = false;", repaired, StringComparison.Ordinal);
         }
         finally
         {

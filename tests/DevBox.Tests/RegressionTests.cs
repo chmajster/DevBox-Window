@@ -73,6 +73,7 @@ $cfg['blowfish_secret'] = 'secret';
 $cfg['Servers'][$i]['auth_type'] = 'cookie';
 $cfg['Servers'][$i]['host'] = '127.0.0.1';
 $cfg['Servers'][$i]['port'] = '3306';
+$cfg['Servers'][$i]['AllowNoPassword'] = true;
 $cfg['TempDir'] = 'tmp';
 """;
         Assert.True(AddonInstaller.IsPhpMyAdminConfigUsable(valid));

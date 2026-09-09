@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using DevBox.Core.Models;
 
@@ -42,9 +43,16 @@ public sealed class PhpExtensionInspector
         startInfo.ArgumentList.Add("-m");
 
         using var process = new Process { StartInfo = startInfo };
-        if (!process.Start())
+        try
         {
-            return new PhpExtensionCheckResult(false, Array.Empty<string>(), required, "Unable to start PHP CLI.");
+            if (!process.Start())
+            {
+                return new PhpExtensionCheckResult(false, Array.Empty<string>(), required, "Unable to start PHP CLI.");
+            }
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
+        {
+            return new PhpExtensionCheckResult(false, Array.Empty<string>(), required, $"Unable to start PHP CLI: {ex.Message}");
         }
 
         var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
