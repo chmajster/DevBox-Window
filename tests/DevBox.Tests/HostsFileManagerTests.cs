@@ -20,7 +20,7 @@ public sealed class HostsFileManagerTests
             manager.EnsureMapping("127.0.0.1", "phpmyadmin.test");
 
             Assert.True(manager.HasMapping("127.0.0.1", "phpmyadmin.test"));
-            Assert.Single(File.ReadAllLines(hosts).Where(line => line.Contains("phpmyadmin.test", StringComparison.OrdinalIgnoreCase)));
+            Assert.Single(File.ReadAllLines(hosts), line => line.Contains("phpmyadmin.test", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
