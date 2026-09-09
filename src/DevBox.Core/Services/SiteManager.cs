@@ -29,7 +29,7 @@ public sealed partial class SiteManager
             return Array.Empty<SiteDefinition>();
         }
 
-        return JsonSerializer.Deserialize<List<SiteDefinition>>(json, JsonOptions) ?? Array.Empty<SiteDefinition>();
+        return JsonSerializer.Deserialize<List<SiteDefinition>>(json, JsonOptions) ?? new List<SiteDefinition>();
     }
 
     public SiteDefinition Create(string name, string? domain = null, string? documentRoot = null)
