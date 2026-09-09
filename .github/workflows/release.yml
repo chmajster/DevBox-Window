@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Resolve version
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          if ($version -notmatch '^\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') { throw "Invalid release version: $version" }
+          "DEVBOX_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Restore
+        run: dotnet restore DevBox.sln
+
+      - name: Build
+        run: dotnet build DevBox.sln --configuration Release --no-restore /p:Version=${{ env.DEVBOX_VERSION }}
+
+      - name: Test
+        run: dotnet test DevBox.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
+
+      - name: Publish win-x64
+        run: dotnet publish src/DevBox.App/DevBox.App.csproj --configuration Release --runtime win-x64 --self-contained true --output publish/win-x64 --no-restore /p:Version=${{ env.DEVBOX_VERSION }}
+
+      - name: Publish win-arm64
+        run: dotnet publish src/DevBox.App/DevBox.App.csproj --configuration Release --runtime win-arm64 --self-contained true --output publish/win-arm64 --no-restore /p:Version=${{ env.DEVBOX_VERSION }}
+
+      - name: Package portable builds
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Compress-Archive -Path publish/win-x64/* -DestinationPath "artifacts/DevBox-$env:DEVBOX_VERSION-win-x64-portable.zip" -CompressionLevel Optimal
+          Compress-Archive -Path publish/win-arm64/* -DestinationPath "artifacts/DevBox-$env:DEVBOX_VERSION-win-arm64-portable.zip" -CompressionLevel Optimal
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not found: $iscc" }
+          & $iscc "/DMyAppVersion=$env:DEVBOX_VERSION" "/DPublishDir=$pwd\publish\win-x64" "/DOutputDir=$pwd\artifacts" "installer\DevBox.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
+
+      - name: Generate SHA-256 checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem artifacts -File | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content artifacts/SHA256SUMS.txt -Encoding ascii
+
+      - name: Upload release build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: DevBox-release-${{ env.DEVBOX_VERSION }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$env:GITHUB_REF_NAME" artifacts/* --verify-tag --generate-notes --title "DevBox $env:DEVBOX_VERSION"
