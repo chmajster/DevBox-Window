@@ -47,15 +47,22 @@
         <Border Grid.Column="0" Background="#111827">
             <DockPanel Margin="20">
                 <StackPanel DockPanel.Dock="Top">
-                    <TextBlock Text="DevBox" Foreground="White" FontSize="26" FontWeight="SemiBold" Margin="0,8,0,28"/>
+                    <TextBlock Text="DevBox" Foreground="White" FontSize="26" FontWeight="SemiBold" Margin="0,8,0,22"/>
                     <Button Content="Dashboard" Style="{StaticResource SidebarButton}" Command="{Binding NavigateCommand}" CommandParameter="Dashboard"/>
                     <Button Content="Sites" Style="{StaticResource SidebarButton}" Command="{Binding NavigateCommand}" CommandParameter="Sites"/>
+                    <Button Content="PHP" Style="{StaticResource SidebarButton}" Click="PhpNav_Click"/>
+                    <Button Content="Databases" Style="{StaticResource SidebarButton}" Click="DatabasesNav_Click"/>
                     <Button Content="Runtimes" Style="{StaticResource SidebarButton}" Command="{Binding NavigateCommand}" CommandParameter="Runtimes"/>
+                    <Button Content="SSL" Style="{StaticResource SidebarButton}" Click="SslNav_Click"/>
                     <Button Content="ADDONS" Style="{StaticResource SidebarButton}" Command="{Binding NavigateCommand}" CommandParameter="ADDONS"/>
+                    <Button Content="Tools" Style="{StaticResource SidebarButton}" Click="ToolsNav_Click"/>
                     <Button Content="Logs" Style="{StaticResource SidebarButton}" Command="{Binding NavigateCommand}" CommandParameter="Logs"/>
                     <Button Content="Diagnostics" Style="{StaticResource SidebarButton}" Command="{Binding NavigateCommand}" CommandParameter="Diagnostics"/>
+                    <Button Content="Setup" Style="{StaticResource SidebarButton}" Click="SetupNav_Click"/>
+                    <Button Content="Updates" Style="{StaticResource SidebarButton}" Click="UpdatesNav_Click"/>
                 </StackPanel>
                 <StackPanel DockPanel.Dock="Bottom">
+                    <Button Content="Settings" Style="{StaticResource SidebarButton}" Click="SettingsNav_Click" Margin="0,0,0,12"/>
                     <TextBlock Text="ROOT" Foreground="#6B7280" FontSize="10"/>
                     <TextBlock Text="{Binding RootPath}" Foreground="#9CA3AF" TextWrapping="Wrap" FontSize="11"/>
                 </StackPanel>
