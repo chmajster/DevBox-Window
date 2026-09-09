@@ -67,27 +67,34 @@ public sealed partial class PhpManager
         }
 
         var lines = File.ReadAllLines(_phpIniPath).ToList();
-        var matched = false;
-        var changed = false;
-
+        var matches = new List<int>();
         for (var index = 0; index < lines.Count; index++)
         {
             var parsed = ParseExtensionLine(lines[index]);
-            if (parsed is null || !parsed.Value.Name.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+            if (parsed is not null && parsed.Value.Name.Equals(normalized, StringComparison.OrdinalIgnoreCase))
             {
-                continue;
-            }
-
-            matched = true;
-            var desired = enabled ? $"extension={normalized}" : $";extension={normalized}";
-            if (!lines[index].Equals(desired, StringComparison.Ordinal))
-            {
-                lines[index] = desired;
-                changed = true;
+                matches.Add(index);
             }
         }
 
-        if (!matched && enabled)
+        var changed = false;
+        if (matches.Count > 0)
+        {
+            var desired = enabled ? $"extension={normalized}" : $";extension={normalized}";
+            var first = matches[0];
+            if (!lines[first].Equals(desired, StringComparison.Ordinal))
+            {
+                lines[first] = desired;
+                changed = true;
+            }
+
+            for (var matchIndex = matches.Count - 1; matchIndex >= 1; matchIndex--)
+            {
+                lines.RemoveAt(matches[matchIndex]);
+                changed = true;
+            }
+        }
+        else if (enabled)
         {
             lines.Add($"extension={normalized}");
             changed = true;
@@ -135,18 +142,20 @@ public sealed partial class PhpManager
             trimmed = trimmed[1..].TrimStart();
         }
 
-        if (!trimmed.StartsWith("extension", StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
         var equalsIndex = trimmed.IndexOf('=');
-        if (equalsIndex < 0)
+        if (equalsIndex < 0 || !trimmed[..equalsIndex].Trim().Equals("extension", StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
 
-        var value = trimmed[(equalsIndex + 1)..].Trim().Trim('"', '\'');
+        var value = trimmed[(equalsIndex + 1)..].Trim();
+        var commentIndex = value.IndexOf(';');
+        if (commentIndex >= 0)
+        {
+            value = value[..commentIndex].TrimEnd();
+        }
+        value = value.Trim().Trim('"', '\'');
+
         if (value.StartsWith("php_", StringComparison.OrdinalIgnoreCase))
         {
             value = value[4..];
