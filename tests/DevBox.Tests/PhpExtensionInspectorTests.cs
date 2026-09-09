@@ -50,4 +50,27 @@ public sealed class PhpExtensionInspectorTests
             if (Directory.Exists(root)) Directory.Delete(root, true);
         }
     }
+
+    [Fact]
+    public async Task CheckAsync_InvalidPhpExecutable_ReportsRuntimeUnavailableInsteadOfThrowing()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "devbox-php-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var runtimeDirectory = Path.Combine(root, "runtime", "php", "current");
+            Directory.CreateDirectory(runtimeDirectory);
+            File.WriteAllText(Path.Combine(runtimeDirectory, "php.exe"), "this is not a Windows executable");
+
+            var inspector = new PhpExtensionInspector(root);
+            var result = await inspector.CheckAsync(["mysqli"]);
+
+            Assert.False(result.RuntimeAvailable);
+            Assert.Contains("mysqli", result.MissingExtensions);
+            Assert.Contains("Unable to start PHP CLI", result.Error, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
 }
