@@ -61,9 +61,10 @@ public sealed class AddonCatalog
         var wwwRoot = Path.GetFullPath(Path.Combine(_rootPath, "www"))
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         var normalizedInstall = installPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!normalizedInstall.StartsWith(wwwRoot, StringComparison.OrdinalIgnoreCase))
+        if (!normalizedInstall.StartsWith(wwwRoot, StringComparison.OrdinalIgnoreCase) ||
+            normalizedInstall.Equals(wwwRoot, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidDataException($"Addon '{entry.Key}' install path must be inside the DevBox www directory.");
+            throw new InvalidDataException($"Addon '{entry.Key}' install path must be a child of the DevBox www directory.");
         }
 
         var entryPointPath = ResolveRelativePath(entry.EntryPointRelativePath);
@@ -82,7 +83,7 @@ public sealed class AddonCatalog
             entry.RequiredPhpExtensions ?? Array.Empty<string>(),
             entry.Version,
             entry.DownloadUrl,
-            entry.Sha256,
+            entry.Sha256.Trim(),
             entry.ArchiveRootDirectory);
     }
 
@@ -142,6 +143,10 @@ public sealed class AddonCatalog
         {
             throw new InvalidDataException($"Addon '{entry.Key}' must define displayName and version.");
         }
+        if (string.IsNullOrWhiteSpace(entry.InstallRelativePath) || string.IsNullOrWhiteSpace(entry.EntryPointRelativePath))
+        {
+            throw new InvalidDataException($"Addon '{entry.Key}' must define install and entry-point paths.");
+        }
         if (!Uri.TryCreate(entry.LocalUrl, UriKind.Absolute, out var localUri) ||
             localUri.Scheme is not ("http" or "https") ||
             !localUri.Host.EndsWith(".test", StringComparison.OrdinalIgnoreCase))
@@ -152,9 +157,14 @@ public sealed class AddonCatalog
         {
             throw new InvalidDataException($"Addon '{entry.Key}' downloadUrl must use HTTPS.");
         }
+        var normalizedSha256 = entry.Sha256?.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedSha256))
+        {
+            throw new InvalidDataException($"Addon '{entry.Key}' must define a SHA-256 value.");
+        }
         try
         {
-            if (entry.Sha256.Length != 64 || Convert.FromHexString(entry.Sha256).Length != 32)
+            if (normalizedSha256.Length != 64 || Convert.FromHexString(normalizedSha256).Length != 32)
             {
                 throw new InvalidDataException($"Addon '{entry.Key}' has an invalid SHA-256 value.");
             }
@@ -163,7 +173,8 @@ public sealed class AddonCatalog
         {
             throw new InvalidDataException($"Addon '{entry.Key}' has an invalid SHA-256 value.", ex);
         }
-        if (Path.IsPathRooted(entry.ArchiveRootDirectory) ||
+        if (string.IsNullOrWhiteSpace(entry.ArchiveRootDirectory) ||
+            Path.IsPathRooted(entry.ArchiveRootDirectory) ||
             entry.ArchiveRootDirectory.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries).Any(part => part == ".."))
         {
             throw new InvalidDataException($"Addon '{entry.Key}' archive root is unsafe.");
