@@ -70,6 +70,7 @@ public sealed partial class SiteManager
         var normalizedName = NormalizeName(site.Name);
         var normalizedDomain = NormalizeDomain(site.Domain);
         var documentRoot = EnsurePathUnderRoot(site.DocumentRoot);
+        var phpVersion = NormalizePhpVersion(site.PhpVersion);
 
         var sites = GetSites().ToList();
         var index = sites.FindIndex(item => item.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase));
@@ -93,7 +94,8 @@ public sealed partial class SiteManager
         {
             Name = normalizedName,
             Domain = normalizedDomain,
-            DocumentRoot = documentRoot
+            DocumentRoot = documentRoot,
+            PhpVersion = phpVersion
         };
         WriteNginxConfig(updated);
         sites[index] = updated;
@@ -112,6 +114,24 @@ public sealed partial class SiteManager
         }
 
         var updated = sites[index] with { HttpsEnabled = enabled };
+        WriteNginxConfig(updated);
+        sites[index] = updated;
+        SaveSites(sites);
+        return updated;
+    }
+
+    public SiteDefinition SetPhpVersion(string name, string? version)
+    {
+        var normalizedName = NormalizeName(name);
+        var normalizedVersion = NormalizePhpVersion(version);
+        var sites = GetSites().ToList();
+        var index = sites.FindIndex(site => site.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase));
+        if (index < 0)
+        {
+            throw new InvalidOperationException($"Site '{normalizedName}' does not exist.");
+        }
+
+        var updated = sites[index] with { PhpVersion = normalizedVersion };
         WriteNginxConfig(updated);
         sites[index] = updated;
         SaveSites(sites);
@@ -152,6 +172,7 @@ public sealed partial class SiteManager
             throw new InvalidOperationException("Site document root must be inside the DevBox root.");
         }
 
+        var fastCgiPort = site.PhpVersion is null ? 9084 : PhpRuntimePoolManager.GetPort(site.PhpVersion);
         var applicationLocations = $$"""
     root {{relativeRoot}};
     index index.php index.html;
@@ -163,7 +184,7 @@ public sealed partial class SiteManager
     location ~ \.php$ {
         include config/nginx/fastcgi_params;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-        fastcgi_pass 127.0.0.1:9084;
+        fastcgi_pass 127.0.0.1:{{fastCgiPort}};
     }
 """;
 
@@ -299,6 +320,20 @@ server {
         return normalized;
     }
 
+    private static string? NormalizePhpVersion(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            return null;
+        }
+        var normalized = version.Trim();
+        if (!PhpVersionRegex().IsMatch(normalized))
+        {
+            throw new ArgumentException("PHP version must use MAJOR.MINOR.PATCH format.", nameof(version));
+        }
+        return normalized;
+    }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -310,4 +345,7 @@ server {
 
     [GeneratedRegex("^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+test$", RegexOptions.CultureInvariant)]
     private static partial Regex DomainRegex();
+
+    [GeneratedRegex("^\\d+\\.\\d+\\.\\d+$", RegexOptions.CultureInvariant)]
+    private static partial Regex PhpVersionRegex();
 }
