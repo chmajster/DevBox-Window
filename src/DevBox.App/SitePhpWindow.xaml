@@ -1,0 +1,40 @@
+<Window x:Class="DevBox.App.SitePhpWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DevBox · PHP per Site" Height="520" Width="780" MinHeight="430" MinWidth="650"
+        Background="#F4F6F9" WindowStartupLocation="CenterOwner">
+    <Window.Resources>
+        <Style TargetType="Button"><Setter Property="Padding" Value="12,7"/><Setter Property="Margin" Value="4"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Background" Value="#E8ECF2"/></Style>
+        <Style x:Key="Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Setter Property="Background" Value="#2563EB"/><Setter Property="Foreground" Value="White"/></Style>
+    </Window.Resources>
+    <Grid Margin="26">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <Grid Grid.Row="0" Margin="0,0,0,18">
+            <StackPanel><TextBlock Text="PHP per Site" FontSize="27" FontWeight="SemiBold"/><TextBlock Text="Pin a project to an installed PHP runtime or use the global active PHP." Foreground="#6B7280" Margin="0,4,0,0"/></StackPanel>
+            <Button HorizontalAlignment="Right" VerticalAlignment="Center" Content="Refresh" Command="{Binding RefreshCommand}"/>
+        </Grid>
+        <Border Grid.Row="1" Background="White" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="18" Margin="0,0,0,14">
+            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="1.5*"/><ColumnDefinition Width="1.2*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel Margin="0,0,12,0"><TextBlock Text="SITE" FontSize="10" Foreground="#9CA3AF"/><ComboBox ItemsSource="{Binding Sites}" SelectedItem="{Binding SelectedSite}" DisplayMemberPath="Domain" Padding="8"/></StackPanel>
+                <StackPanel Grid.Column="1" Margin="0,0,12,0"><TextBlock Text="PHP VERSION" FontSize="10" Foreground="#9CA3AF"/><ComboBox ItemsSource="{Binding Versions}" SelectedItem="{Binding SelectedVersion}" Padding="8"/></StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Bottom"><Button Content="Start runtime" Command="{Binding StartSelectedCommand}"/><Button Content="Apply" Style="{StaticResource Primary}" Command="{Binding ApplyCommand}"/></StackPanel>
+            </Grid>
+        </Border>
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding Sites}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Background="White" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="7" Padding="13" Margin="0,0,0,8">
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="1.2*"/><ColumnDefinition Width="1.5*"/><ColumnDefinition Width="1*"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                                <TextBlock Grid.Column="1" Text="{Binding Domain}" Foreground="#2563EB"/>
+                                <TextBlock Grid.Column="2" Text="{Binding DisplayVersion}"/>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+        <TextBlock Grid.Row="3" Text="{Binding Status}" Margin="0,12,0,0" Foreground="#6B7280"/>
+    </Grid>
+</Window>

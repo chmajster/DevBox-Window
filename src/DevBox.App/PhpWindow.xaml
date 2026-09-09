@@ -1,0 +1,39 @@
+<Window x:Class="DevBox.App.PhpWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DevBox · PHP" Height="680" Width="920" MinHeight="520" MinWidth="760"
+        Background="#F4F6F9" WindowStartupLocation="CenterOwner">
+    <Window.Resources>
+        <Style TargetType="Button"><Setter Property="Padding" Value="12,7"/><Setter Property="Margin" Value="4"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Background" Value="#E8ECF2"/></Style>
+        <Style x:Key="Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Setter Property="Background" Value="#2563EB"/><Setter Property="Foreground" Value="White"/></Style>
+    </Window.Resources>
+    <Grid Margin="26">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <Grid Grid.Row="0" Margin="0,0,0,18">
+            <StackPanel><TextBlock Text="PHP Manager" FontSize="27" FontWeight="SemiBold"/><TextBlock Text="Manage the active PHP runtime, php.ini and extensions." Foreground="#6B7280" Margin="0,4,0,0"/></StackPanel>
+            <StackPanel HorizontalAlignment="Right" Orientation="Horizontal"><Button Content="PHP per site" Click="SitePhp_Click"/><Button Content="Open php.ini" Command="{Binding OpenPhpIniCommand}"/><Button Content="PHP folder" Command="{Binding OpenPhpFolderCommand}"/><Button Content="Refresh" Style="{StaticResource Primary}" Command="{Binding RefreshCommand}"/></StackPanel>
+        </Grid>
+        <Border Grid.Row="1" Background="White" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="16" Margin="0,0,0,14">
+            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="1*"/><ColumnDefinition Width="2*"/></Grid.ColumnDefinitions>
+                <StackPanel><TextBlock Text="ACTIVE VERSION" FontSize="10" Foreground="#9CA3AF"/><TextBlock Text="{Binding ActiveVersion}" FontSize="18" FontWeight="SemiBold"/></StackPanel>
+                <StackPanel Grid.Column="1"><TextBlock Text="PHP.INI" FontSize="10" Foreground="#9CA3AF"/><TextBlock Text="{Binding PhpIniPath}" TextTrimming="CharacterEllipsis" Foreground="#6B7280"/></StackPanel>
+            </Grid>
+        </Border>
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding Extensions}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Background="White" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="7" Padding="13" Margin="0,0,0,8">
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="1.2*"/><ColumnDefinition Width="1.2*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" Text="{Binding Status}" VerticalAlignment="Center"/>
+                                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="DLL available: " Foreground="#6B7280"/><TextBlock Text="{Binding BinaryAvailable}" Foreground="#6B7280"/></StackPanel>
+                                <Button Grid.Column="3" Content="{Binding Action}" Command="{Binding DataContext.ToggleExtensionCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}"/>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </Grid>
+</Window>
