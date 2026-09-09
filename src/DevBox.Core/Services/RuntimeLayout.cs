@@ -11,11 +11,12 @@ public static class RuntimeLayout
             "config/nginx/sites-enabled",
             "config/php",
             "config/mysql",
+            "config/ssl/sites",
             "logs",
             "tmp",
             "www",
-            "www/phpmyadmin",
             "data/mysql",
+            "backups/databases",
             "runtime/nginx/current",
             "runtime/php/current",
             "runtime/mysql/current"
@@ -28,7 +29,6 @@ public static class RuntimeLayout
 
         WriteIfMissing(Path.Combine(rootPath, "config", "nginx", "nginx.conf"), NginxConfig);
         WriteIfMissing(Path.Combine(rootPath, "config", "nginx", "fastcgi_params"), FastCgiParams);
-        WriteIfMissing(Path.Combine(rootPath, "config", "nginx", "sites-enabled", "phpmyadmin.test.conf"), PhpMyAdminSiteConfig);
         WriteIfMissing(Path.Combine(rootPath, "config", "php", "php.ini"), PhpIni);
         WriteIfMissing(Path.Combine(rootPath, "config", "mysql", "my.ini"), MySqlIni);
         WriteIfMissing(Path.Combine(rootPath, "www", "index.html"), IndexHtml);
@@ -74,25 +74,6 @@ http {
             fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
             fastcgi_pass 127.0.0.1:9084;
         }
-    }
-}
-""";
-
-    private const string PhpMyAdminSiteConfig = """
-server {
-    listen 80;
-    server_name phpmyadmin.test;
-    root www/phpmyadmin;
-    index index.php index.html;
-
-    location / {
-        try_files $uri $uri/ /index.php?$query_string;
-    }
-
-    location ~ \.php$ {
-        include config/nginx/fastcgi_params;
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-        fastcgi_pass 127.0.0.1:9084;
     }
 }
 """;
