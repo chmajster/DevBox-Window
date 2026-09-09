@@ -1,5 +1,3 @@
-using Microsoft.Win32;
-
 namespace DevBox.App.Services;
 
 public interface IFileDialogService
@@ -12,7 +10,7 @@ public sealed class FileDialogService : IFileDialogService
 {
     public string? OpenSqlFile()
     {
-        var dialog = new OpenFileDialog
+        var dialog = new Microsoft.Win32.OpenFileDialog
         {
             Title = "Select SQL backup",
             Filter = "SQL files (*.sql)|*.sql|All files (*.*)|*.*",
@@ -24,7 +22,7 @@ public sealed class FileDialogService : IFileDialogService
 
     public string? SaveSqlFile(string suggestedFileName)
     {
-        var dialog = new SaveFileDialog
+        var dialog = new Microsoft.Win32.SaveFileDialog
         {
             Title = "Save database backup",
             Filter = "SQL files (*.sql)|*.sql",
