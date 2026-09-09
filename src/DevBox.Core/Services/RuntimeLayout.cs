@@ -14,6 +14,7 @@ public static class RuntimeLayout
             "logs",
             "tmp",
             "www",
+            "www/phpmyadmin",
             "data/mysql",
             "runtime/nginx/current",
             "runtime/php/current",
