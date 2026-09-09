@@ -28,6 +28,34 @@ public sealed class SiteManagerTests
     }
 
     [Fact]
+    public void SetHttps_UpdatesMetadataAndWritesTlsVhost()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var manager = new SiteManager(root);
+            manager.Create("demo");
+
+            var updated = manager.SetHttps("demo", true);
+            var config = File.ReadAllText(manager.GetNginxConfigPath("demo.test"));
+
+            Assert.True(updated.HttpsEnabled);
+            Assert.True(manager.GetSites().Single().HttpsEnabled);
+            Assert.Contains("listen 443 ssl;", config, StringComparison.Ordinal);
+            Assert.Contains("ssl_certificate config/ssl/sites/demo.test.crt.pem;", config, StringComparison.Ordinal);
+            Assert.Contains("return 301 https://$host$request_uri;", config, StringComparison.Ordinal);
+
+            manager.SetHttps("demo", false);
+            config = File.ReadAllText(manager.GetNginxConfigPath("demo.test"));
+            Assert.DoesNotContain("listen 443 ssl;", config, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public void Create_RejectsNonTestDomain()
     {
         var root = TemporaryRoot();
