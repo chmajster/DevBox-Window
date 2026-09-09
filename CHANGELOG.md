@@ -2,6 +2,13 @@
 
 All notable changes to DevBox Windows are documented here.
 
+## Unreleased
+
+### Added
+
+- New DevBox application icon with editable SVG source and Windows ICO asset.
+- DevBox branding is now embedded in the executable, applied to WPF windows and used by the Inno Setup installer.
+
 ## 0.2.1 - 2026-09-09
 
 ### Fixed
