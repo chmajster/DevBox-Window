@@ -35,7 +35,7 @@ public sealed partial class PhpManager
 
     public IReadOnlyList<PhpExtensionState> GetExtensions()
     {
-        var enabled = ReadConfiguredExtensions();
+        var configured = ReadConfiguredExtensions();
         var available = Directory.Exists(_extensionDirectory)
             ? Directory.GetFiles(_extensionDirectory, "php_*.dll", SearchOption.TopDirectoryOnly)
                 .Select(Path.GetFileNameWithoutExtension)
@@ -45,13 +45,16 @@ public sealed partial class PhpManager
             : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         var names = available
-            .Concat(enabled)
+            .Concat(configured.Keys)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
         return names
-            .Select(name => new PhpExtensionState(name, enabled.Contains(name), available.Contains(name)))
+            .Select(name => new PhpExtensionState(
+                name,
+                configured.TryGetValue(name, out var enabled) && enabled,
+                available.Contains(name)))
             .ToArray();
     }
 
@@ -98,18 +101,24 @@ public sealed partial class PhpManager
         return changed;
     }
 
-    private HashSet<string> ReadConfiguredExtensions()
+    private Dictionary<string, bool> ReadConfiguredExtensions()
     {
+        var configured = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         if (!File.Exists(_phpIniPath))
         {
-            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            return configured;
         }
 
-        return File.ReadAllLines(_phpIniPath)
-            .Select(ParseExtensionLine)
-            .Where(value => value is { Enabled: true })
-            .Select(value => value!.Value.Name)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in File.ReadAllLines(_phpIniPath))
+        {
+            var parsed = ParseExtensionLine(line);
+            if (parsed.HasValue)
+            {
+                configured[parsed.Value.Name] = parsed.Value.Enabled;
+            }
+        }
+
+        return configured;
     }
 
     private static (string Name, bool Enabled)? ParseExtensionLine(string line)
