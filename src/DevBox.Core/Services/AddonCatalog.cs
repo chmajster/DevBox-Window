@@ -25,7 +25,11 @@ public sealed class AddonCatalog
                 phpMyAdminPath,
                 Path.Combine(phpMyAdminPath, "index.php"),
                 "http://phpmyadmin.test",
-                ["mysqli", "mbstring", "openssl", "json"])
+                ["mysqli", "mbstring", "openssl", "json"],
+                "5.2.3",
+                "https://files.phpmyadmin.net/phpMyAdmin/5.2.3/phpMyAdmin-5.2.3-all-languages.zip",
+                "2d2e13c735366d318425c78e4ee2cc8fc648d77faba3ddea2cd516e43885733f",
+                "phpMyAdmin-5.2.3-all-languages")
         ];
     }
 
