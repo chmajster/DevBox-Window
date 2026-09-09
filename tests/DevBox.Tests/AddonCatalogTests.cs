@@ -8,12 +8,13 @@ public sealed class AddonCatalogTests
     [Fact]
     public void PhpMyAdmin_IsRegisteredWithExpectedMetadata()
     {
-        var root = Path.Combine(Path.GetTempPath(), "devbox-addon-tests", Guid.NewGuid().ToString("N"));
+        var root = TempRoot();
         try
         {
             var catalog = new AddonCatalog(root);
-            var addon = Assert.Single(catalog.GetDefaultAddons());
+            var addon = Assert.Single(catalog.GetAddons());
 
+            Assert.True(File.Exists(catalog.CatalogPath));
             Assert.Equal("phpmyadmin", addon.Key);
             Assert.Equal("phpMyAdmin", addon.DisplayName);
             Assert.Equal("5.2.3", addon.Version);
@@ -28,56 +29,94 @@ public sealed class AddonCatalogTests
         }
         finally
         {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
+            DeleteRoot(root);
         }
     }
 
     [Fact]
     public void PhpMyAdmin_IsInstalledOnlyWhenRealEntryPointExists()
     {
-        var root = Path.Combine(Path.GetTempPath(), "devbox-addon-tests", Guid.NewGuid().ToString("N"));
+        var root = TempRoot();
         try
         {
             RuntimeLayout.EnsureInitialized(root);
             var catalog = new AddonCatalog(root);
-            var addon = Assert.Single(catalog.GetDefaultAddons());
+            var addon = Assert.Single(catalog.GetAddons());
 
             Assert.False(catalog.IsInstalled(addon));
+            Directory.CreateDirectory(addon.InstallPath);
             File.WriteAllText(addon.EntryPointPath, "<?php echo 'phpMyAdmin';");
             Assert.True(catalog.IsInstalled(addon));
         }
         finally
         {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
+            DeleteRoot(root);
         }
     }
 
     [Fact]
-    public void RuntimeLayout_CreatesPhpMyAdminNginxSite()
+    public void Manifest_PathTraversal_IsRejected()
     {
-        var root = Path.Combine(Path.GetTempPath(), "devbox-addon-tests", Guid.NewGuid().ToString("N"));
+        var root = TempRoot();
+        try
+        {
+            var catalog = new AddonCatalog(root);
+            Directory.CreateDirectory(Path.GetDirectoryName(catalog.CatalogPath)!);
+            File.WriteAllText(catalog.CatalogPath, """
+[
+  {
+    "key": "unsafe",
+    "displayName": "Unsafe",
+    "description": "test",
+    "installRelativePath": "../escape",
+    "entryPointRelativePath": "../escape/index.php",
+    "localUrl": "http://unsafe.test",
+    "requiredPhpExtensions": [],
+    "version": "1.0",
+    "downloadUrl": "https://example.test/unsafe.zip",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "archiveRootDirectory": "package"
+  }
+]
+""");
+
+            Assert.Throws<InvalidDataException>(() => catalog.GetAddons());
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void RuntimeLayout_DoesNotCreateAddonOwnedVhost()
+    {
+        var root = TempRoot();
         try
         {
             RuntimeLayout.EnsureInitialized(root);
             var config = Path.Combine(root, "config", "nginx", "sites-enabled", "phpmyadmin.test.conf");
 
-            Assert.True(File.Exists(config));
-            var text = File.ReadAllText(config);
-            Assert.Contains("server_name phpmyadmin.test", text);
-            Assert.Contains("fastcgi_pass 127.0.0.1:9084", text);
+            Assert.False(File.Exists(config));
         }
         finally
         {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
+            DeleteRoot(root);
+        }
+    }
+
+    private static string TempRoot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "devbox-addon-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    private static void DeleteRoot(string root)
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
         }
     }
 }
