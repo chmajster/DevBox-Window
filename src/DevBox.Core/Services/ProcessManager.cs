@@ -241,7 +241,10 @@ public sealed class ProcessManager : IProcessManager
 
     private static ServiceSnapshot Snapshot(ManagedProcess managed, ServiceState state)
     {
-        var uptime = managed.StartedAt is null ? null : DateTimeOffset.UtcNow - managed.StartedAt.Value;
+        TimeSpan? uptime = managed.StartedAt is null
+            ? null
+            : DateTimeOffset.UtcNow - managed.StartedAt.Value;
+
         return new ServiceSnapshot(
             managed.Definition.Key,
             managed.Definition.DisplayName,
