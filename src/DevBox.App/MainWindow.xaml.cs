@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 using DevBox.App.Services;
 using DevBox.App.ViewModels;
 
@@ -15,6 +16,47 @@ public partial class MainWindow : Window
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         _featureWindows = featureWindows ?? throw new ArgumentNullException(nameof(featureWindows));
         DataContext = _viewModel;
+        AddFeatureNavigation();
+    }
+
+    private void AddFeatureNavigation()
+    {
+        if (Content is not Grid root)
+        {
+            return;
+        }
+
+        var sidebar = root.Children
+            .OfType<Border>()
+            .FirstOrDefault(border => Grid.GetColumn(border) == 0);
+        if (sidebar?.Child is not DockPanel dock)
+        {
+            return;
+        }
+
+        var navigation = dock.Children
+            .OfType<StackPanel>()
+            .FirstOrDefault(panel => DockPanel.GetDock(panel) == Dock.Top);
+        if (navigation is null)
+        {
+            return;
+        }
+
+        navigation.Children.Insert(3, CreateFeatureButton("PHP", PhpNav_Click));
+        navigation.Children.Insert(4, CreateFeatureButton("Databases", DatabasesNav_Click));
+        navigation.Children.Insert(5, CreateFeatureButton("SSL", SslNav_Click));
+        navigation.Children.Add(CreateFeatureButton("Setup", SetupNav_Click));
+    }
+
+    private Button CreateFeatureButton(string content, RoutedEventHandler clickHandler)
+    {
+        var button = new Button
+        {
+            Content = content,
+            Style = (Style)FindResource("SidebarButton")
+        };
+        button.Click += clickHandler;
+        return button;
     }
 
     private void PhpNav_Click(object sender, RoutedEventArgs e) => _featureWindows.ShowPhp(this);
