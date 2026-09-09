@@ -221,7 +221,7 @@ public sealed partial class DatabaseManager
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardError = true,
-            RedirectStandardOutput = standardOutputPath is null,
+            RedirectStandardOutput = true,
             RedirectStandardInput = standardInputPath is not null
         };
 
@@ -237,24 +237,21 @@ public sealed partial class DatabaseManager
             throw new InvalidOperationException($"Unable to start {Path.GetFileName(executable)}.");
         }
 
-        Task<string> errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
         Task<string>? outputTask = standardOutputPath is null
             ? process.StandardOutput.ReadToEndAsync(cancellationToken)
             : null;
-        Task? outputCopyTask = null;
-        Task? inputCopyTask = null;
 
         if (standardOutputPath is not null)
         {
             await using var output = new FileStream(standardOutputPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
-            outputCopyTask = process.StandardOutput.BaseStream.CopyToAsync(output, cancellationToken);
+            var outputCopyTask = process.StandardOutput.BaseStream.CopyToAsync(output, cancellationToken);
             await Task.WhenAll(process.WaitForExitAsync(cancellationToken), outputCopyTask).ConfigureAwait(false);
         }
         else if (standardInputPath is not null)
         {
             await using var input = new FileStream(standardInputPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
-            inputCopyTask = input.CopyToAsync(process.StandardInput.BaseStream, cancellationToken);
-            await inputCopyTask.ConfigureAwait(false);
+            await input.CopyToAsync(process.StandardInput.BaseStream, cancellationToken).ConfigureAwait(false);
             process.StandardInput.Close();
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -272,7 +269,7 @@ public sealed partial class DatabaseManager
                 : error.Trim());
         }
 
-        return new ProcessResult(outputText, error);
+        return new ProcessResult(outputText);
     }
 
     private static void EnsureExecutable(string path)
@@ -294,7 +291,7 @@ public sealed partial class DatabaseManager
         return $"\"{escaped}\"";
     }
 
-    private sealed record ProcessResult(string StandardOutput, string StandardError);
+    private sealed record ProcessResult(string StandardOutput);
 
     [GeneratedRegex("^[A-Za-z0-9_]{1,64}$", RegexOptions.CultureInvariant)]
     private static partial Regex DatabaseNameRegex();
