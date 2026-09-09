@@ -166,14 +166,22 @@ CodeQL scans C# separately. Dependabot monitors NuGet and GitHub Actions depende
 
 ## Releases
 
-Tags matching `v*.*.*` trigger the release workflow. It builds:
+The release workflow supports three guarded paths:
+
+1. A tag matching `v*.*.*` builds and publishes that tagged version.
+2. A commit on `main` whose first line is exactly `release: vX.Y.Z` builds the current SHA, creates tag `vX.Y.Z` on that SHA and publishes the GitHub Release only after restore, vulnerability audit, build and tests succeed.
+3. `workflow_dispatch` performs a packaging dry-run for the supplied version and uploads the release artifact without creating a tag or GitHub Release.
+
+Normal pushes to `main` do not execute the release job.
+
+A publishing run builds:
 
 - self-contained `win-x64`,
 - self-contained `win-arm64`,
 - portable ZIP archives,
 - an Inno Setup per-user installer,
 - `SHA256SUMS.txt`,
-- a GitHub Release.
+- a GitHub Release containing the packaged artifacts.
 
 The installer is not currently code-signed. Release SHA-256 checksums provide integrity verification but are not a substitute for Authenticode publisher signing.
 
