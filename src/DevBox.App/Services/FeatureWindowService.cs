@@ -6,6 +6,7 @@ namespace DevBox.App.Services;
 public interface IFeatureWindowService
 {
     void ShowPhp(Window owner);
+    void ShowSitePhp(Window owner);
     void ShowDatabases(Window owner);
     void ShowSsl(Window owner);
     void ShowSetup(Window owner);
@@ -17,6 +18,7 @@ public interface IFeatureWindowService
 public sealed class FeatureWindowService(IServiceProvider serviceProvider) : IFeatureWindowService
 {
     public void ShowPhp(Window owner) => Show<PhpWindow>(owner);
+    public void ShowSitePhp(Window owner) => Show<SitePhpWindow>(owner);
     public void ShowDatabases(Window owner) => Show<DatabaseWindow>(owner);
     public void ShowSsl(Window owner) => Show<SslWindow>(owner);
     public void ShowSetup(Window owner) => Show<FirstRunWindow>(owner);
