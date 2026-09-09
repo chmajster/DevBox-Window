@@ -51,15 +51,25 @@ public sealed class AddonInstaller : IDisposable
                 throw new InvalidDataException("Downloaded addon does not contain index.php.");
             }
 
-            ReplaceDirectory(stagingPath, addon.InstallPath);
-            ConfigureAddon(addon);
+            var backupPath = SwapInStagingDirectory(stagingPath, addon.InstallPath);
+            try
+            {
+                ConfigureAddon(addon);
+                DeleteDirectoryIfExists(backupPath);
+            }
+            catch
+            {
+                RollbackInstallation(addon.InstallPath, backupPath);
+                if (backupPath is null)
+                {
+                    DeleteAddonNginxConfig(addon);
+                }
+                throw;
+            }
         }
         finally
         {
-            if (Directory.Exists(tempRoot))
-            {
-                Directory.Delete(tempRoot, recursive: true);
-            }
+            DeleteDirectoryIfExists(tempRoot);
         }
     }
 
@@ -178,6 +188,24 @@ public sealed class AddonInstaller : IDisposable
         }
     }
 
+    internal static bool IsPhpMyAdminConfigUsable(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content) || !content.Contains("<?php", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var requiredFragments = new[]
+        {
+            "$cfg['blowfish_secret']",
+            "$cfg['Servers'][$i]['auth_type']",
+            "$cfg['Servers'][$i]['host']",
+            "$cfg['Servers'][$i]['port']",
+            "$cfg['TempDir']"
+        };
+        return requiredFragments.All(fragment => content.Contains(fragment, StringComparison.Ordinal));
+    }
+
     private void ConfigureAddon(AddonDefinition addon)
     {
         WriteAddonNginxConfig(addon);
@@ -192,7 +220,11 @@ public sealed class AddonInstaller : IDisposable
         var configPath = Path.Combine(addon.InstallPath, "config.inc.php");
         if (File.Exists(configPath))
         {
-            return;
+            var existing = File.ReadAllText(configPath);
+            if (IsPhpMyAdminConfigUsable(existing))
+            {
+                return;
+            }
         }
 
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
@@ -316,7 +348,7 @@ server {
         }
     }
 
-    private static void ReplaceDirectory(string stagingPath, string installPath)
+    private static string? SwapInStagingDirectory(string stagingPath, string installPath)
     {
         var installParent = Path.GetDirectoryName(Path.GetFullPath(installPath));
         if (string.IsNullOrWhiteSpace(installParent))
@@ -325,39 +357,43 @@ server {
         }
 
         Directory.CreateDirectory(installParent);
-
-        var backupPath = installPath + ".backup";
-        if (Directory.Exists(backupPath))
-        {
-            Directory.Delete(backupPath, recursive: true);
-        }
-
+        string? backupPath = null;
         if (Directory.Exists(installPath))
         {
+            backupPath = installPath + $".backup-{Guid.NewGuid():N}";
             Directory.Move(installPath, backupPath);
         }
 
         try
         {
             Directory.Move(stagingPath, installPath);
-            if (Directory.Exists(backupPath))
-            {
-                Directory.Delete(backupPath, recursive: true);
-            }
+            return backupPath;
         }
         catch
         {
-            if (Directory.Exists(installPath))
-            {
-                Directory.Delete(installPath, recursive: true);
-            }
-
-            if (Directory.Exists(backupPath))
+            if (backupPath is not null && Directory.Exists(backupPath) && !Directory.Exists(installPath))
             {
                 Directory.Move(backupPath, installPath);
             }
-
             throw;
         }
+    }
+
+    private static void RollbackInstallation(string installPath, string? backupPath)
+    {
+        DeleteDirectoryIfExists(installPath);
+        if (backupPath is not null && Directory.Exists(backupPath))
+        {
+            Directory.Move(backupPath, installPath);
+        }
+    }
+
+    private static void DeleteDirectoryIfExists(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+        {
+            return;
+        }
+        Directory.Delete(path, recursive: true);
     }
 }
