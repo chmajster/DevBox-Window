@@ -203,7 +203,7 @@ public partial class App : System.Windows.Application
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
         {
-            MessageBox.Show(ex.Message, "DevBox hosts update failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            System.Windows.MessageBox.Show(ex.Message, "DevBox hosts update failed", MessageBoxButton.OK, MessageBoxImage.Error);
             return 1;
         }
     }
