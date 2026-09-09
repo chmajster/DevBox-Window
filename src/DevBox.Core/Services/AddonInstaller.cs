@@ -202,6 +202,7 @@ public sealed class AddonInstaller : IDisposable
             "$cfg['Servers'][$i]['auth_type']",
             "$cfg['Servers'][$i]['host']",
             "$cfg['Servers'][$i]['port']",
+            "$cfg['Servers'][$i]['AllowNoPassword'] = true",
             "$cfg['TempDir']"
         };
         return requiredFragments.All(fragment => content.Contains(fragment, StringComparison.Ordinal));
