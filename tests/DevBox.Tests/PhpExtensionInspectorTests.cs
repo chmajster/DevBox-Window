@@ -33,6 +33,53 @@ public sealed class PhpExtensionInspectorTests
     }
 
     [Fact]
+    public void EnsureConfigured_DoesNotTreatExtensionDirAsConfiguredExtension()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "devbox-php-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var configDirectory = Path.Combine(root, "config", "php");
+            Directory.CreateDirectory(configDirectory);
+            var phpIni = Path.Combine(configDirectory, "php.ini");
+            File.WriteAllText(phpIni, "extension_dir=mysqli\n");
+            var inspector = new PhpExtensionInspector(root);
+
+            var changed = inspector.EnsureConfigured(["mysqli"]);
+
+            Assert.True(changed);
+            var lines = File.ReadAllLines(phpIni);
+            Assert.Contains(lines, line => line.Equals("extension=mysqli", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void EnsureConfigured_RecognizesInlineCommentWithoutAddingDuplicate()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "devbox-php-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var configDirectory = Path.Combine(root, "config", "php");
+            Directory.CreateDirectory(configDirectory);
+            var phpIni = Path.Combine(configDirectory, "php.ini");
+            File.WriteAllText(phpIni, "extension=php_mysqli.dll ; required by addon\n");
+            var inspector = new PhpExtensionInspector(root);
+
+            var changed = inspector.EnsureConfigured(["mysqli"]);
+
+            Assert.False(changed);
+            Assert.Single(File.ReadAllLines(phpIni));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public async Task CheckAsync_MissingPhpRuntime_ReportsRequiredExtensionsAsMissing()
     {
         var root = Path.Combine(Path.GetTempPath(), "devbox-php-tests", Guid.NewGuid().ToString("N"));

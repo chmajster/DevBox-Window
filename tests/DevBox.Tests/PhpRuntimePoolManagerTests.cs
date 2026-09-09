@@ -78,4 +78,32 @@ public sealed class PhpRuntimePoolManagerTests
             }
         }
     }
+
+    [Fact]
+    public async Task EnsureRunningAsync_InvalidPhpCgi_ReportsControlledError()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "devbox-tests", Guid.NewGuid().ToString("N"));
+        var runtime = Path.Combine(root, "runtime", "php", "8.5.10");
+        var config = Path.Combine(root, "config", "php");
+        Directory.CreateDirectory(runtime);
+        Directory.CreateDirectory(config);
+        File.WriteAllText(Path.Combine(runtime, "php-cgi.exe"), "not a Windows executable");
+        File.WriteAllText(Path.Combine(config, "php.ini"), "display_errors=On\n");
+
+        try
+        {
+            using var manager = new PhpRuntimePoolManager(root);
+
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.EnsureRunningAsync("8.5.10"));
+
+            Assert.Contains("Unable to start PHP 8.5.10 FastCGI", error.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
 }

@@ -24,16 +24,23 @@ All notable changes to DevBox Windows are documented here.
 - Runtime activation restores a service that was running before the switch, and PHP runtimes assigned to Sites cannot be removed.
 - Runtime discovery ignores transactional `.backup-*` directories left behind after interrupted replacement/rollback operations.
 - Bulk service actions continue after individual failures and report aggregate failures/missing runtimes.
+- Service shutdown falls back to managed process-tree termination when a configured graceful-stop executable is corrupt or cannot be launched.
+- Invalid service executables now fail with a controlled DevBox startup error instead of leaking the underlying Windows process-start exception.
 - Versioned PHP pool start/stop operations are serialized per version and PHP FastCGI port collisions are rejected when assigning runtimes to Sites.
+- Corrupt or non-executable versioned `php-cgi.exe` runtimes now fail with a controlled FastCGI startup error and release the failed process object.
 - ADDONS installation keeps the previous version until configuration succeeds and rolls back on configuration failure.
 - ADDONS checksum verification consistently accepts valid SHA-256 values with surrounding whitespace.
 - ADDONS manifests validate required fields before duplicate-key processing and reject installation directly into the shared `www` root.
+- ADDONS PHP extension requirements are normalized and validated before they can be written to `php.ini`, preventing malformed directive injection and false prerequisite failures.
 - phpMyAdmin Repair now regenerates an incomplete or damaged `config.inc.php`.
 - phpMyAdmin local cookie authentication permits the intentionally passwordless local MySQL root account.
 - Conflicting duplicate hosts-file entries for a DevBox domain are normalized to one loopback mapping.
 - Expired/replaced local TLS certificates are removed from the current-user trusted root store during rotation.
 - The Windows autostart setting is synchronized with the actual `HKCU\...\Run` registration.
 - Site document roots are constrained to the DevBox `www` directory.
+- Invalid or unsafe `config/sites.json` metadata is quarantined to a backup instead of crashing DevBox during startup or site refresh.
+- PHP extension configuration now matches only the exact `extension=` directive, so `extension_dir=` is never mistaken for a loaded module.
+- PHP extension parsing recognizes inline `php.ini` comments and extension toggling collapses duplicate entries to a single canonical directive.
 - PHP extension checks report the runtime as unavailable when PHP CLI cannot be started, including corrupt or non-executable runtime files.
 - Default MySQL shutdown explicitly uses the local root account and a bounded connection timeout before process termination fallback.
 

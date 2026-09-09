@@ -60,10 +60,18 @@ public sealed class ProcessManager : IProcessManager
             process.ErrorDataReceived += (_, e) => AppendLog(managed, "ERR", e.Data);
             process.Exited += (_, _) => OnExited(managed);
 
-            if (!process.Start())
+            try
+            {
+                if (!process.Start())
+                {
+                    process.Dispose();
+                    throw new InvalidOperationException($"Windows refused to start {definition.DisplayName}.");
+                }
+            }
+            catch (Win32Exception ex)
             {
                 process.Dispose();
-                throw new InvalidOperationException($"Windows refused to start {definition.DisplayName}.");
+                throw new InvalidOperationException($"Unable to start {definition.DisplayName}: {ex.Message}", ex);
             }
 
             managed.StartedAt = DateTimeOffset.UtcNow;
@@ -233,7 +241,14 @@ public sealed class ProcessManager : IProcessManager
             definition.WorkingDirectory);
 
         using var stopProcess = new Process { StartInfo = stopInfo };
-        if (!stopProcess.Start())
+        try
+        {
+            if (!stopProcess.Start())
+            {
+                return false;
+            }
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
         {
             return false;
         }
@@ -488,9 +503,16 @@ public sealed class ProcessManager : IProcessManager
         var initializationArguments = definition.Arguments.Concat(["--initialize-insecure"]).ToArray();
         var info = BuildStartInfo(definition.ExecutablePath, initializationArguments, definition.WorkingDirectory);
         using var process = new Process { StartInfo = info };
-        if (!process.Start())
+        try
         {
-            throw new InvalidOperationException("Unable to start MySQL initialization.");
+            if (!process.Start())
+            {
+                throw new InvalidOperationException("Unable to start MySQL initialization.");
+            }
+        }
+        catch (Win32Exception ex)
+        {
+            throw new InvalidOperationException($"Unable to start MySQL initialization: {ex.Message}", ex);
         }
 
         var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
