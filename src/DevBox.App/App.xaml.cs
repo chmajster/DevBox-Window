@@ -35,16 +35,35 @@ public partial class App : Application
         services.AddSingleton(_ => new AddonInstaller(DevBoxRoot));
         services.AddSingleton(_ => new HostsFileManager());
         services.AddSingleton(_ => new PhpExtensionInspector(DevBoxRoot));
+        services.AddSingleton(_ => new PhpManager(DevBoxRoot));
+        services.AddSingleton(_ => new DatabaseManager(DevBoxRoot));
+        services.AddSingleton(_ => new LocalCertificateManager(DevBoxRoot));
         services.AddSingleton<IRuntimeManager>(_ => new RuntimeManager(DevBoxRoot));
+        services.AddSingleton(new RuntimeCatalog());
+        services.AddSingleton(provider => new EnvironmentReadinessService(
+            DevBoxRoot,
+            provider.GetRequiredService<RuntimeCatalog>()));
         services.AddSingleton(_ => new SiteManager(DevBoxRoot));
         services.AddSingleton(_ => new LogReader(DevBoxRoot));
         services.AddSingleton<IDialogService, DialogService>();
+        services.AddSingleton<IFileDialogService, FileDialogService>();
         services.AddSingleton<IShellService, ShellService>();
         services.AddSingleton<IHostMappingService, HostMappingService>();
         services.AddSingleton(provider => new DiagnosticsService(
             DevBoxRoot,
             provider.GetRequiredService<ServiceCatalog>(),
             provider.GetRequiredService<IProcessManager>()));
+
+        services.AddTransient<PhpWindowViewModel>();
+        services.AddTransient<DatabaseWindowViewModel>();
+        services.AddTransient<SslWindowViewModel>();
+        services.AddTransient<FirstRunViewModel>();
+        services.AddTransient<PhpWindow>();
+        services.AddTransient<DatabaseWindow>();
+        services.AddTransient<SslWindow>();
+        services.AddTransient<FirstRunWindow>();
+        services.AddSingleton<IFeatureWindowService, FeatureWindowService>();
+
         services.AddSingleton(provider => new MainWindowViewModel(
             DevBoxRoot,
             provider.GetRequiredService<ServiceCatalog>(),
@@ -66,6 +85,12 @@ public partial class App : Application
             ValidateOnBuild = true,
             ValidateScopes = true
         });
+
+        var readiness = _serviceProvider.GetRequiredService<EnvironmentReadinessService>().Check();
+        if (readiness.Items.Any(item => !item.Ready && item.CanInstallAutomatically))
+        {
+            _serviceProvider.GetRequiredService<FirstRunWindow>().ShowDialog();
+        }
 
         var window = _serviceProvider.GetRequiredService<MainWindow>();
         MainWindow = window;
