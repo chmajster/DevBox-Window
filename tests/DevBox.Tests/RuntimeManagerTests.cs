@@ -37,6 +37,67 @@ public sealed class RuntimeManagerTests
     }
 
     [Fact]
+    public async Task InstallAsync_ActivatesBundledRuntimeWithoutDownloading()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var bundledBin = Path.Combine(root, "runtime", "mysql", "8.4.11", "bin");
+            Directory.CreateDirectory(bundledBin);
+            File.WriteAllText(Path.Combine(bundledBin, "mysqld.exe"), "runtime");
+
+            using var client = new HttpClient(new ThrowingHandler());
+            using var manager = new RuntimeManager(root, client);
+            var definition = new RuntimeDefinition(
+                "mysql",
+                "MySQL",
+                "8.4.11",
+                null,
+                null,
+                Path.Combine("bin", "mysqld.exe"),
+                "mysql-8.4.11-winx64");
+
+            await manager.InstallAsync(definition);
+
+            Assert.True(File.Exists(Path.Combine(root, "runtime", "mysql", "current", "bin", "mysqld.exe")));
+            var installed = Assert.Single(manager.GetInstalled("mysql", Path.Combine("bin", "mysqld.exe")));
+            Assert.True(installed.IsActive);
+            Assert.True(installed.IsValid);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task InstallAsync_BundledOnlyRuntimeFailsClearlyWhenPayloadIsMissing()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            using var client = new HttpClient(new ThrowingHandler());
+            using var manager = new RuntimeManager(root, client);
+            var definition = new RuntimeDefinition(
+                "mysql",
+                "MySQL",
+                "8.4.11",
+                null,
+                null,
+                Path.Combine("bin", "mysqld.exe"),
+                "mysql-8.4.11-winx64");
+
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.InstallAsync(definition));
+
+            Assert.Contains("bundled runtime is missing", error.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public async Task InstallAsync_RejectsPackageWithWrongHash()
     {
         var root = TemporaryRoot();
@@ -119,5 +180,11 @@ public sealed class RuntimeManagerTests
             };
             return Task.FromResult(response);
         }
+    }
+
+    private sealed class ThrowingHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Bundled runtime installation must not use HTTP.");
     }
 }
