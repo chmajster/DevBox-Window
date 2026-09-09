@@ -1,17 +1,23 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Threading;
 using DevBox.Core.Models;
+using DevBox.Core.Services;
 
 namespace DevBox.App;
 
 public partial class MainWindow : Window
 {
     private readonly IReadOnlyDictionary<string, ServiceDefinition> _definitions;
+    private readonly IReadOnlyDictionary<string, AddonDefinition> _addonDefinitions;
+    private readonly AddonCatalog _addonCatalog;
     private readonly ObservableCollection<ServiceRow> _rows = new();
+    private readonly ObservableCollection<AddonRow> _addonRows = new();
     private readonly DispatcherTimer _refreshTimer;
 
     public MainWindow()
@@ -26,13 +32,28 @@ public partial class MainWindow : Window
             _rows.Add(new ServiceRow(definition));
         }
 
+        _addonCatalog = new AddonCatalog(App.DevBoxRoot);
+        _addonDefinitions = _addonCatalog.GetDefaultAddons()
+            .ToDictionary(x => x.Key, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var addon in _addonDefinitions.Values)
+        {
+            _addonRows.Add(new AddonRow(addon));
+        }
+
         ServicesList.ItemsSource = _rows;
+        AddonsList.ItemsSource = _addonRows;
         RootPathText.Text = App.DevBoxRoot;
 
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        _refreshTimer.Tick += (_, _) => RefreshStatuses();
+        _refreshTimer.Tick += (_, _) =>
+        {
+            RefreshStatuses();
+            RefreshAddonStatuses();
+        };
         _refreshTimer.Start();
         RefreshStatuses();
+        RefreshAddonStatuses();
     }
 
     private async void Start_Click(object sender, RoutedEventArgs e) =>
@@ -47,6 +68,80 @@ public partial class MainWindow : Window
     private async void StartAll_Click(object sender, RoutedEventArgs e) => await RunAllAsync(ServiceAction.Start);
     private async void StopAll_Click(object sender, RoutedEventArgs e) => await RunAllAsync(ServiceAction.Stop);
     private async void RestartAll_Click(object sender, RoutedEventArgs e) => await RunAllAsync(ServiceAction.Restart);
+
+    private void DashboardNav_Click(object sender, RoutedEventArgs e)
+    {
+        DashboardPanel.Visibility = Visibility.Visible;
+        AddonsPanel.Visibility = Visibility.Collapsed;
+        DashboardNavButton.Foreground = Brushes.White;
+        DashboardNavButton.FontWeight = FontWeights.SemiBold;
+        AddonsNavButton.Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+        AddonsNavButton.FontWeight = FontWeights.Normal;
+    }
+
+    private void AddonsNav_Click(object sender, RoutedEventArgs e)
+    {
+        DashboardPanel.Visibility = Visibility.Collapsed;
+        AddonsPanel.Visibility = Visibility.Visible;
+        AddonsNavButton.Foreground = Brushes.White;
+        AddonsNavButton.FontWeight = FontWeights.SemiBold;
+        DashboardNavButton.Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+        DashboardNavButton.FontWeight = FontWeights.Normal;
+        RefreshAddonStatuses();
+    }
+
+    private void OpenAddon_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryGetAddon(sender, out var addon))
+        {
+            return;
+        }
+
+        if (!_addonCatalog.IsInstalled(addon))
+        {
+            MessageBox.Show(
+                this,
+                $"{addon.DisplayName} is not installed. Expected entry point:\n{addon.EntryPointPath}",
+                $"{addon.DisplayName} not installed",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(addon.LocalUrl) { UseShellExecute = true });
+        }
+        catch (Win32Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, $"Unable to open {addon.DisplayName}", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void OpenAddonFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryGetAddon(sender, out var addon))
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(addon.InstallPath);
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(addon.InstallPath) { UseShellExecute = true });
+        }
+        catch (Win32Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, $"Unable to open {addon.DisplayName} folder", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private bool TryGetAddon(object sender, out AddonDefinition addon)
+    {
+        addon = null!;
+        return sender is Button { Tag: string key } && _addonDefinitions.TryGetValue(key, out addon!);
+    }
 
     private async Task RunAsync(
         object sender,
@@ -94,7 +189,7 @@ public partial class MainWindow : Window
         {
             await operation(definition, CancellationToken.None);
         }
-        catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException or Win32Exception)
         {
             if (showDialog)
             {
@@ -113,6 +208,14 @@ public partial class MainWindow : Window
         {
             var definition = _definitions[row.Key];
             row.Apply(App.ProcessManager.GetStatus(definition), File.Exists(definition.ExecutablePath));
+        }
+    }
+
+    private void RefreshAddonStatuses()
+    {
+        foreach (var row in _addonRows)
+        {
+            row.Apply(_addonCatalog.IsInstalled(_addonDefinitions[row.Key]));
         }
     }
 
@@ -169,6 +272,49 @@ public partial class MainWindow : Window
                 ? "—"
                 : $"{(int)snapshot.Uptime.Value.TotalHours:00}:{snapshot.Uptime.Value.Minutes:00}:{snapshot.Uptime.Value.Seconds:00}";
         }
+
+        private void SetField(ref string field, string value, [CallerMemberName] string? propertyName = null)
+        {
+            if (field == value)
+            {
+                return;
+            }
+
+            field = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+    }
+
+    private sealed class AddonRow : INotifyPropertyChanged
+    {
+        private string _status = "Not installed";
+
+        public AddonRow(AddonDefinition definition)
+        {
+            Key = definition.Key;
+            Name = definition.DisplayName;
+            Description = definition.Description;
+            InstallPath = definition.InstallPath;
+            LocalUrl = definition.LocalUrl;
+            Requirements = string.Join(", ", definition.RequiredPhpExtensions);
+        }
+
+        public string Key { get; }
+        public string Name { get; }
+        public string Description { get; }
+        public string InstallPath { get; }
+        public string LocalUrl { get; }
+        public string Requirements { get; }
+
+        public string Status
+        {
+            get => _status;
+            private set => SetField(ref _status, value);
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        public void Apply(bool installed) => Status = installed ? "Installed" : "Not installed";
 
         private void SetField(ref string field, string value, [CallerMemberName] string? propertyName = null)
         {
