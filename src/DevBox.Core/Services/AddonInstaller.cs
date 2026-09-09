@@ -239,6 +239,14 @@ $cfg['TempDir'] = 'tmp';
 
     private static void ReplaceDirectory(string stagingPath, string installPath)
     {
+        var installParent = Path.GetDirectoryName(Path.GetFullPath(installPath));
+        if (string.IsNullOrWhiteSpace(installParent))
+        {
+            throw new InvalidOperationException("Addon install path has no parent directory.");
+        }
+
+        Directory.CreateDirectory(installParent);
+
         var backupPath = installPath + ".backup";
         if (Directory.Exists(backupPath))
         {
