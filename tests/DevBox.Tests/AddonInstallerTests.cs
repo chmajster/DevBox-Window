@@ -30,6 +30,10 @@ public sealed class AddonInstallerTests
             Assert.True(File.Exists(config));
             Assert.Contains("blowfish_secret", File.ReadAllText(config), StringComparison.Ordinal);
             Assert.True(Directory.Exists(Path.Combine(addon.InstallPath, "tmp")));
+
+            var vhost = Path.Combine(root, "config", "nginx", "sites-enabled", "phpmyadmin.test.conf");
+            Assert.True(File.Exists(vhost));
+            Assert.Contains("server_name phpmyadmin.test", File.ReadAllText(vhost), StringComparison.Ordinal);
         }
         finally
         {
@@ -80,7 +84,7 @@ public sealed class AddonInstallerTests
     }
 
     [Fact]
-    public async Task UninstallAsync_RemovesOnlyAddonDirectory()
+    public async Task UninstallAsync_RemovesAddonDirectoryAndOwnedVhostOnly()
     {
         var root = TempRoot();
         try
@@ -92,9 +96,14 @@ public sealed class AddonInstallerTests
             File.WriteAllText(sibling, "keep");
             using var installer = new AddonInstaller(root, new HttpClient(new StaticResponseHandler(Array.Empty<byte>())));
 
+            await installer.RepairAsync(addon);
+            var vhost = Path.Combine(root, "config", "nginx", "sites-enabled", "phpmyadmin.test.conf");
+            Assert.True(File.Exists(vhost));
+
             await installer.UninstallAsync(addon);
 
             Assert.False(Directory.Exists(addon.InstallPath));
+            Assert.False(File.Exists(vhost));
             Assert.True(File.Exists(sibling));
         }
         finally
