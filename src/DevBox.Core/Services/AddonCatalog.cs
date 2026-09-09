@@ -32,6 +32,16 @@ public sealed class AddonCatalog
                 return Array.Empty<AddonDefinition>();
             }
 
+            if (entries.Any(entry => entry is null))
+            {
+                throw new InvalidDataException("Addon manifest contains a null entry.");
+            }
+
+            foreach (var entry in entries)
+            {
+                ValidateEntry(entry);
+            }
+
             var duplicate = entries
                 .GroupBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault(group => group.Count() > 1);
