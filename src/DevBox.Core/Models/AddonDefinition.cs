@@ -7,4 +7,8 @@ public sealed record AddonDefinition(
     string InstallPath,
     string EntryPointPath,
     string LocalUrl,
-    IReadOnlyList<string> RequiredPhpExtensions);
+    IReadOnlyList<string> RequiredPhpExtensions,
+    string Version,
+    string DownloadUrl,
+    string Sha256,
+    string ArchiveRootDirectory);
