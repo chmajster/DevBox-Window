@@ -126,18 +126,25 @@ public sealed class PhpExtensionInspector
     private static string? TryParseConfiguredExtension(string line)
     {
         var trimmed = line.Trim();
-        if (trimmed.Length == 0 || trimmed.StartsWith(';') || !trimmed.StartsWith("extension", StringComparison.OrdinalIgnoreCase))
+        if (trimmed.Length == 0 || trimmed.StartsWith(';'))
         {
             return null;
         }
 
         var equalsIndex = trimmed.IndexOf('=');
-        if (equalsIndex < 0)
+        if (equalsIndex < 0 || !trimmed[..equalsIndex].Trim().Equals("extension", StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
 
-        var value = trimmed[(equalsIndex + 1)..].Trim().Trim('"', '\'');
+        var value = trimmed[(equalsIndex + 1)..].Trim();
+        var commentIndex = value.IndexOf(';');
+        if (commentIndex >= 0)
+        {
+            value = value[..commentIndex].TrimEnd();
+        }
+        value = value.Trim().Trim('"', '\'');
+
         if (value.StartsWith("php_", StringComparison.OrdinalIgnoreCase))
         {
             value = value[4..];
@@ -147,7 +154,7 @@ public sealed class PhpExtensionInspector
             value = value[..^4];
         }
 
-        return value;
+        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     private static void AtomicWrite(string path, IReadOnlyCollection<string> lines)
