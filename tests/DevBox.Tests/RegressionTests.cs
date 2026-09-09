@@ -96,7 +96,7 @@ $cfg['TempDir'] = 'tmp';
             manager.EnsureMapping("127.0.0.1", "demo.test");
 
             var lines = File.ReadAllLines(hosts);
-            Assert.Single(lines.Where(line => line.Contains("demo.test", StringComparison.OrdinalIgnoreCase)));
+            Assert.Single(lines, line => line.Contains("demo.test", StringComparison.OrdinalIgnoreCase));
             Assert.Contains("127.0.0.1 demo.test # DevBox", lines);
             Assert.Contains("127.0.0.1 other.test", lines);
         }
