@@ -101,6 +101,23 @@ public sealed partial class SiteManager
         return updated;
     }
 
+    public SiteDefinition SetHttps(string name, bool enabled)
+    {
+        var normalizedName = NormalizeName(name);
+        var sites = GetSites().ToList();
+        var index = sites.FindIndex(site => site.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase));
+        if (index < 0)
+        {
+            throw new InvalidOperationException($"Site '{normalizedName}' does not exist.");
+        }
+
+        var updated = sites[index] with { HttpsEnabled = enabled };
+        WriteNginxConfig(updated);
+        sites[index] = updated;
+        SaveSites(sites);
+        return updated;
+    }
+
     public void Delete(string name, bool deleteDocumentRoot = false)
     {
         var normalizedName = NormalizeName(name);
@@ -135,10 +152,7 @@ public sealed partial class SiteManager
             throw new InvalidOperationException("Site document root must be inside the DevBox root.");
         }
 
-        var config = $$"""
-server {
-    listen 80;
-    server_name {{site.Domain}};
+        var applicationLocations = $$"""
     root {{relativeRoot}};
     index index.php index.html;
 
@@ -151,9 +165,41 @@ server {
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         fastcgi_pass 127.0.0.1:9084;
     }
-}
 """;
-        File.WriteAllText(configPath, config.Replace("\n", Environment.NewLine));
+
+        string config;
+        if (site.HttpsEnabled)
+        {
+            var certificate = $"config/ssl/sites/{site.Domain}.crt.pem";
+            var privateKey = $"config/ssl/sites/{site.Domain}.key.pem";
+            config = $$"""
+server {
+    listen 80;
+    server_name {{site.Domain}};
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name {{site.Domain}};
+    ssl_certificate {{certificate}};
+    ssl_certificate_key {{privateKey}};
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+{{applicationLocations}}}
+""";
+        }
+        else
+        {
+            config = $$"""
+server {
+    listen 80;
+    server_name {{site.Domain}};
+{{applicationLocations}}}
+""";
+        }
+
+        AtomicWrite(configPath, config.Replace("\n", Environment.NewLine));
     }
 
     private void DeleteNginxConfig(string domain)
@@ -179,6 +225,32 @@ server {
             else
             {
                 File.Move(tempPath, _sitesMetadataPath);
+            }
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
+    }
+
+    private static void AtomicWrite(string path, string content)
+    {
+        var directory = Path.GetDirectoryName(path)!;
+        Directory.CreateDirectory(directory);
+        var tempPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.WriteAllText(tempPath, content);
+            if (File.Exists(path))
+            {
+                File.Replace(tempPath, path, null);
+            }
+            else
+            {
+                File.Move(tempPath, path);
             }
         }
         finally
