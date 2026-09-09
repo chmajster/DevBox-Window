@@ -37,7 +37,8 @@ public sealed class RegressionTests
             File.WriteAllText(Path.Combine(phpRoot, "8.9.0", "php-cgi.exe"), "test");
             File.WriteAllText(Path.Combine(phpRoot, "8.10.0", "php-cgi.exe"), "test");
 
-            using var manager = new RuntimeManager(root, new HttpClient());
+            using var client = new HttpClient();
+            using var manager = new RuntimeManager(root, client);
             var installed = manager.GetInstalled("php", "php-cgi.exe");
 
             Assert.Equal("8.10.0", installed[0].Version);
@@ -56,9 +57,9 @@ public sealed class RegressionTests
             @"C:\Tools\npm.cmd",
             new[] { "--version" });
 
-        Assert.EndsWith("cmd.exe", startInfo.FileName, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("/c", startInfo.ArgumentList);
-        Assert.Contains(startInfo.ArgumentList, argument => argument.Contains("npm.cmd", StringComparison.OrdinalIgnoreCase));
+        Assert.True(startInfo.FileName.EndsWith("cmd.exe", StringComparison.OrdinalIgnoreCase));
+        Assert.True(startInfo.ArgumentList.Contains("/c"));
+        Assert.True(startInfo.ArgumentList.Any(argument => argument.Contains("npm.cmd", StringComparison.OrdinalIgnoreCase)));
     }
 
     [Fact]
@@ -118,7 +119,7 @@ $cfg['TempDir'] = 'tmp';
             var error = Assert.Throws<InvalidOperationException>(() =>
                 manager.Create("demo", documentRoot: unsafeRoot));
 
-            Assert.Contains("www", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.True(error.Message.Contains("www", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
