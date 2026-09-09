@@ -8,6 +8,11 @@ All notable changes to DevBox Windows are documented here.
 
 - New DevBox application icon with editable SVG source and Windows ICO asset.
 - DevBox branding is now embedded in the executable, applied to WPF windows and used by the Inno Setup installer.
+- Installer now always exposes the installation directory so the target path can be changed.
+- Installer options now control desktop and Start menu shortcuts and whether DevBox starts after installation.
+- Existing DevBox installations are detected and presented with upgrade/update, reinstall, or uninstall maintenance actions.
+- Reinstall removes the existing package before continuing, while upgrade/update keeps the installation and replaces application files.
+- CI now compiles the Inno Setup script on pull requests to catch installer regressions before merge.
 
 ## 0.2.1 - 2026-09-09
 

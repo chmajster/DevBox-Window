@@ -37,6 +37,27 @@ jobs:
       - name: Publish win-x64
         run: dotnet publish src/DevBox.App/DevBox.App.csproj --configuration Release --runtime win-x64 --self-contained true --output artifacts/win-x64
 
+      - name: Ensure Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --yes --no-progress
+          }
+          if (-not (Test-Path $iscc)) {
+            throw "Inno Setup compiler not found after installation: $iscc"
+          }
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          New-Item -ItemType Directory -Force artifacts/installer | Out-Null
+          & $iscc "/DMyAppVersion=0.0.0-ci" "/DPublishDir=$pwd\artifacts\win-x64" "/DOutputDir=$pwd\artifacts\installer" "installer\DevBox.iss"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup failed with exit code $LASTEXITCODE"
+          }
+
       - name: Upload win-x64 artifact
         uses: actions/upload-artifact@v7
         with:
