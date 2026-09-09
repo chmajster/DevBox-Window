@@ -13,6 +13,7 @@ public sealed partial class PhpRuntimePoolManager : IDisposable
     private readonly string _rootPath;
     private readonly object _sync = new();
     private readonly Dictionary<string, Process> _processes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SemaphoreSlim> _versionLocks = new(StringComparer.OrdinalIgnoreCase);
     private bool _disposed;
 
     public PhpRuntimePoolManager(string rootPath)
@@ -25,82 +26,92 @@ public sealed partial class PhpRuntimePoolManager : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var normalized = NormalizeVersion(version);
-        var port = GetPort(normalized);
-
-        lock (_sync)
-        {
-            if (_processes.TryGetValue(normalized, out var existing))
-            {
-                if (!existing.HasExited)
-                {
-                    return port;
-                }
-                existing.Dispose();
-                _processes.Remove(normalized);
-            }
-        }
-
-        var runtimeDirectory = Path.Combine(_rootPath, "runtime", "php", normalized);
-        var executable = Path.Combine(runtimeDirectory, "php-cgi.exe");
-        if (!File.Exists(executable))
-        {
-            throw new FileNotFoundException($"PHP runtime {normalized} is not installed or does not contain php-cgi.exe.", executable);
-        }
-
-        var phpIni = BuildVersionIni(normalized, runtimeDirectory);
-
-        if (!IsPortAvailable(port))
-        {
-            throw new InvalidOperationException($"FastCGI port {port} for PHP {normalized} is already in use.");
-        }
-
-        var startInfo = new ProcessStartInfo(executable)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = _rootPath
-        };
-        startInfo.ArgumentList.Add("-b");
-        startInfo.ArgumentList.Add($"127.0.0.1:{port}");
-        startInfo.ArgumentList.Add("-c");
-        startInfo.ArgumentList.Add(phpIni);
-
-        var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-        if (!process.Start())
-        {
-            process.Dispose();
-            throw new InvalidOperationException($"Unable to start PHP {normalized} FastCGI.");
-        }
-
+        var gate = GetVersionLock(normalized);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await Task.Delay(250, cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            TryStop(process);
-            process.Dispose();
-            throw;
-        }
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var port = GetPort(normalized);
 
-        if (process.HasExited)
-        {
-            var exitCode = process.ExitCode;
-            process.Dispose();
-            throw new InvalidOperationException($"PHP {normalized} FastCGI exited during startup with code {exitCode}.");
-        }
+            lock (_sync)
+            {
+                if (_processes.TryGetValue(normalized, out var existing))
+                {
+                    if (!existing.HasExited)
+                    {
+                        return port;
+                    }
+                    existing.Dispose();
+                    _processes.Remove(normalized);
+                }
+            }
 
-        lock (_sync)
-        {
-            if (_disposed)
+            var runtimeDirectory = Path.Combine(_rootPath, "runtime", "php", normalized);
+            var executable = Path.Combine(runtimeDirectory, "php-cgi.exe");
+            if (!File.Exists(executable))
+            {
+                throw new FileNotFoundException($"PHP runtime {normalized} is not installed or does not contain php-cgi.exe.", executable);
+            }
+
+            var phpIni = BuildVersionIni(normalized, runtimeDirectory);
+
+            if (!IsPortAvailable(port))
+            {
+                throw new InvalidOperationException($"FastCGI port {port} for PHP {normalized} is already in use.");
+            }
+
+            var startInfo = new ProcessStartInfo(executable)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = _rootPath
+            };
+            startInfo.ArgumentList.Add("-b");
+            startInfo.ArgumentList.Add($"127.0.0.1:{port}");
+            startInfo.ArgumentList.Add("-c");
+            startInfo.ArgumentList.Add(phpIni);
+
+            var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+            if (!process.Start())
+            {
+                process.Dispose();
+                throw new InvalidOperationException($"Unable to start PHP {normalized} FastCGI.");
+            }
+
+            try
+            {
+                await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+            }
+            catch
             {
                 TryStop(process);
                 process.Dispose();
-                throw new ObjectDisposedException(nameof(PhpRuntimePoolManager));
+                throw;
             }
-            _processes[normalized] = process;
+
+            if (process.HasExited)
+            {
+                var exitCode = process.ExitCode;
+                process.Dispose();
+                throw new InvalidOperationException($"PHP {normalized} FastCGI exited during startup with code {exitCode}.");
+            }
+
+            lock (_sync)
+            {
+                if (_disposed)
+                {
+                    TryStop(process);
+                    process.Dispose();
+                    throw new ObjectDisposedException(nameof(PhpRuntimePoolManager));
+                }
+                _processes[normalized] = process;
+            }
+            return port;
         }
-        return port;
+        finally
+        {
+            gate.Release();
+        }
     }
 
     public async Task RestartAsync(string version, CancellationToken cancellationToken = default)
@@ -109,24 +120,32 @@ public sealed partial class PhpRuntimePoolManager : IDisposable
         _ = await EnsureRunningAsync(version, cancellationToken).ConfigureAwait(false);
     }
 
-    public Task StopAsync(string version, CancellationToken cancellationToken = default)
+    public async Task StopAsync(string version, CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(_disposed, this);
         var normalized = NormalizeVersion(version);
-        Process? process = null;
-        lock (_sync)
+        var gate = GetVersionLock(normalized);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            if (_processes.Remove(normalized, out var found))
+            Process? process = null;
+            lock (_sync)
             {
-                process = found;
+                if (_processes.Remove(normalized, out var found))
+                {
+                    process = found;
+                }
+            }
+            if (process is not null)
+            {
+                TryStop(process);
+                process.Dispose();
             }
         }
-        if (process is not null)
+        finally
         {
-            TryStop(process);
-            process.Dispose();
+            gate.Release();
         }
-        return Task.CompletedTask;
     }
 
     public Task StopAllAsync(CancellationToken cancellationToken = default)
@@ -182,6 +201,21 @@ public sealed partial class PhpRuntimePoolManager : IDisposable
         var versionIni = Path.Combine(versionConfigDirectory, "php.ini");
         AtomicWrite(versionIni, rewritten);
         return versionIni;
+    }
+
+    private SemaphoreSlim GetVersionLock(string version)
+    {
+        lock (_sync)
+        {
+            if (_versionLocks.TryGetValue(version, out var existing))
+            {
+                return existing;
+            }
+
+            var created = new SemaphoreSlim(1, 1);
+            _versionLocks[version] = created;
+            return created;
+        }
     }
 
     private static void AtomicWrite(string path, string content)
@@ -262,6 +296,14 @@ public sealed partial class PhpRuntimePoolManager : IDisposable
         }
         _disposed = true;
         _ = StopAllAsync();
+        lock (_sync)
+        {
+            foreach (var gate in _versionLocks.Values)
+            {
+                gate.Dispose();
+            }
+            _versionLocks.Clear();
+        }
     }
 
     [GeneratedRegex("^\\d+\\.\\d+\\.\\d+$", RegexOptions.CultureInvariant)]
