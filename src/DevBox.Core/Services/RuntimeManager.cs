@@ -36,7 +36,7 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         var activeVersion = ReadVersionMarker(Path.Combine(runtimeRoot, "current"));
         return Directory.GetDirectories(runtimeRoot)
             .Where(path => !Path.GetFileName(path).Equals("current", StringComparison.OrdinalIgnoreCase))
-            .Where(path => !Path.GetFileName(path).StartsWith('.', StringComparison.Ordinal))
+            .Where(path => !Path.GetFileName(path).StartsWith(".", StringComparison.Ordinal))
             .Select(path =>
             {
                 var version = Path.GetFileName(path);
