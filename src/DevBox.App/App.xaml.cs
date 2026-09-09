@@ -1,15 +1,18 @@
 using System.IO;
 using System.Windows;
+using DevBox.App.Services;
+using DevBox.App.ViewModels;
 using DevBox.Core.Abstractions;
 using DevBox.Core.Services;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace DevBox.App;
 
 public partial class App : Application
 {
+    private ServiceProvider? _serviceProvider;
+
     public static string DevBoxRoot { get; private set; } = string.Empty;
-    public static ServiceCatalog ServiceCatalog { get; private set; } = null!;
-    public static IProcessManager ProcessManager { get; private set; } = null!;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -24,17 +27,54 @@ public partial class App : Application
 
         DevBoxRoot = ResolveRoot();
         RuntimeLayout.EnsureInitialized(DevBoxRoot);
-        ServiceCatalog = new ServiceCatalog(DevBoxRoot);
-        ProcessManager = new ProcessManager();
 
-        var window = new DevBox.App.MainWindow();
+        var services = new ServiceCollection();
+        services.AddSingleton(new ServiceCatalog(DevBoxRoot));
+        services.AddSingleton<IProcessManager, ProcessManager>();
+        services.AddSingleton(_ => new AddonCatalog(DevBoxRoot));
+        services.AddSingleton(_ => new AddonInstaller(DevBoxRoot));
+        services.AddSingleton(_ => new HostsFileManager());
+        services.AddSingleton(_ => new PhpExtensionInspector(DevBoxRoot));
+        services.AddSingleton<IRuntimeManager>(_ => new RuntimeManager(DevBoxRoot));
+        services.AddSingleton(_ => new SiteManager(DevBoxRoot));
+        services.AddSingleton(_ => new LogReader(DevBoxRoot));
+        services.AddSingleton<IDialogService, DialogService>();
+        services.AddSingleton<IShellService, ShellService>();
+        services.AddSingleton<IHostMappingService, HostMappingService>();
+        services.AddSingleton(provider => new DiagnosticsService(
+            DevBoxRoot,
+            provider.GetRequiredService<ServiceCatalog>(),
+            provider.GetRequiredService<IProcessManager>()));
+        services.AddSingleton(provider => new MainWindowViewModel(
+            DevBoxRoot,
+            provider.GetRequiredService<ServiceCatalog>(),
+            provider.GetRequiredService<IProcessManager>(),
+            provider.GetRequiredService<AddonCatalog>(),
+            provider.GetRequiredService<AddonInstaller>(),
+            provider.GetRequiredService<PhpExtensionInspector>(),
+            provider.GetRequiredService<IHostMappingService>(),
+            provider.GetRequiredService<SiteManager>(),
+            provider.GetRequiredService<IRuntimeManager>(),
+            provider.GetRequiredService<DiagnosticsService>(),
+            provider.GetRequiredService<LogReader>(),
+            provider.GetRequiredService<IDialogService>(),
+            provider.GetRequiredService<IShellService>()));
+        services.AddSingleton<MainWindow>();
+
+        _serviceProvider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true
+        });
+
+        var window = _serviceProvider.GetRequiredService<MainWindow>();
         MainWindow = window;
         window.Show();
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
-        ProcessManager?.Dispose();
+        _serviceProvider?.Dispose();
         base.OnExit(e);
     }
 
