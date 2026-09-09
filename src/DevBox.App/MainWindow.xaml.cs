@@ -1,0 +1,184 @@
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Threading;
+using DevBox.Core.Models;
+
+namespace DevBox.App;
+
+public partial class MainWindow : Window
+{
+    private readonly IReadOnlyDictionary<string, ServiceDefinition> _definitions;
+    private readonly ObservableCollection<ServiceRow> _rows = new();
+    private readonly DispatcherTimer _refreshTimer;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+
+        _definitions = App.ServiceCatalog.GetDefaultServices()
+            .ToDictionary(x => x.Key, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var definition in _definitions.Values)
+        {
+            _rows.Add(new ServiceRow(definition));
+        }
+
+        ServicesList.ItemsSource = _rows;
+        RootPathText.Text = App.DevBoxRoot;
+
+        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _refreshTimer.Tick += (_, _) => RefreshStatuses();
+        _refreshTimer.Start();
+        RefreshStatuses();
+    }
+
+    private async void Start_Click(object sender, RoutedEventArgs e) =>
+        await RunAsync(sender, (definition, token) => App.ProcessManager.StartAsync(definition, token));
+
+    private async void Stop_Click(object sender, RoutedEventArgs e) =>
+        await RunAsync(sender, (definition, token) => App.ProcessManager.StopAsync(definition, token));
+
+    private async void Restart_Click(object sender, RoutedEventArgs e) =>
+        await RunAsync(sender, (definition, token) => App.ProcessManager.RestartAsync(definition, token));
+
+    private async void StartAll_Click(object sender, RoutedEventArgs e) => await RunAllAsync(ServiceAction.Start);
+    private async void StopAll_Click(object sender, RoutedEventArgs e) => await RunAllAsync(ServiceAction.Stop);
+    private async void RestartAll_Click(object sender, RoutedEventArgs e) => await RunAllAsync(ServiceAction.Restart);
+
+    private async Task RunAsync(
+        object sender,
+        Func<ServiceDefinition, CancellationToken, Task<ServiceSnapshot>> operation)
+    {
+        if (sender is not Button { Tag: string key } || !_definitions.TryGetValue(key, out var definition))
+        {
+            return;
+        }
+
+        await ExecuteAsync(definition, operation);
+    }
+
+    private async Task RunAllAsync(ServiceAction action)
+    {
+        var ordered = action == ServiceAction.Stop
+            ? _definitions.Values.Reverse()
+            : _definitions.Values;
+
+        foreach (var definition in ordered)
+        {
+            Func<ServiceDefinition, CancellationToken, Task<ServiceSnapshot>> operation = action switch
+            {
+                ServiceAction.Start => (d, token) => App.ProcessManager.StartAsync(d, token),
+                ServiceAction.Stop => (d, token) => App.ProcessManager.StopAsync(d, token),
+                ServiceAction.Restart => (d, token) => App.ProcessManager.RestartAsync(d, token),
+                _ => throw new ArgumentOutOfRangeException(nameof(action))
+            };
+
+            if (action != ServiceAction.Stop && !File.Exists(definition.ExecutablePath))
+            {
+                continue;
+            }
+
+            await ExecuteAsync(definition, operation, showDialog: false);
+        }
+    }
+
+    private async Task ExecuteAsync(
+        ServiceDefinition definition,
+        Func<ServiceDefinition, CancellationToken, Task<ServiceSnapshot>> operation,
+        bool showDialog = true)
+    {
+        try
+        {
+            await operation(definition, CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            if (showDialog)
+            {
+                MessageBox.Show(this, ex.Message, $"{definition.DisplayName} error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+        finally
+        {
+            RefreshStatuses();
+        }
+    }
+
+    private void RefreshStatuses()
+    {
+        foreach (var row in _rows)
+        {
+            var definition = _definitions[row.Key];
+            row.Apply(App.ProcessManager.GetStatus(definition), File.Exists(definition.ExecutablePath));
+        }
+    }
+
+    private enum ServiceAction
+    {
+        Start,
+        Stop,
+        Restart
+    }
+
+    private sealed class ServiceRow : INotifyPropertyChanged
+    {
+        private string _status = "Stopped";
+        private string _portPid = string.Empty;
+        private string _uptime = "—";
+
+        public ServiceRow(ServiceDefinition definition)
+        {
+            Key = definition.Key;
+            Name = definition.DisplayName;
+            RuntimePath = definition.ExecutablePath;
+            _portPid = $"{definition.Port} / —";
+        }
+
+        public string Key { get; }
+        public string Name { get; }
+        public string RuntimePath { get; }
+
+        public string Status
+        {
+            get => _status;
+            private set => SetField(ref _status, value);
+        }
+
+        public string PortPid
+        {
+            get => _portPid;
+            private set => SetField(ref _portPid, value);
+        }
+
+        public string Uptime
+        {
+            get => _uptime;
+            private set => SetField(ref _uptime, value);
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        public void Apply(ServiceSnapshot snapshot, bool runtimeInstalled)
+        {
+            Status = runtimeInstalled ? snapshot.State.ToString() : "Runtime missing";
+            PortPid = $"{snapshot.Port} / {(snapshot.ProcessId?.ToString() ?? "—")}";
+            Uptime = snapshot.Uptime is null
+                ? "—"
+                : $"{(int)snapshot.Uptime.Value.TotalHours:00}:{snapshot.Uptime.Value.Minutes:00}:{snapshot.Uptime.Value.Seconds:00}";
+        }
+
+        private void SetField(ref string field, string value, [CallerMemberName] string? propertyName = null)
+        {
+            if (field == value)
+            {
+                return;
+            }
+
+            field = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+    }
+}
