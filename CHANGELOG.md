@@ -27,6 +27,7 @@ All notable changes to DevBox Windows are documented here.
 - Service shutdown falls back to managed process-tree termination when a configured graceful-stop executable is corrupt or cannot be launched.
 - Invalid service executables now fail with a controlled DevBox startup error instead of leaking the underlying Windows process-start exception.
 - Versioned PHP pool start/stop operations are serialized per version and PHP FastCGI port collisions are rejected when assigning runtimes to Sites.
+- Corrupt or non-executable versioned `php-cgi.exe` runtimes now fail with a controlled FastCGI startup error and release the failed process object.
 - ADDONS installation keeps the previous version until configuration succeeds and rolls back on configuration failure.
 - ADDONS checksum verification consistently accepts valid SHA-256 values with surrounding whitespace.
 - ADDONS manifests validate required fields before duplicate-key processing and reject installation directly into the shared `www` root.
