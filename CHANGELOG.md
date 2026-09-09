@@ -14,6 +14,25 @@ All notable changes to DevBox Windows are documented here.
 - Reinstall removes the existing package before continuing, while upgrade/update keeps the installation and replaces application files.
 - CI now compiles the Inno Setup script on pull requests to catch installer regressions before merge.
 
+### Fixed
+
+- DevBox now stops managed Nginx, PHP and MySQL processes during application exit and can re-adopt processes recorded by a previous DevBox session.
+- Fresh MySQL data directories are initialized automatically before first startup, while partial/non-empty initialization states fail safely.
+- First Run is shown whenever any required environment component is incomplete, including manual-action items.
+- Composer, npm and pnpm `.cmd`/`.bat` launchers are executed through the Windows command processor.
+- Runtime versions are sorted semantically rather than lexicographically.
+- Runtime activation restores a service that was running before the switch, and PHP runtimes assigned to Sites cannot be removed.
+- Bulk service actions continue after individual failures and report aggregate failures/missing runtimes.
+- Versioned PHP pool start/stop operations are serialized per version and PHP FastCGI port collisions are rejected when assigning runtimes to Sites.
+- ADDONS installation keeps the previous version until configuration succeeds and rolls back on configuration failure.
+- phpMyAdmin Repair now regenerates an incomplete or damaged `config.inc.php`.
+- Conflicting duplicate hosts-file entries for a DevBox domain are normalized to one loopback mapping.
+- Expired/replaced local TLS certificates are removed from the current-user trusted root store during rotation.
+- The Windows autostart setting is synchronized with the actual `HKCU\...\Run` registration.
+- Site document roots are constrained to the DevBox `www` directory.
+- PHP extension checks report the runtime as unavailable when PHP CLI cannot be started.
+- Default MySQL shutdown explicitly uses the local root account and a bounded connection timeout before process termination fallback.
+
 ## 0.2.1 - 2026-09-09
 
 ### Fixed
