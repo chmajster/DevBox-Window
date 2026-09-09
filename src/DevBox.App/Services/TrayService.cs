@@ -102,7 +102,7 @@ public sealed class TrayService : ITrayService
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
-            Application.Current.Dispatcher.Invoke(() => _dialogs.Error("Service operation failed", ex.Message));
+            System.Windows.Application.Current.Dispatcher.Invoke(() => _dialogs.Error("Service operation failed", ex.Message));
         }
     }
 
