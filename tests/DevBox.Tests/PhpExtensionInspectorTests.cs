@@ -66,7 +66,7 @@ public sealed class PhpExtensionInspectorTests
 
             Assert.False(result.RuntimeAvailable);
             Assert.Contains("mysqli", result.MissingExtensions);
-            Assert.Contains("Unable to start PHP CLI", result.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Unable to start PHP CLI", result.Error ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
