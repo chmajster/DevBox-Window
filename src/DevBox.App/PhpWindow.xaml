@@ -11,7 +11,7 @@
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
         <Grid Grid.Row="0" Margin="0,0,0,18">
             <StackPanel><TextBlock Text="PHP Manager" FontSize="27" FontWeight="SemiBold"/><TextBlock Text="Manage the active PHP runtime, php.ini and extensions." Foreground="#6B7280" Margin="0,4,0,0"/></StackPanel>
-            <StackPanel HorizontalAlignment="Right" Orientation="Horizontal"><Button Content="Open php.ini" Command="{Binding OpenPhpIniCommand}"/><Button Content="PHP folder" Command="{Binding OpenPhpFolderCommand}"/><Button Content="Refresh" Style="{StaticResource Primary}" Command="{Binding RefreshCommand}"/></StackPanel>
+            <StackPanel HorizontalAlignment="Right" Orientation="Horizontal"><Button Content="PHP per site" Click="SitePhp_Click"/><Button Content="Open php.ini" Command="{Binding OpenPhpIniCommand}"/><Button Content="PHP folder" Command="{Binding OpenPhpFolderCommand}"/><Button Content="Refresh" Style="{StaticResource Primary}" Command="{Binding RefreshCommand}"/></StackPanel>
         </Grid>
         <Border Grid.Row="1" Background="White" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="16" Margin="0,0,0,14">
             <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="1*"/><ColumnDefinition Width="2*"/></Grid.ColumnDefinitions>
