@@ -86,16 +86,16 @@ public sealed class AddonInstaller : IDisposable
         ArgumentNullException.ThrowIfNull(addon);
         EnsureInstallPathIsSafe(addon);
 
-        if (!Directory.Exists(addon.InstallPath))
+        if (Directory.Exists(addon.InstallPath))
         {
-            return Task.CompletedTask;
+            var trashRoot = Path.Combine(_rootPath, "tmp", "addons", "trash");
+            Directory.CreateDirectory(trashRoot);
+            var trashPath = Path.Combine(trashRoot, $"{addon.Key}-{Guid.NewGuid():N}");
+            Directory.Move(addon.InstallPath, trashPath);
+            Directory.Delete(trashPath, recursive: true);
         }
 
-        var trashRoot = Path.Combine(_rootPath, "tmp", "addons", "trash");
-        Directory.CreateDirectory(trashRoot);
-        var trashPath = Path.Combine(trashRoot, $"{addon.Key}-{Guid.NewGuid():N}");
-        Directory.Move(addon.InstallPath, trashPath);
-        Directory.Delete(trashPath, recursive: true);
+        DeleteAddonNginxConfig(addon);
         return Task.CompletedTask;
     }
 
@@ -180,6 +180,8 @@ public sealed class AddonInstaller : IDisposable
 
     private void ConfigureAddon(AddonDefinition addon)
     {
+        WriteAddonNginxConfig(addon);
+
         if (!addon.Key.Equals("phpmyadmin", StringComparison.OrdinalIgnoreCase))
         {
             return;
@@ -206,7 +208,84 @@ $cfg['Servers'][$i]['compress'] = false;
 $cfg['Servers'][$i]['AllowNoPassword'] = false;
 $cfg['TempDir'] = 'tmp';
 """;
-        File.WriteAllText(configPath, config.Replace("\n", Environment.NewLine));
+        AtomicWrite(configPath, config.Replace("\n", Environment.NewLine));
+    }
+
+    private void WriteAddonNginxConfig(AddonDefinition addon)
+    {
+        if (!Uri.TryCreate(addon.LocalUrl, UriKind.Absolute, out var uri) ||
+            !uri.Host.EndsWith(".test", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("Addon local URL must use a valid .test host.");
+        }
+
+        var relativeRoot = Path.GetRelativePath(_rootPath, addon.InstallPath).Replace('\\', '/');
+        if (relativeRoot.StartsWith("../", StringComparison.Ordinal) || relativeRoot == "..")
+        {
+            throw new InvalidOperationException("Addon install path escapes the DevBox root.");
+        }
+
+        var configPath = GetAddonNginxConfigPath(addon);
+        var config = $$"""
+server {
+    listen 80;
+    server_name {{uri.Host}};
+    root {{relativeRoot}};
+    index index.php index.html;
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location ~ \.php$ {
+        include config/nginx/fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_pass 127.0.0.1:9084;
+    }
+}
+""";
+        AtomicWrite(configPath, config.Replace("\n", Environment.NewLine));
+    }
+
+    private void DeleteAddonNginxConfig(AddonDefinition addon)
+    {
+        var configPath = GetAddonNginxConfigPath(addon);
+        if (File.Exists(configPath))
+        {
+            File.Delete(configPath);
+        }
+    }
+
+    private string GetAddonNginxConfigPath(AddonDefinition addon)
+    {
+        var host = new Uri(addon.LocalUrl).Host;
+        return Path.Combine(_rootPath, "config", "nginx", "sites-enabled", $"{host}.conf");
+    }
+
+    private static void AtomicWrite(string path, string content)
+    {
+        var directory = Path.GetDirectoryName(path)!;
+        Directory.CreateDirectory(directory);
+        var tempPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.WriteAllText(tempPath, content);
+            if (File.Exists(path))
+            {
+                File.Replace(tempPath, path, null);
+            }
+            else
+            {
+                File.Move(tempPath, path);
+            }
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
     }
 
     private void EnsureInstallPathIsSafe(AddonDefinition addon)
