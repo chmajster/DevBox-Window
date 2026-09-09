@@ -13,6 +13,13 @@ public partial class App : Application
     private ServiceProvider? _serviceProvider;
 
     public static string DevBoxRoot { get; private set; } = string.Empty;
+    internal static bool IsExiting { get; private set; }
+
+    internal static void RequestExit()
+    {
+        IsExiting = true;
+        Current.Shutdown();
+    }
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -38,6 +45,8 @@ public partial class App : Application
         services.AddSingleton(_ => new PhpManager(DevBoxRoot));
         services.AddSingleton(_ => new DatabaseManager(DevBoxRoot));
         services.AddSingleton(_ => new LocalCertificateManager(DevBoxRoot));
+        services.AddSingleton(_ => new DeveloperToolsService(DevBoxRoot));
+        services.AddSingleton(_ => new ApplicationUpdateService(typeof(App).Assembly.GetName().Version ?? new Version(0, 2, 0)));
         services.AddSingleton<IRuntimeManager>(_ => new RuntimeManager(DevBoxRoot));
         services.AddSingleton(new RuntimeCatalog());
         services.AddSingleton(provider => new EnvironmentReadinessService(
@@ -49,6 +58,8 @@ public partial class App : Application
         services.AddSingleton<IFileDialogService, FileDialogService>();
         services.AddSingleton<IShellService, ShellService>();
         services.AddSingleton<IHostMappingService, HostMappingService>();
+        services.AddSingleton<IAppSettingsService>(_ => new AppSettingsService(DevBoxRoot));
+        services.AddSingleton<ITrayService, TrayService>();
         services.AddSingleton(provider => new DiagnosticsService(
             DevBoxRoot,
             provider.GetRequiredService<ServiceCatalog>(),
@@ -58,10 +69,16 @@ public partial class App : Application
         services.AddTransient<DatabaseWindowViewModel>();
         services.AddTransient<SslWindowViewModel>();
         services.AddTransient<FirstRunViewModel>();
+        services.AddTransient<ToolsWindowViewModel>();
+        services.AddTransient<UpdateWindowViewModel>();
+        services.AddTransient<SettingsWindowViewModel>();
         services.AddTransient<PhpWindow>();
         services.AddTransient<DatabaseWindow>();
         services.AddTransient<SslWindow>();
         services.AddTransient<FirstRunWindow>();
+        services.AddTransient<ToolsWindow>();
+        services.AddTransient<UpdateWindow>();
+        services.AddTransient<SettingsWindow>();
         services.AddSingleton<IFeatureWindowService, FeatureWindowService>();
 
         services.AddSingleton(provider => new MainWindowViewModel(
@@ -95,10 +112,22 @@ public partial class App : Application
         var window = _serviceProvider.GetRequiredService<MainWindow>();
         MainWindow = window;
         window.Show();
+
+        var tray = _serviceProvider.GetRequiredService<ITrayService>();
+        tray.Initialize(window);
+        _ = tray.StartConfiguredServicesAsync();
+
+        var startedFromWindows = e.Args.Any(argument => argument.Equals("--startup", StringComparison.OrdinalIgnoreCase));
+        var settings = _serviceProvider.GetRequiredService<IAppSettingsService>();
+        if (startedFromWindows && settings.Current.MinimizeToTray)
+        {
+            window.Hide();
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        IsExiting = true;
         _serviceProvider?.Dispose();
         base.OnExit(e);
     }
