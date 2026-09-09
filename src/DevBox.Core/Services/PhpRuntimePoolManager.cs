@@ -47,11 +47,7 @@ public sealed partial class PhpRuntimePoolManager : IDisposable
             throw new FileNotFoundException($"PHP runtime {normalized} is not installed or does not contain php-cgi.exe.", executable);
         }
 
-        var phpIni = Path.Combine(_rootPath, "config", "php", "php.ini");
-        if (!File.Exists(phpIni))
-        {
-            throw new FileNotFoundException("php.ini is missing.", phpIni);
-        }
+        var phpIni = BuildVersionIni(normalized, runtimeDirectory);
 
         if (!IsPortAvailable(port))
         {
@@ -76,7 +72,17 @@ public sealed partial class PhpRuntimePoolManager : IDisposable
             throw new InvalidOperationException($"Unable to start PHP {normalized} FastCGI.");
         }
 
-        await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            TryStop(process);
+            process.Dispose();
+            throw;
+        }
+
         if (process.HasExited)
         {
             var exitCode = process.ExitCode;
@@ -95,6 +101,12 @@ public sealed partial class PhpRuntimePoolManager : IDisposable
             _processes[normalized] = process;
         }
         return port;
+    }
+
+    public async Task RestartAsync(string version, CancellationToken cancellationToken = default)
+    {
+        await StopAsync(version, cancellationToken).ConfigureAwait(false);
+        _ = await EnsureRunningAsync(version, cancellationToken).ConfigureAwait(false);
     }
 
     public Task StopAsync(string version, CancellationToken cancellationToken = default)
@@ -140,6 +152,62 @@ public sealed partial class PhpRuntimePoolManager : IDisposable
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
         var value = BinaryPrimitives.ReadUInt32LittleEndian(hash);
         return 20000 + (int)(value % 30000);
+    }
+
+    internal string BuildVersionIni(string version, string runtimeDirectory)
+    {
+        var normalized = NormalizeVersion(version);
+        var fullRuntimeDirectory = Path.GetFullPath(runtimeDirectory);
+        var expectedRuntimeDirectory = Path.GetFullPath(Path.Combine(_rootPath, "runtime", "php", normalized));
+        if (!fullRuntimeDirectory.Equals(expectedRuntimeDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("PHP runtime directory does not match the requested version.");
+        }
+
+        var sharedIni = Path.Combine(_rootPath, "config", "php", "php.ini");
+        if (!File.Exists(sharedIni))
+        {
+            throw new FileNotFoundException("php.ini is missing.", sharedIni);
+        }
+
+        var content = File.ReadAllText(sharedIni);
+        var extensionDirectory = Path.Combine(fullRuntimeDirectory, "ext").Replace('\\', '/');
+        var replacement = $"extension_dir=\"{extensionDirectory}\"";
+        var rewritten = ExtensionDirRegex().IsMatch(content)
+            ? ExtensionDirRegex().Replace(content, replacement, 1)
+            : $"{replacement}{Environment.NewLine}{content}";
+
+        var versionConfigDirectory = Path.Combine(_rootPath, "config", "php", "versions", normalized);
+        Directory.CreateDirectory(versionConfigDirectory);
+        var versionIni = Path.Combine(versionConfigDirectory, "php.ini");
+        AtomicWrite(versionIni, rewritten);
+        return versionIni;
+    }
+
+    private static void AtomicWrite(string path, string content)
+    {
+        var directory = Path.GetDirectoryName(path)!;
+        Directory.CreateDirectory(directory);
+        var tempPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.WriteAllText(tempPath, content);
+            if (File.Exists(path))
+            {
+                File.Replace(tempPath, path, null);
+            }
+            else
+            {
+                File.Move(tempPath, path);
+            }
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
     }
 
     private static string NormalizeVersion(string version)
@@ -198,4 +266,7 @@ public sealed partial class PhpRuntimePoolManager : IDisposable
 
     [GeneratedRegex("^\\d+\\.\\d+\\.\\d+$", RegexOptions.CultureInvariant)]
     private static partial Regex VersionRegex();
+
+    [GeneratedRegex("(?im)^\\s*extension_dir\\s*=.*$")]
+    private static partial Regex ExtensionDirRegex();
 }
