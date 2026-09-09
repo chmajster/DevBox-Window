@@ -20,10 +20,18 @@ public sealed class RuntimeCatalog
             "https://nginx.org/download/nginx-1.31.5.zip",
             "00ad32a2bf66cee0ec8eb194347e8e79917f47017ccd3ad4bebf5574fabe002c",
             "nginx.exe",
-            "nginx-1.31.5")
+            "nginx-1.31.5"),
+        new RuntimeDefinition(
+            "mysql",
+            "MySQL",
+            "8.4.11",
+            null,
+            null,
+            Path.Combine("bin", "mysqld.exe"),
+            "mysql-8.4.11-winx64")
     ];
 
     public RuntimeDefinition GetRecommended(string key) =>
         GetRecommendedWindowsRuntimes().FirstOrDefault(runtime => runtime.Key.Equals(key, StringComparison.OrdinalIgnoreCase))
-        ?? throw new KeyNotFoundException($"No verified recommended runtime is registered for '{key}'.");
+        ?? throw new KeyNotFoundException($"No recommended runtime is registered for '{key}'.");
 }
