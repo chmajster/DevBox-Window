@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*.*.*'
   workflow_dispatch:
@@ -17,6 +19,10 @@ permissions:
 
 jobs:
   release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.ref_type == 'tag' ||
+      (github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release: v'))
     runs-on: windows-2025
     steps:
       - name: Checkout
@@ -31,17 +37,31 @@ jobs:
         shell: pwsh
         env:
           MANUAL_VERSION: ${{ inputs.version }}
+          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
             $version = $env:MANUAL_VERSION
-          } else {
+          } elseif ($env:GITHUB_REF_TYPE -eq 'tag') {
             $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          } else {
+            if ($env:HEAD_COMMIT_MESSAGE -notmatch '^release:\s+v(?<version>\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?)') {
+              throw "Main-branch release commits must use: release: vX.Y.Z"
+            }
+            $version = $Matches.version
           }
-          if ($version -notmatch '^\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') { throw "Invalid release version: $version" }
+
+          if ($version -notmatch '^\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') {
+            throw "Invalid release version: $version"
+          }
+
           "DEVBOX_VERSION=$version" >> $env:GITHUB_ENV
+          "DEVBOX_RELEASE_TAG=v$version" >> $env:GITHUB_ENV
 
       - name: Restore
         run: dotnet restore DevBox.sln
+
+      - name: NuGet vulnerability audit
+        run: dotnet list DevBox.sln package --vulnerable --include-transitive
 
       - name: Build
         run: dotnet build DevBox.sln --configuration Release --no-restore /p:Version=${{ env.DEVBOX_VERSION }}
@@ -69,14 +89,18 @@ jobs:
           if (-not (Test-Path $iscc)) {
             choco install innosetup --yes --no-progress
           }
-          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not found after installation: $iscc" }
+          if (-not (Test-Path $iscc)) {
+            throw "Inno Setup compiler not found after installation: $iscc"
+          }
 
       - name: Build installer
         shell: pwsh
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           & $iscc "/DMyAppVersion=$env:DEVBOX_VERSION" "/DPublishDir=$pwd\publish\win-x64" "/DOutputDir=$pwd\artifacts" "installer\DevBox.iss"
-          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup failed with exit code $LASTEXITCODE"
+          }
 
       - name: Generate SHA-256 checksums
         shell: pwsh
@@ -95,8 +119,25 @@ jobs:
           retention-days: 30
 
       - name: Create GitHub Release
-        if: github.event_name == 'push'
+        if: github.event_name != 'workflow_dispatch'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$env:GITHUB_REF_NAME" artifacts/* --verify-tag --generate-notes --title "DevBox $env:DEVBOX_VERSION"
+        run: |
+          $tag = $env:DEVBOX_RELEASE_TAG
+
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag already exists; leaving it unchanged."
+            exit 0
+          }
+
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            gh release create $tag artifacts/* --repo $env:GITHUB_REPOSITORY --verify-tag --generate-notes --title "DevBox $env:DEVBOX_VERSION"
+          } else {
+            gh release create $tag artifacts/* --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --generate-notes --title "DevBox $env:DEVBOX_VERSION"
+          }
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub Release creation failed with exit code $LASTEXITCODE"
+          }
