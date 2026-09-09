@@ -79,6 +79,36 @@ public sealed class RuntimeManagerTests
         }
     }
 
+    [Fact]
+    public void GetInstalled_IgnoresRollbackBackupDirectories()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var runtimeRoot = Path.Combine(root, "runtime", "php");
+            var installedPath = Path.Combine(runtimeRoot, "8.4.0");
+            var versionBackup = Path.Combine(runtimeRoot, "8.3.0.backup-0123456789abcdef");
+            var currentBackup = Path.Combine(runtimeRoot, "current.backup-fedcba9876543210");
+
+            Directory.CreateDirectory(installedPath);
+            Directory.CreateDirectory(versionBackup);
+            Directory.CreateDirectory(currentBackup);
+            File.WriteAllText(Path.Combine(installedPath, "php.exe"), "runtime");
+            File.WriteAllText(Path.Combine(versionBackup, "php.exe"), "stale");
+            File.WriteAllText(Path.Combine(currentBackup, "php.exe"), "stale");
+
+            using var manager = new RuntimeManager(root, new HttpClient(new StaticHandler(Array.Empty<byte>())));
+            var installed = manager.GetInstalled("php", "php.exe");
+
+            var runtime = Assert.Single(installed);
+            Assert.Equal("8.4.0", runtime.Version);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
     private static byte[] CreateArchive(params (string Path, string Content)[] files)
     {
         using var memory = new MemoryStream();
