@@ -27,17 +27,41 @@ public sealed class DeveloperToolsService : IDisposable
     public async Task<IReadOnlyList<DeveloperToolStatus>> GetStatusesAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        var composer = ResolveCommand([Path.Combine(_rootPath, "tools", "composer", "composer.cmd"), "composer.bat", "composer.exe"]);
-        var node = ResolveCommand(["node.exe"]);
-        var npm = ResolveCommand(["npm.cmd", "npm.exe"]);
-        var pnpm = ResolveCommand(["pnpm.cmd", "pnpm.exe"]);
+
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        var roamingAppData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        var nodeDirectory = Path.Combine(programFiles, "nodejs");
+        var npmGlobalDirectory = Path.Combine(roamingAppData, "npm");
+
+        var composer = ResolveCommand([
+            Path.Combine(_rootPath, "tools", "composer", "composer.cmd"),
+            "composer.cmd",
+            "composer.bat",
+            "composer.exe"
+        ]);
+        var node = ResolveCommand([
+            Path.Combine(nodeDirectory, "node.exe"),
+            "node.exe"
+        ]);
+        var npm = ResolveCommand([
+            Path.Combine(nodeDirectory, "npm.cmd"),
+            Path.Combine(nodeDirectory, "npm.exe"),
+            "npm.cmd",
+            "npm.exe"
+        ]);
+        var pnpm = ResolveCommand([
+            Path.Combine(npmGlobalDirectory, "pnpm.cmd"),
+            Path.Combine(npmGlobalDirectory, "pnpm.exe"),
+            "pnpm.cmd",
+            "pnpm.exe"
+        ]);
 
         return
         [
-            await StatusAsync("composer", "Composer", composer, ["--version"], "Verified Composer installer").ConfigureAwait(false),
-            await StatusAsync("node", "Node.js", node, ["--version"], "winget OpenJS.NodeJS.LTS").ConfigureAwait(false),
-            await StatusAsync("npm", "npm", npm, ["--version"], "Installed with Node.js").ConfigureAwait(false),
-            await StatusAsync("pnpm", "pnpm", pnpm, ["--version"], "npm --global pnpm").ConfigureAwait(false)
+            await StatusAsync("composer", "Composer", composer, ["--version"], "Verified Composer installer", cancellationToken).ConfigureAwait(false),
+            await StatusAsync("node", "Node.js", node, ["--version"], "winget OpenJS.NodeJS.LTS", cancellationToken).ConfigureAwait(false),
+            await StatusAsync("npm", "npm", npm, ["--version"], "Installed with Node.js", cancellationToken).ConfigureAwait(false),
+            await StatusAsync("pnpm", "pnpm", pnpm, ["--version"], "npm --global pnpm", cancellationToken).ConfigureAwait(false)
         ];
     }
 
@@ -56,8 +80,15 @@ public sealed class DeveloperToolsService : IDisposable
     public async Task InstallPnpmAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        var npm = ResolveCommand(["npm.cmd", "npm.exe"])
-            ?? throw new FileNotFoundException("npm is not available. Install Node.js first.");
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        var nodeDirectory = Path.Combine(programFiles, "nodejs");
+        var npm = ResolveCommand([
+            Path.Combine(nodeDirectory, "npm.cmd"),
+            Path.Combine(nodeDirectory, "npm.exe"),
+            "npm.cmd",
+            "npm.exe"
+        ]) ?? throw new FileNotFoundException("npm is not available. Install Node.js first.");
+
         await RunCheckedAsync(npm, ["install", "--global", "pnpm"], cancellationToken).ConfigureAwait(false);
     }
 
@@ -94,10 +125,9 @@ public sealed class DeveloperToolsService : IDisposable
 
             await using (var stream = File.OpenRead(installerPath))
             {
-                var actual = Convert.ToHexString(SHA384.HashData(stream)).ToLowerInvariant();
-                if (!CryptographicOperations.FixedTimeEquals(
-                        Convert.FromHexString(actual),
-                        Convert.FromHexString(expectedSignature)))
+                var actual = SHA384.HashData(stream);
+                var expected = Convert.FromHexString(expectedSignature);
+                if (!CryptographicOperations.FixedTimeEquals(actual, expected))
                 {
                     throw new InvalidDataException("Composer installer SHA-384 verification failed.");
                 }
@@ -153,7 +183,8 @@ public sealed class DeveloperToolsService : IDisposable
         string displayName,
         string? executable,
         IReadOnlyList<string> versionArguments,
-        string installMethod)
+        string installMethod,
+        CancellationToken cancellationToken)
     {
         if (executable is null)
         {
@@ -162,7 +193,7 @@ public sealed class DeveloperToolsService : IDisposable
 
         try
         {
-            var version = (await RunCaptureAsync(executable, versionArguments, CancellationToken.None).ConfigureAwait(false)).Trim();
+            var version = (await RunCaptureAsync(executable, versionArguments, cancellationToken).ConfigureAwait(false)).Trim();
             return new DeveloperToolStatus(key, displayName, true, version, executable, installMethod);
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
