@@ -1,3 +1,5 @@
+using System.Text.Json;
+using DevBox.Core.Models;
 using DevBox.Core.Services;
 using Xunit;
 
@@ -20,6 +22,60 @@ public sealed class SiteManagerTests
             Assert.True(File.Exists(Path.Combine(root, "config", "nginx", "sites-enabled", "demo.test.conf")));
             Assert.True(File.Exists(Path.Combine(root, "config", "sites.json")));
             Assert.Single(manager.GetSites());
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void GetSites_CorruptMetadata_IsQuarantinedInsteadOfThrowing()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var config = Path.Combine(root, "config");
+            Directory.CreateDirectory(config);
+            var metadata = Path.Combine(config, "sites.json");
+            File.WriteAllText(metadata, "{ this is not valid json");
+            var manager = new SiteManager(root);
+
+            var sites = manager.GetSites();
+
+            Assert.Empty(sites);
+            Assert.False(File.Exists(metadata));
+            var quarantine = Directory.GetFiles(config, "sites.json.invalid-*.bak", SearchOption.TopDirectoryOnly);
+            Assert.Single(quarantine);
+            Assert.Equal("{ this is not valid json", File.ReadAllText(quarantine[0]));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void GetSites_UnsafeDocumentRoot_IsQuarantinedInsteadOfLoaded()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var config = Path.Combine(root, "config");
+            Directory.CreateDirectory(config);
+            var metadata = Path.Combine(config, "sites.json");
+            var outside = Path.Combine(Path.GetTempPath(), "outside-" + Guid.NewGuid().ToString("N"));
+            File.WriteAllText(metadata, JsonSerializer.Serialize(new[]
+            {
+                new SiteDefinition("demo", "demo.test", outside)
+            }));
+            var manager = new SiteManager(root);
+
+            var sites = manager.GetSites();
+
+            Assert.Empty(sites);
+            Assert.False(File.Exists(metadata));
+            Assert.Single(Directory.GetFiles(config, "sites.json.invalid-*.bak", SearchOption.TopDirectoryOnly));
         }
         finally
         {
