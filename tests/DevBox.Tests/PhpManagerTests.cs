@@ -28,6 +28,75 @@ public sealed class PhpManagerTests
     }
 
     [Fact]
+    public void GetExtensions_IgnoresExtensionDirDirective()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var config = Path.Combine(root, "config", "php");
+            Directory.CreateDirectory(config);
+            File.WriteAllLines(Path.Combine(config, "php.ini"), ["extension_dir=ext", "extension=mysqli"]);
+            var manager = new PhpManager(root);
+
+            var extensions = manager.GetExtensions();
+
+            Assert.Contains(extensions, extension => extension.Name == "mysqli" && extension.Enabled);
+            Assert.DoesNotContain(extensions, extension => extension.Name == "ext");
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void SetExtensionEnabled_CollapsesDuplicateEntries()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var config = Path.Combine(root, "config", "php");
+            Directory.CreateDirectory(config);
+            var phpIni = Path.Combine(config, "php.ini");
+            File.WriteAllLines(phpIni, [";extension=mysqli", "extension=php_mysqli.dll ; duplicate"]);
+            var manager = new PhpManager(root);
+
+            Assert.True(manager.SetExtensionEnabled("mysqli", true));
+
+            var matchingLines = File.ReadAllLines(phpIni)
+                .Where(line => line.Contains("mysqli", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            Assert.Single(matchingLines);
+            Assert.Equal("extension=mysqli", matchingLines[0]);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void SetExtensionEnabled_RecognizesInlineComment()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var config = Path.Combine(root, "config", "php");
+            Directory.CreateDirectory(config);
+            var phpIni = Path.Combine(config, "php.ini");
+            File.WriteAllText(phpIni, "extension=php_curl.dll ; required\n");
+            var manager = new PhpManager(root);
+
+            Assert.True(manager.GetExtensions().Single(item => item.Name == "curl").Enabled);
+            Assert.False(manager.SetExtensionEnabled("curl", true) && File.ReadAllLines(phpIni).Length > 1);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public void SetExtensionEnabled_RejectsUnsafeName()
     {
         var root = TemporaryRoot();
