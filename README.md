@@ -13,7 +13,11 @@ DevBox Windows is a native Windows local-development environment inspired by Lar
 - Standard runtime layout under `runtime/*/current`.
 - Generated base configuration for Nginx, PHP and MySQL.
 - Process logs under `logs/`.
-- Unit/integration tests for missing runtime handling, occupied ports, duplicate starts and runtime layout.
+- `ADDONS` section in the desktop UI.
+- phpMyAdmin registered as the first addon under `www/phpmyadmin`.
+- phpMyAdmin installation detection based on its real `index.php` entry point.
+- phpMyAdmin metadata for local URL and required PHP extensions: `mysqli`, `mbstring`, `openssl`, `json`.
+- Unit/integration tests for missing runtime handling, occupied ports, duplicate starts, runtime layout and addon detection.
 - Windows GitHub Actions build/test workflow.
 
 ## Runtime layout
@@ -25,9 +29,26 @@ runtime/
   nginx/current/nginx.exe
   php/current/php-cgi.exe
   mysql/current/bin/mysqld.exe
+
+www/
+  phpmyadmin/
 ```
 
-The application reports a missing runtime in the dashboard instead of simulating a running service.
+The application reports a missing runtime or addon explicitly instead of simulating it.
+
+## ADDONS
+
+The `ADDONS` screen is reserved for optional development tools that run inside DevBox. phpMyAdmin is the first registered addon.
+
+Expected phpMyAdmin entry point:
+
+```text
+www/phpmyadmin/index.php
+```
+
+The UI reports `Installed` only when that file exists. From the addon card the user can open the addon directory or, when installed, open its configured local URL.
+
+The current slice registers and detects phpMyAdmin but does not download third-party phpMyAdmin archives automatically. Runtime/addon downloading will be implemented with checksum verification rather than an unverified download button.
 
 ## Run
 
@@ -46,11 +67,11 @@ dotnet run --project src/DevBox.App/DevBox.App.csproj
 ## Architecture
 
 - `DevBox.App` — WPF presentation layer.
-- `DevBox.Core` — process management, runtime layout and service definitions.
+- `DevBox.Core` — process management, runtime layout, service definitions and addon catalog.
 - `DevBox.Tests` — non-destructive tests that use temporary paths and managed test processes.
 
-The UI does not launch executables itself; it delegates all lifecycle operations to `IProcessManager`.
+The UI does not launch service executables itself; it delegates lifecycle operations to `IProcessManager`.
 
 ## Next product slices
 
-The repository specification continues with Sites/.test hosts, PHP version switching and extensions, SSL, database tooling, runtime downloads, diagnostics and packaging. These are not represented as fake buttons in the current production UI.
+The repository specification continues with Sites/.test hosts, PHP version switching and extensions, SSL, database tooling, verified runtime/addon downloads, diagnostics and packaging. These are not represented as fake buttons in the current production UI.
