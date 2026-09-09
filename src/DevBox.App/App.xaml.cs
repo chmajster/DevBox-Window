@@ -43,6 +43,7 @@ public partial class App : Application
         services.AddSingleton(_ => new HostsFileManager());
         services.AddSingleton(_ => new PhpExtensionInspector(DevBoxRoot));
         services.AddSingleton(_ => new PhpManager(DevBoxRoot));
+        services.AddSingleton(_ => new PhpRuntimePoolManager(DevBoxRoot));
         services.AddSingleton(_ => new DatabaseManager(DevBoxRoot));
         services.AddSingleton(_ => new LocalCertificateManager(DevBoxRoot));
         services.AddSingleton(_ => new DeveloperToolsService(DevBoxRoot));
@@ -66,6 +67,7 @@ public partial class App : Application
             provider.GetRequiredService<IProcessManager>()));
 
         services.AddTransient<PhpWindowViewModel>();
+        services.AddTransient<SitePhpWindowViewModel>();
         services.AddTransient<DatabaseWindowViewModel>();
         services.AddTransient<SslWindowViewModel>();
         services.AddTransient<FirstRunViewModel>();
@@ -73,6 +75,7 @@ public partial class App : Application
         services.AddTransient<UpdateWindowViewModel>();
         services.AddTransient<SettingsWindowViewModel>();
         services.AddTransient<PhpWindow>();
+        services.AddTransient<SitePhpWindow>();
         services.AddTransient<DatabaseWindow>();
         services.AddTransient<SslWindow>();
         services.AddTransient<FirstRunWindow>();
@@ -116,6 +119,7 @@ public partial class App : Application
         var tray = _serviceProvider.GetRequiredService<ITrayService>();
         tray.Initialize(window);
         _ = tray.StartConfiguredServicesAsync();
+        _ = StartConfiguredPhpPoolsAsync(_serviceProvider);
 
         var startedFromWindows = e.Args.Any(argument => argument.Equals("--startup", StringComparison.OrdinalIgnoreCase));
         var settings = _serviceProvider.GetRequiredService<IAppSettingsService>();
@@ -130,6 +134,41 @@ public partial class App : Application
         IsExiting = true;
         _serviceProvider?.Dispose();
         base.OnExit(e);
+    }
+
+    private static async Task StartConfiguredPhpPoolsAsync(IServiceProvider provider)
+    {
+        var sites = provider.GetRequiredService<SiteManager>().GetSites();
+        var pool = provider.GetRequiredService<PhpRuntimePoolManager>();
+        foreach (var version in sites
+                     .Select(site => site.PhpVersion)
+                     .Where(version => !string.IsNullOrWhiteSpace(version))
+                     .Cast<string>()
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                await pool.EnsureRunningAsync(version).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or FileNotFoundException or System.ComponentModel.Win32Exception)
+            {
+                TryWriteStartupLog($"Unable to start PHP {version} FastCGI: {ex.Message}");
+            }
+        }
+    }
+
+    private static void TryWriteStartupLog(string message)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(DevBoxRoot, "logs"));
+            File.AppendAllText(
+                Path.Combine(DevBoxRoot, "logs", "devbox-error.log"),
+                $"{DateTimeOffset.Now:O} {message}{Environment.NewLine}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 
     private static int? TryRunPrivilegedCommand(IReadOnlyList<string> args)
