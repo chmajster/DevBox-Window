@@ -18,6 +18,28 @@ public sealed class ProcessManagerTests
     }
 
     [Fact]
+    public async Task StartAsync_InvalidExecutable_ReportsControlledError()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "devbox-process-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            var executable = Path.Combine(root, "broken.exe");
+            File.WriteAllText(executable, "not a Windows executable");
+            using var manager = new ProcessManager();
+            var definition = new ServiceDefinition("broken-start", "Broken service", executable, [], root, 0, "test");
+
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.StartAsync(definition));
+
+            Assert.Contains("Unable to start Broken service", error.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public async Task StartAsync_OccupiedPort_RefusesToStartProcess()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -50,6 +72,39 @@ public sealed class ProcessManagerTests
         Assert.Equal(ServiceState.Running, second.State);
 
         await manager.StopAsync(definition);
+    }
+
+    [Fact]
+    public async Task StopAsync_BrokenGracefulStopCommand_FallsBackToManagedTermination()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "devbox-process-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            var brokenStop = Path.Combine(root, "broken-stop.exe");
+            File.WriteAllText(brokenStop, "not a Windows executable");
+            var executable = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
+            var definition = new ServiceDefinition(
+                "broken-stop", "Broken stop", executable,
+                new[] { "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30" },
+                root, 0, "test",
+                StopExecutablePath: brokenStop,
+                StopArguments: [],
+                ShutdownTimeout: TimeSpan.FromMilliseconds(100));
+
+            using var manager = new ProcessManager();
+            var started = await manager.StartAsync(definition);
+            Assert.Equal(ServiceState.Running, started.State);
+
+            var stopped = await manager.StopAsync(definition);
+
+            Assert.Equal(ServiceState.Stopped, stopped.State);
+            Assert.Null(stopped.ProcessId);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
     }
 
     [Fact]
