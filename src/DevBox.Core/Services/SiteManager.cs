@@ -25,13 +25,26 @@ public sealed partial class SiteManager
             return Array.Empty<SiteDefinition>();
         }
 
-        var json = File.ReadAllText(_sitesMetadataPath);
-        if (string.IsNullOrWhiteSpace(json))
+        try
         {
+            var json = File.ReadAllText(_sitesMetadataPath);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return Array.Empty<SiteDefinition>();
+            }
+
+            var sites = JsonSerializer.Deserialize<List<SiteDefinition>>(json, JsonOptions) ?? new List<SiteDefinition>();
+            foreach (var site in sites)
+            {
+                ValidateLoadedSite(site);
+            }
+            return sites;
+        }
+        catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException or InvalidDataException)
+        {
+            QuarantineInvalidSitesMetadata();
             return Array.Empty<SiteDefinition>();
         }
-
-        return JsonSerializer.Deserialize<List<SiteDefinition>>(json, JsonOptions) ?? new List<SiteDefinition>();
     }
 
     public SiteDefinition Create(string name, string? domain = null, string? documentRoot = null)
@@ -294,6 +307,40 @@ server {
             {
                 File.Delete(tempPath);
             }
+        }
+    }
+
+    private void ValidateLoadedSite(SiteDefinition? site)
+    {
+        if (site is null)
+        {
+            throw new InvalidDataException("Site metadata contains a null entry.");
+        }
+
+        _ = NormalizeName(site.Name);
+        _ = NormalizeDomain(site.Domain);
+        _ = EnsureDocumentRootUnderWww(site.DocumentRoot);
+        _ = NormalizePhpVersion(site.PhpVersion);
+        if (!string.Equals(site.PhpRuntimeKey, "php", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("Site metadata contains an unsupported PHP runtime key.");
+        }
+    }
+
+    private void QuarantineInvalidSitesMetadata()
+    {
+        if (!File.Exists(_sitesMetadataPath))
+        {
+            return;
+        }
+
+        var quarantinePath = $"{_sitesMetadataPath}.invalid-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{Guid.NewGuid():N}.bak";
+        try
+        {
+            File.Move(_sitesMetadataPath, quarantinePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
         }
     }
 
