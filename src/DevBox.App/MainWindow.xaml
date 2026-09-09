@@ -15,6 +15,15 @@
             <Setter Property="Background" Value="#2563EB"/>
             <Setter Property="Foreground" Value="White"/>
         </Style>
+        <Style x:Key="SidebarButton" TargetType="Button">
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Padding" Value="0,8"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#9CA3AF"/>
+            <Setter Property="FontSize" Value="15"/>
+        </Style>
     </Window.Resources>
 
     <Grid>
@@ -27,12 +36,13 @@
             <DockPanel Margin="20">
                 <StackPanel DockPanel.Dock="Top">
                     <TextBlock Text="DevBox" Foreground="White" FontSize="26" FontWeight="SemiBold" Margin="0,8,0,28"/>
-                    <TextBlock Text="Dashboard" Foreground="White" FontSize="15" FontWeight="SemiBold" Margin="0,8"/>
+                    <Button x:Name="DashboardNavButton" Content="Dashboard" Foreground="White" FontWeight="SemiBold" Style="{StaticResource SidebarButton}" Click="DashboardNav_Click"/>
                     <TextBlock Text="Sites" Foreground="#9CA3AF" FontSize="15" Margin="0,8"/>
                     <TextBlock Text="Services" Foreground="#9CA3AF" FontSize="15" Margin="0,8"/>
                     <TextBlock Text="PHP" Foreground="#9CA3AF" FontSize="15" Margin="0,8"/>
                     <TextBlock Text="Databases" Foreground="#9CA3AF" FontSize="15" Margin="0,8"/>
                     <TextBlock Text="Runtimes" Foreground="#9CA3AF" FontSize="15" Margin="0,8"/>
+                    <Button x:Name="AddonsNavButton" Content="ADDONS" Style="{StaticResource SidebarButton}" Click="AddonsNav_Click"/>
                     <TextBlock Text="Logs" Foreground="#9CA3AF" FontSize="15" Margin="0,8"/>
                     <TextBlock Text="Diagnostics" Foreground="#9CA3AF" FontSize="15" Margin="0,8"/>
                 </StackPanel>
@@ -41,71 +51,129 @@
         </Border>
 
         <Grid Grid.Column="1" Margin="28">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-            </Grid.RowDefinitions>
+            <Grid x:Name="DashboardPanel">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
 
-            <Grid Grid.Row="0" Margin="0,0,0,22">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel>
-                    <TextBlock Text="Local development environment" FontSize="27" FontWeight="SemiBold" Foreground="#111827"/>
-                    <TextBlock Text="Native Windows processes · Nginx · PHP FastCGI · MySQL" Foreground="#6B7280" Margin="0,5,0,0"/>
-                </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button Content="Start All" Style="{StaticResource PrimaryButton}" Click="StartAll_Click"/>
-                    <Button Content="Restart All" Click="RestartAll_Click"/>
-                    <Button Content="Stop All" Click="StopAll_Click"/>
-                </StackPanel>
+                <Grid Grid.Row="0" Margin="0,0,0,22">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="Local development environment" FontSize="27" FontWeight="SemiBold" Foreground="#111827"/>
+                        <TextBlock Text="Native Windows processes · Nginx · PHP FastCGI · MySQL" Foreground="#6B7280" Margin="0,5,0,0"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Content="Start All" Style="{StaticResource PrimaryButton}" Click="StartAll_Click"/>
+                        <Button Content="Restart All" Click="RestartAll_Click"/>
+                        <Button Content="Stop All" Click="StopAll_Click"/>
+                    </StackPanel>
+                </Grid>
+
+                <Border Grid.Row="1" Background="#FFF7ED" BorderBrush="#FED7AA" BorderThickness="1" Padding="13" Margin="0,0,0,18" CornerRadius="6">
+                    <TextBlock Text="Runtime binaries are loaded from runtime/*/current. Missing binaries are reported explicitly and are never simulated." Foreground="#9A3412"/>
+                </Border>
+
+                <ItemsControl Grid.Row="2" x:Name="ServicesList">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="White" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="18" Margin="0,0,0,12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="2*"/>
+                                        <ColumnDefinition Width="1.2*"/>
+                                        <ColumnDefinition Width="1*"/>
+                                        <ColumnDefinition Width="1*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="{Binding Name}" FontSize="17" FontWeight="SemiBold" Foreground="#111827"/>
+                                        <TextBlock Text="{Binding RuntimePath}" FontSize="11" Foreground="#9CA3AF" TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="STATUS" FontSize="10" Foreground="#9CA3AF"/>
+                                        <TextBlock Text="{Binding Status}" FontWeight="SemiBold" Foreground="#374151"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="PORT / PID" FontSize="10" Foreground="#9CA3AF"/>
+                                        <TextBlock Text="{Binding PortPid}" Foreground="#374151"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="3">
+                                        <TextBlock Text="UPTIME" FontSize="10" Foreground="#9CA3AF"/>
+                                        <TextBlock Text="{Binding Uptime}" Foreground="#374151"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Button Content="Start" Tag="{Binding Key}" Style="{StaticResource PrimaryButton}" Click="Start_Click"/>
+                                        <Button Content="Restart" Tag="{Binding Key}" Click="Restart_Click"/>
+                                        <Button Content="Stop" Tag="{Binding Key}" Click="Stop_Click"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
             </Grid>
 
-            <Border Grid.Row="1" Background="#FFF7ED" BorderBrush="#FED7AA" BorderThickness="1" Padding="13" Margin="0,0,0,18" CornerRadius="6">
-                <TextBlock Text="Runtime binaries are loaded from runtime/*/current. Missing binaries are reported explicitly and are never simulated." Foreground="#9A3412"/>
-            </Border>
+            <Grid x:Name="AddonsPanel" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
 
-            <ItemsControl Grid.Row="2" x:Name="ServicesList">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <Border Background="White" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="18" Margin="0,0,0,12">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="2*"/>
-                                    <ColumnDefinition Width="1.2*"/>
-                                    <ColumnDefinition Width="1*"/>
-                                    <ColumnDefinition Width="1*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Row="0" Margin="0,0,0,22">
+                    <TextBlock Text="ADDONS" FontSize="27" FontWeight="SemiBold" Foreground="#111827"/>
+                    <TextBlock Text="Optional web tools managed inside the DevBox www directory." Foreground="#6B7280" Margin="0,5,0,0"/>
+                </StackPanel>
 
-                                <StackPanel Grid.Column="0">
-                                    <TextBlock Text="{Binding Name}" FontSize="17" FontWeight="SemiBold" Foreground="#111827"/>
-                                    <TextBlock Text="{Binding RuntimePath}" FontSize="11" Foreground="#9CA3AF" TextTrimming="CharacterEllipsis"/>
-                                </StackPanel>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="STATUS" FontSize="10" Foreground="#9CA3AF"/>
-                                    <TextBlock Text="{Binding Status}" FontWeight="SemiBold" Foreground="#374151"/>
-                                </StackPanel>
-                                <StackPanel Grid.Column="2">
-                                    <TextBlock Text="PORT / PID" FontSize="10" Foreground="#9CA3AF"/>
-                                    <TextBlock Text="{Binding PortPid}" Foreground="#374151"/>
-                                </StackPanel>
-                                <StackPanel Grid.Column="3">
-                                    <TextBlock Text="UPTIME" FontSize="10" Foreground="#9CA3AF"/>
-                                    <TextBlock Text="{Binding Uptime}" Foreground="#374151"/>
-                                </StackPanel>
-                                <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Button Content="Start" Tag="{Binding Key}" Style="{StaticResource PrimaryButton}" Click="Start_Click"/>
-                                    <Button Content="Restart" Tag="{Binding Key}" Click="Restart_Click"/>
-                                    <Button Content="Stop" Tag="{Binding Key}" Click="Stop_Click"/>
-                                </StackPanel>
-                            </Grid>
-                        </Border>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+                <Border Grid.Row="1" Background="#EFF6FF" BorderBrush="#BFDBFE" BorderThickness="1" Padding="13" Margin="0,0,0,18" CornerRadius="6">
+                    <TextBlock Text="An addon is marked Installed only when its real entry point exists. DevBox does not simulate addon installation." Foreground="#1E40AF"/>
+                </Border>
+
+                <ItemsControl Grid.Row="2" x:Name="AddonsList">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="White" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="20" Margin="0,0,0,12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="2.1*"/>
+                                        <ColumnDefinition Width="1.1*"/>
+                                        <ColumnDefinition Width="1.7*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="{Binding Name}" FontSize="18" FontWeight="SemiBold" Foreground="#111827"/>
+                                        <TextBlock Text="{Binding Description}" Foreground="#6B7280" Margin="0,4,0,5" TextWrapping="Wrap"/>
+                                        <TextBlock Text="{Binding InstallPath}" FontSize="11" Foreground="#9CA3AF" TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="1" Margin="18,0,0,0">
+                                        <TextBlock Text="STATUS" FontSize="10" Foreground="#9CA3AF"/>
+                                        <TextBlock Text="{Binding Status}" FontWeight="SemiBold" Foreground="#374151"/>
+                                        <TextBlock Text="{Binding LocalUrl}" FontSize="11" Foreground="#2563EB" Margin="0,5,0,0"/>
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="2" Margin="18,0,0,0">
+                                        <TextBlock Text="REQUIRED PHP EXTENSIONS" FontSize="10" Foreground="#9CA3AF"/>
+                                        <TextBlock Text="{Binding Requirements}" Foreground="#374151" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                                        <Button Content="Open" Tag="{Binding Key}" Style="{StaticResource PrimaryButton}" Click="OpenAddon_Click"/>
+                                        <Button Content="Open Folder" Tag="{Binding Key}" Click="OpenAddonFolder_Click"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Grid>
         </Grid>
     </Grid>
 </Window>
