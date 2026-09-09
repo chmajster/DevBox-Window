@@ -57,9 +57,9 @@ public sealed class RegressionTests
             @"C:\Tools\npm.cmd",
             new[] { "--version" });
 
-        Assert.True(startInfo.FileName.EndsWith("cmd.exe", StringComparison.OrdinalIgnoreCase));
-        Assert.True(startInfo.ArgumentList.Contains("/c"));
-        Assert.True(startInfo.ArgumentList.Any(argument => argument.Contains("npm.cmd", StringComparison.OrdinalIgnoreCase)));
+        Assert.EndsWith("cmd.exe", startInfo.FileName, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("/c", startInfo.ArgumentList);
+        Assert.Contains(startInfo.ArgumentList, argument => argument.Contains("npm.cmd", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -119,7 +119,7 @@ $cfg['TempDir'] = 'tmp';
             var error = Assert.Throws<InvalidOperationException>(() =>
                 manager.Create("demo", documentRoot: unsafeRoot));
 
-            Assert.True(error.Message.Contains("www", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains("www", error.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
