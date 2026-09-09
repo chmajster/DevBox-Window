@@ -189,6 +189,76 @@ public sealed class AddonCatalogTests
     }
 
     [Fact]
+    public void Manifest_PhpExtensionNames_AreNormalized()
+    {
+        var root = TempRoot();
+        try
+        {
+            var catalog = new AddonCatalog(root);
+            Directory.CreateDirectory(Path.GetDirectoryName(catalog.CatalogPath)!);
+            File.WriteAllText(catalog.CatalogPath, """
+[
+  {
+    "key": "normalized",
+    "displayName": "Normalized",
+    "description": "test",
+    "installRelativePath": "www/normalized",
+    "entryPointRelativePath": "www/normalized/index.php",
+    "localUrl": "http://normalized.test",
+    "requiredPhpExtensions": [" PHP_MYSQLI.DLL ", "mysqli"],
+    "version": "1.0",
+    "downloadUrl": "https://example.test/normalized.zip",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "archiveRootDirectory": "package"
+  }
+]
+""");
+
+            var addon = Assert.Single(catalog.GetAddons());
+
+            Assert.Equal(new[] { "mysqli" }, addon.RequiredPhpExtensions);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void Manifest_PhpExtensionDirectiveInjection_IsRejected()
+    {
+        var root = TempRoot();
+        try
+        {
+            var catalog = new AddonCatalog(root);
+            Directory.CreateDirectory(Path.GetDirectoryName(catalog.CatalogPath)!);
+            File.WriteAllText(catalog.CatalogPath, """
+[
+  {
+    "key": "unsafe-extension",
+    "displayName": "Unsafe extension",
+    "description": "test",
+    "installRelativePath": "www/unsafe-extension",
+    "entryPointRelativePath": "www/unsafe-extension/index.php",
+    "localUrl": "http://unsafe-extension.test",
+    "requiredPhpExtensions": ["mysqli\nextension=evil"],
+    "version": "1.0",
+    "downloadUrl": "https://example.test/unsafe-extension.zip",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "archiveRootDirectory": "package"
+  }
+]
+""");
+
+            Assert.Throws<InvalidDataException>(() => catalog.GetAddons());
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public void RuntimeLayout_DoesNotCreateAddonOwnedVhost()
     {
         var root = TempRoot();
