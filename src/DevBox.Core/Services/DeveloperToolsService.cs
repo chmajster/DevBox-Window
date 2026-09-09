@@ -209,18 +209,7 @@ public sealed class DeveloperToolsService : IDisposable
 
     private static async Task<string> RunCaptureAsync(string executable, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {
-        var startInfo = new ProcessStartInfo(executable)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
+        var startInfo = BuildStartInfo(executable, arguments);
         using var process = new Process { StartInfo = startInfo };
         if (!process.Start())
         {
@@ -239,6 +228,50 @@ public sealed class DeveloperToolsService : IDisposable
                 : error.Trim());
         }
         return string.IsNullOrWhiteSpace(output) ? error : output;
+    }
+
+    internal static ProcessStartInfo BuildStartInfo(string executable, IReadOnlyList<string> arguments)
+    {
+        var extension = Path.GetExtension(executable);
+        var isCommandScript = extension.Equals(".cmd", StringComparison.OrdinalIgnoreCase) ||
+                              extension.Equals(".bat", StringComparison.OrdinalIgnoreCase);
+
+        var startInfo = new ProcessStartInfo(isCommandScript ? ResolveCommandProcessor() : executable)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        if (isCommandScript)
+        {
+            startInfo.ArgumentList.Add("/d");
+            startInfo.ArgumentList.Add("/s");
+            startInfo.ArgumentList.Add("/c");
+            startInfo.ArgumentList.Add(BuildCmdCommand(executable, arguments));
+        }
+        else
+        {
+            foreach (var argument in arguments)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+        }
+
+        return startInfo;
+    }
+
+    private static string ResolveCommandProcessor()
+    {
+        var comSpec = Environment.GetEnvironmentVariable("ComSpec");
+        return string.IsNullOrWhiteSpace(comSpec) ? "cmd.exe" : comSpec;
+    }
+
+    private static string BuildCmdCommand(string executable, IReadOnlyList<string> arguments)
+    {
+        static string Quote(string value) => $"\"{value.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
+        return string.Join(' ', new[] { Quote(executable) }.Concat(arguments.Select(Quote)));
     }
 
     public void Dispose()

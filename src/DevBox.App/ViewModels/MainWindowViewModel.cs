@@ -253,24 +253,59 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         {
             return;
         }
-        await ExecuteServiceAsync(definition, action, showDialog: true);
+        _ = await ExecuteServiceAsync(definition, action, showDialog: true);
     }
 
     private async Task RunAllAsync(ServiceAction action)
     {
-        var ordered = action == ServiceAction.Stop ? _definitions.Values.Reverse() : _definitions.Values;
-        foreach (var definition in ordered)
+        var succeeded = 0;
+        var missing = new List<string>();
+        var failures = new List<string>();
+
+        foreach (var definition in _definitions.Values)
         {
             if (action != ServiceAction.Stop && !File.Exists(definition.ExecutablePath))
             {
+                missing.Add(definition.DisplayName);
                 continue;
             }
-            await ExecuteServiceAsync(definition, action, showDialog: false);
+
+            var error = await ExecuteServiceAsync(definition, action, showDialog: false);
+            if (error is null)
+            {
+                succeeded++;
+            }
+            else
+            {
+                failures.Add($"{definition.DisplayName}: {error}");
+            }
+        }
+
+        var operation = action switch
+        {
+            ServiceAction.Start => "Start All",
+            ServiceAction.Stop => "Stop All",
+            ServiceAction.Restart => "Restart All",
+            _ => "Service operation"
+        };
+
+        var summary = $"Succeeded: {succeeded}. Failed: {failures.Count}. Missing runtime: {missing.Count}.";
+        if (failures.Count > 0 || missing.Count > 0)
+        {
+            var details = new List<string> { summary };
+            if (missing.Count > 0) details.Add($"Missing: {string.Join(", ", missing)}");
+            if (failures.Count > 0) details.Add(string.Join(Environment.NewLine, failures));
+            _dialogs.Warning(operation, string.Join(Environment.NewLine + Environment.NewLine, details));
+        }
+        else
+        {
+            _dialogs.Info(operation, summary);
         }
     }
 
-    private async Task ExecuteServiceAsync(ServiceDefinition definition, ServiceAction action, bool showDialog)
+    private async Task<string?> ExecuteServiceAsync(ServiceDefinition definition, ServiceAction action, bool showDialog)
     {
+        string? error = null;
         try
         {
             _ = action switch
@@ -281,8 +316,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                 _ => throw new ArgumentOutOfRangeException(nameof(action))
             };
         }
-        catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException or Win32Exception)
+        catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException or Win32Exception or IOException or UnauthorizedAccessException)
         {
+            error = ex.Message;
             if (showDialog)
             {
                 _dialogs.Error($"{definition.DisplayName} error", ex.Message);
@@ -292,6 +328,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         {
             RefreshStatuses();
         }
+        return error;
     }
 
     private async Task InstallAddonAsync(object? parameter)
@@ -487,18 +524,39 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         if (parameter is not RuntimeRowViewModel runtime || runtime.Status == "Active") return;
         var executableRelativePath = RuntimeExecutable(runtime.Key);
+        _definitions.TryGetValue(runtime.Key, out var service);
+        var wasRunning = service is not null && _processManager.GetStatus(service).State == ServiceState.Running;
+
         try
         {
-            if (_definitions.TryGetValue(runtime.Key, out var service) && _processManager.GetStatus(service).State == ServiceState.Running)
+            if (wasRunning)
             {
-                await _processManager.StopAsync(service);
+                await _processManager.StopAsync(service!);
             }
+
             await _runtimeManager.ActivateAsync(runtime.Key, runtime.Version, executableRelativePath);
+
+            if (wasRunning)
+            {
+                await _processManager.StartAsync(service!);
+            }
+
             RefreshRuntimes();
             RefreshStatuses();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or InvalidDataException or DirectoryNotFoundException)
         {
+            if (wasRunning && service is not null && _processManager.GetStatus(service).State != ServiceState.Running)
+            {
+                try
+                {
+                    await _processManager.StartAsync(service);
+                }
+                catch (Exception recoveryError) when (recoveryError is IOException or UnauthorizedAccessException or InvalidOperationException or FileNotFoundException or Win32Exception)
+                {
+                    _dialogs.Warning("Service recovery failed", $"Runtime activation failed and {service.DisplayName} could not be restarted: {recoveryError.Message}");
+                }
+            }
             _dialogs.Error("Runtime activation failed", ex.Message);
         }
     }
@@ -506,6 +564,23 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private async Task RemoveRuntimeAsync(object? parameter)
     {
         if (parameter is not RuntimeRowViewModel runtime) return;
+
+        if (runtime.Key.Equals("php", StringComparison.OrdinalIgnoreCase))
+        {
+            var dependentSites = _siteManager.GetSites()
+                .Where(site => site.PhpVersion?.Equals(runtime.Version, StringComparison.OrdinalIgnoreCase) == true)
+                .Select(site => site.Domain)
+                .OrderBy(domain => domain, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (dependentSites.Length > 0)
+            {
+                _dialogs.Warning(
+                    "Runtime is in use",
+                    $"PHP {runtime.Version} cannot be removed because it is assigned to: {string.Join(", ", dependentSites)}.");
+                return;
+            }
+        }
+
         if (!_dialogs.Confirm("Remove runtime", $"Remove {runtime.Key} {runtime.Version}?")) return;
         try
         {

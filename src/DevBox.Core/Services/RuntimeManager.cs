@@ -48,7 +48,8 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
                     version.Equals(activeVersion, StringComparison.OrdinalIgnoreCase),
                     File.Exists(executable));
             })
-            .OrderByDescending(item => item.Version, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(item => ParseVersionForSort(item.Version), Comparer<Version>.Default)
+            .ThenByDescending(item => item.Version, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
 
@@ -224,6 +225,9 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
     private string RuntimeRoot(string runtimeKey) => Path.Combine(_rootPath, "runtime", runtimeKey);
 
     private string VersionPath(string runtimeKey, string version) => Path.Combine(RuntimeRoot(runtimeKey), version);
+
+    private static Version ParseVersionForSort(string version) =>
+        Version.TryParse(version, out var parsed) ? parsed : new Version(0, 0);
 
     private static void ValidateDefinition(RuntimeDefinition definition)
     {

@@ -7,12 +7,14 @@ namespace DevBox.Core.Services;
 public sealed partial class SiteManager
 {
     private readonly string _rootPath;
+    private readonly string _wwwRoot;
     private readonly string _sitesMetadataPath;
 
     public SiteManager(string rootPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         _rootPath = Path.GetFullPath(rootPath);
+        _wwwRoot = Path.GetFullPath(Path.Combine(_rootPath, "www"));
         _sitesMetadataPath = Path.Combine(_rootPath, "config", "sites.json");
     }
 
@@ -37,8 +39,8 @@ public sealed partial class SiteManager
         var normalizedName = NormalizeName(name);
         var normalizedDomain = NormalizeDomain(domain ?? $"{normalizedName}.test");
         var root = documentRoot is null
-            ? Path.Combine(_rootPath, "www", normalizedName)
-            : EnsurePathUnderRoot(documentRoot);
+            ? Path.Combine(_wwwRoot, normalizedName)
+            : EnsureDocumentRootUnderWww(documentRoot);
 
         var sites = GetSites().ToList();
         if (sites.Any(site => site.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase)))
@@ -69,7 +71,7 @@ public sealed partial class SiteManager
         ArgumentNullException.ThrowIfNull(site);
         var normalizedName = NormalizeName(site.Name);
         var normalizedDomain = NormalizeDomain(site.Domain);
-        var documentRoot = EnsurePathUnderRoot(site.DocumentRoot);
+        var documentRoot = EnsureDocumentRootUnderWww(site.DocumentRoot);
         var phpVersion = NormalizePhpVersion(site.PhpVersion);
 
         var sites = GetSites().ToList();
@@ -131,6 +133,21 @@ public sealed partial class SiteManager
             throw new InvalidOperationException($"Site '{normalizedName}' does not exist.");
         }
 
+        if (normalizedVersion is not null)
+        {
+            var requestedPort = PhpRuntimePoolManager.GetPort(normalizedVersion);
+            var collision = sites
+                .Where((_, siteIndex) => siteIndex != index)
+                .Select(site => site.PhpVersion)
+                .Where(existing => !string.IsNullOrWhiteSpace(existing) && !existing.Equals(normalizedVersion, StringComparison.OrdinalIgnoreCase))
+                .FirstOrDefault(existing => PhpRuntimePoolManager.GetPort(existing!) == requestedPort);
+            if (collision is not null)
+            {
+                throw new InvalidOperationException(
+                    $"PHP {normalizedVersion} conflicts with PHP {collision} on FastCGI port {requestedPort}. Choose a different runtime version.");
+            }
+        }
+
         var updated = sites[index] with { PhpVersion = normalizedVersion };
         WriteNginxConfig(updated);
         sites[index] = updated;
@@ -154,7 +171,7 @@ public sealed partial class SiteManager
 
         if (deleteDocumentRoot && Directory.Exists(site.DocumentRoot))
         {
-            var safeRoot = EnsurePathUnderRoot(site.DocumentRoot);
+            var safeRoot = EnsureDocumentRootUnderWww(site.DocumentRoot);
             Directory.Delete(safeRoot, recursive: true);
         }
     }
@@ -166,11 +183,8 @@ public sealed partial class SiteManager
     {
         var configPath = GetNginxConfigPath(site.Domain);
         Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
-        var relativeRoot = Path.GetRelativePath(_rootPath, site.DocumentRoot).Replace('\\', '/');
-        if (relativeRoot.StartsWith("../", StringComparison.Ordinal) || relativeRoot == "..")
-        {
-            throw new InvalidOperationException("Site document root must be inside the DevBox root.");
-        }
+        var documentRoot = EnsureDocumentRootUnderWww(site.DocumentRoot);
+        var relativeRoot = Path.GetRelativePath(_rootPath, documentRoot).Replace('\\', '/');
 
         var fastCgiPort = site.PhpVersion is null ? 9084 : PhpRuntimePoolManager.GetPort(site.PhpVersion);
         var applicationLocations = $$"""
@@ -283,13 +297,14 @@ server {
         }
     }
 
-    private string EnsurePathUnderRoot(string path)
+    private string EnsureDocumentRootUnderWww(string path)
     {
-        var fullRoot = _rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var fullWwwRoot = _wwwRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         var fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (!fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase))
+        if (!fullPath.StartsWith(fullWwwRoot, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("Site document root must be inside the DevBox root.");
+            throw new InvalidOperationException("Site document root must be inside the DevBox www directory.");
         }
         return fullPath;
     }

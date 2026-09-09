@@ -44,7 +44,7 @@ public sealed class PhpExtensionInspector
         using var process = new Process { StartInfo = startInfo };
         if (!process.Start())
         {
-            return new PhpExtensionCheckResult(true, Array.Empty<string>(), required, "Unable to start PHP CLI.");
+            return new PhpExtensionCheckResult(false, Array.Empty<string>(), required, "Unable to start PHP CLI.");
         }
 
         var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);

@@ -36,11 +36,6 @@ public sealed class HostsFileManager
             ? File.ReadAllLines(_hostsPath).ToList()
             : new List<string>();
 
-        if (lines.Any(line => LineContainsMapping(line, ipAddress, domain)))
-        {
-            return;
-        }
-
         var rewritten = lines
             .Select(line => RemoveDomainFromLine(line, domain))
             .Where(line => line is not null)
@@ -48,6 +43,11 @@ public sealed class HostsFileManager
             .ToList();
 
         rewritten.Add($"{ipAddress} {domain} # DevBox");
+        if (lines.SequenceEqual(rewritten, StringComparer.Ordinal))
+        {
+            return;
+        }
+
         AtomicWrite(rewritten);
     }
 
@@ -59,11 +59,17 @@ public sealed class HostsFileManager
             return;
         }
 
-        var rewritten = File.ReadAllLines(_hostsPath)
+        var original = File.ReadAllLines(_hostsPath);
+        var rewritten = original
             .Select(line => RemoveDomainFromLine(line, domain))
             .Where(line => line is not null)
             .Select(line => line!)
             .ToList();
+
+        if (original.SequenceEqual(rewritten, StringComparer.Ordinal))
+        {
+            return;
+        }
 
         AtomicWrite(rewritten);
     }

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -26,6 +27,12 @@ public sealed class ProcessManager : IProcessManager
             }
 
             RemoveStale(definition.Key);
+            var adopted = TryAdopt(definition);
+            if (adopted is not null)
+            {
+                _processes[definition.Key] = adopted;
+                return Snapshot(adopted, ServiceState.Running);
+            }
 
             if (!File.Exists(definition.ExecutablePath))
             {
@@ -39,6 +46,7 @@ public sealed class ProcessManager : IProcessManager
 
             Directory.CreateDirectory(definition.WorkingDirectory);
             EnsureLogDirectory(definition.LogPath);
+            await PrepareServiceAsync(definition, cancellationToken).ConfigureAwait(false);
 
             var startInfo = BuildStartInfo(definition.ExecutablePath, definition.Arguments, definition.WorkingDirectory);
             var process = new Process
@@ -60,6 +68,7 @@ public sealed class ProcessManager : IProcessManager
 
             managed.StartedAt = DateTimeOffset.UtcNow;
             _processes[definition.Key] = managed;
+            WritePidMarker(managed);
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
             AppendLog(managed, "APP", $"Started PID {process.Id}.");
@@ -79,19 +88,35 @@ public sealed class ProcessManager : IProcessManager
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (!_processes.TryGetValue(definition.Key, out var managed) || managed.Process.HasExited)
+            ManagedProcess? managed = null;
+            if (_processes.TryGetValue(definition.Key, out var existing) && !existing.Process.HasExited)
+            {
+                managed = existing;
+            }
+            else
             {
                 RemoveStale(definition.Key);
+                managed = TryAdopt(definition);
+                if (managed is not null)
+                {
+                    _processes[definition.Key] = managed;
+                }
+            }
+
+            if (managed is null)
+            {
                 return Stopped(definition);
             }
 
             var timeout = definition.ShutdownTimeout ?? TimeSpan.FromSeconds(5);
             var gracefulRequested = false;
-            if (!string.IsNullOrWhiteSpace(definition.StopExecutablePath) &&
-                File.Exists(definition.StopExecutablePath))
+            if (!string.IsNullOrWhiteSpace(definition.StopExecutablePath) && File.Exists(definition.StopExecutablePath))
             {
-                await ExecuteStopCommandAsync(definition, timeout, cancellationToken).ConfigureAwait(false);
-                gracefulRequested = true;
+                gracefulRequested = await ExecuteStopCommandAsync(definition, timeout, cancellationToken).ConfigureAwait(false);
+                if (!gracefulRequested)
+                {
+                    AppendLog(managed, "APP", "Graceful stop command failed; falling back to managed process termination.");
+                }
             }
             else
             {
@@ -112,6 +137,7 @@ public sealed class ProcessManager : IProcessManager
 
             AppendLog(managed, "APP", "Stopped.");
             _processes.TryRemove(definition.Key, out _);
+            DeletePidMarker(definition, managed.Process.Id);
             managed.Process.Dispose();
             return Stopped(definition);
         }
@@ -132,7 +158,17 @@ public sealed class ProcessManager : IProcessManager
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_processes.TryGetValue(definition.Key, out var managed))
         {
-            return Stopped(definition);
+            var adopted = TryAdopt(definition);
+            if (adopted is null)
+            {
+                return Stopped(definition);
+            }
+
+            managed = _processes.GetOrAdd(definition.Key, adopted);
+            if (!ReferenceEquals(managed, adopted))
+            {
+                adopted.Process.Dispose();
+            }
         }
 
         if (managed.Process.HasExited)
@@ -189,22 +225,37 @@ public sealed class ProcessManager : IProcessManager
         return info;
     }
 
-    private static async Task ExecuteStopCommandAsync(ServiceDefinition definition, TimeSpan timeout, CancellationToken cancellationToken)
+    private static async Task<bool> ExecuteStopCommandAsync(ServiceDefinition definition, TimeSpan timeout, CancellationToken cancellationToken)
     {
         var stopInfo = BuildStartInfo(
             definition.StopExecutablePath!,
             definition.StopArguments ?? Array.Empty<string>(),
             definition.WorkingDirectory);
 
-        stopInfo.RedirectStandardOutput = false;
-        stopInfo.RedirectStandardError = false;
         using var stopProcess = new Process { StartInfo = stopInfo };
         if (!stopProcess.Start())
         {
-            return;
+            return false;
         }
 
-        await WaitForExitAsync(stopProcess, timeout, cancellationToken).ConfigureAwait(false);
+        var outputTask = stopProcess.StandardOutput.ReadToEndAsync(cancellationToken);
+        var errorTask = stopProcess.StandardError.ReadToEndAsync(cancellationToken);
+        var exited = await WaitForExitAsync(stopProcess, timeout, cancellationToken).ConfigureAwait(false);
+        if (!exited)
+        {
+            try
+            {
+                stopProcess.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            return false;
+        }
+
+        _ = await outputTask.ConfigureAwait(false);
+        _ = await errorTask.ConfigureAwait(false);
+        return stopProcess.ExitCode == 0;
     }
 
     private static async Task<bool> WaitForExitAsync(Process process, TimeSpan timeout, CancellationToken cancellationToken)
@@ -263,9 +314,207 @@ public sealed class ProcessManager : IProcessManager
     {
         if (_processes.TryRemove(key, out var stale))
         {
+            TryDeletePidMarkerForProcess(stale);
             stale.Process.Dispose();
         }
     }
+
+    private ManagedProcess? TryAdopt(ServiceDefinition definition)
+    {
+        var marker = ReadPidMarker(definition);
+        if (marker is null)
+        {
+            return null;
+        }
+
+        Process? process = null;
+        try
+        {
+            process = Process.GetProcessById(marker.Value.ProcessId);
+            if (process.HasExited)
+            {
+                process.Dispose();
+                DeletePidMarker(definition, marker.Value.ProcessId);
+                return null;
+            }
+
+            string? actualExecutable;
+            try
+            {
+                actualExecutable = process.MainModule?.FileName;
+            }
+            catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
+            {
+                process.Dispose();
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(actualExecutable) ||
+                !Path.GetFullPath(actualExecutable).Equals(marker.Value.ExecutablePath, StringComparison.OrdinalIgnoreCase) ||
+                !Path.GetFullPath(actualExecutable).Equals(Path.GetFullPath(definition.ExecutablePath), StringComparison.OrdinalIgnoreCase))
+            {
+                process.Dispose();
+                DeletePidMarker(definition, marker.Value.ProcessId);
+                return null;
+            }
+
+            process.EnableRaisingEvents = true;
+            var managed = new ManagedProcess(process, definition)
+            {
+                StartedAt = TryGetStartTime(process)
+            };
+            process.Exited += (_, _) => OnExited(managed);
+            AppendLog(managed, "APP", $"Adopted existing PID {process.Id} from a previous DevBox session.");
+            return managed;
+        }
+        catch (ArgumentException)
+        {
+            process?.Dispose();
+            DeletePidMarker(definition, marker.Value.ProcessId);
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            process?.Dispose();
+            DeletePidMarker(definition, marker.Value.ProcessId);
+            return null;
+        }
+    }
+
+    private static DateTimeOffset? TryGetStartTime(Process process)
+    {
+        try
+        {
+            return new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static string PidMarkerPath(ServiceDefinition definition) =>
+        Path.Combine(definition.WorkingDirectory, "tmp", "services", $"{definition.Key}.pid");
+
+    private static void WritePidMarker(ManagedProcess managed)
+    {
+        var path = PidMarkerPath(managed.Definition);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var executable = Path.GetFullPath(managed.Definition.ExecutablePath);
+        File.WriteAllLines(path, [managed.Process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture), executable]);
+    }
+
+    private static (int ProcessId, string ExecutablePath)? ReadPidMarker(ServiceDefinition definition)
+    {
+        var path = PidMarkerPath(definition);
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            var lines = File.ReadAllLines(path);
+            if (lines.Length < 2 ||
+                !int.TryParse(lines[0], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var processId) ||
+                processId <= 0)
+            {
+                File.Delete(path);
+                return null;
+            }
+
+            var executable = Path.GetFullPath(lines[1].Trim());
+            return (processId, executable);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static void DeletePidMarker(ServiceDefinition definition, int expectedProcessId)
+    {
+        var path = PidMarkerPath(definition);
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            var marker = ReadPidMarker(definition);
+            if (marker is null || marker.Value.ProcessId == expectedProcessId)
+            {
+                File.Delete(path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static void TryDeletePidMarkerForProcess(ManagedProcess managed)
+    {
+        try
+        {
+            DeletePidMarker(managed.Definition, managed.Process.Id);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private static async Task PrepareServiceAsync(ServiceDefinition definition, CancellationToken cancellationToken)
+    {
+        if (!definition.Key.Equals("mysql", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var dataDirectory = Path.Combine(definition.WorkingDirectory, "data", "mysql");
+        Directory.CreateDirectory(dataDirectory);
+        if (IsMySqlDataDirectoryInitialized(dataDirectory))
+        {
+            return;
+        }
+
+        if (Directory.EnumerateFileSystemEntries(dataDirectory).Any())
+        {
+            throw new InvalidOperationException(
+                $"MySQL data directory '{dataDirectory}' is non-empty but does not contain initialized system tables. " +
+                "Move or repair the partial data directory before starting MySQL.");
+        }
+
+        var initializationArguments = definition.Arguments.Concat(["--initialize-insecure"]).ToArray();
+        var info = BuildStartInfo(definition.ExecutablePath, initializationArguments, definition.WorkingDirectory);
+        using var process = new Process { StartInfo = info };
+        if (!process.Start())
+        {
+            throw new InvalidOperationException("Unable to start MySQL initialization.");
+        }
+
+        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        var output = await outputTask.ConfigureAwait(false);
+        var error = await errorTask.ConfigureAwait(false);
+
+        if (process.ExitCode != 0)
+        {
+            var details = string.IsNullOrWhiteSpace(error) ? output : error;
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(details)
+                ? $"MySQL initialization failed with exit code {process.ExitCode}."
+                : $"MySQL initialization failed: {details.Trim()}");
+        }
+
+        if (!IsMySqlDataDirectoryInitialized(dataDirectory))
+        {
+            throw new InvalidOperationException("MySQL initialization completed without creating the expected system database.");
+        }
+    }
+
+    internal static bool IsMySqlDataDirectoryInitialized(string dataDirectory) =>
+        Directory.Exists(Path.Combine(dataDirectory, "mysql"));
 
     private static void EnsureLogDirectory(string? logPath)
     {
@@ -306,8 +555,9 @@ public sealed class ProcessManager : IProcessManager
                 managed.LastError = $"Process exited with code {exitCode}.";
             }
             AppendLog(managed, "APP", $"Exited with code {exitCode}.");
+            DeletePidMarker(managed.Definition, managed.Process.Id);
         }
-        catch (InvalidOperationException)
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
         {
             managed.LastError = "Process exited unexpectedly.";
         }

@@ -1,3 +1,4 @@
+using System.Security;
 using System.Text.Json;
 using Microsoft.Win32;
 
@@ -28,6 +29,11 @@ public sealed class AppSettingsService : IAppSettingsService
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         _settingsPath = Path.Combine(Path.GetFullPath(rootPath), "config", "appsettings.json");
         Current = Load();
+        var registryState = TryReadStartupRegistryState();
+        if (registryState.HasValue)
+        {
+            Current.StartWithWindows = registryState.Value;
+        }
     }
 
     public AppSettings Current { get; }
@@ -78,6 +84,31 @@ public sealed class AppSettingsService : IAppSettingsService
 
         Current.StartWithWindows = enabled;
         Save();
+    }
+
+    private bool? TryReadStartupRegistryState()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
+            var configuredCommand = key?.GetValue(RunValueName) as string;
+            if (string.IsNullOrWhiteSpace(configuredCommand))
+            {
+                return false;
+            }
+
+            var executable = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(executable))
+            {
+                return true;
+            }
+
+            return configuredCommand.Contains(Path.GetFullPath(executable), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or SecurityException or IOException)
+        {
+            return null;
+        }
     }
 
     private AppSettings Load()

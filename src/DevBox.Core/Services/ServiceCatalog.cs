@@ -40,7 +40,7 @@ public sealed class ServiceCatalog
                 new[] { $"--defaults-file={At("config", "mysql", "my.ini")}" },
                 RootPath, 3306, "current",
                 mysqlAdminExe,
-                new[] { "--protocol=tcp", "--host=127.0.0.1", "--port=3306", "shutdown" },
+                new[] { "--protocol=tcp", "--host=127.0.0.1", "--port=3306", "--user=root", "--connect-timeout=3", "shutdown" },
                 TimeSpan.FromSeconds(6),
                 At("logs", "mysql-process.log"))
         };

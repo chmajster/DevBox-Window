@@ -107,7 +107,7 @@ public partial class App : System.Windows.Application
         });
 
         var readiness = _serviceProvider.GetRequiredService<EnvironmentReadinessService>().Check();
-        if (readiness.Items.Any(item => !item.Ready && item.CanInstallAutomatically))
+        if (readiness.Items.Any(item => !item.Ready))
         {
             _serviceProvider.GetRequiredService<FirstRunWindow>().ShowDialog();
         }
@@ -132,8 +132,46 @@ public partial class App : System.Windows.Application
     protected override void OnExit(ExitEventArgs e)
     {
         IsExiting = true;
-        _serviceProvider?.Dispose();
+        if (_serviceProvider is not null)
+        {
+            StopManagedServices(_serviceProvider);
+            _serviceProvider.Dispose();
+            _serviceProvider = null;
+        }
         base.OnExit(e);
+    }
+
+    private static void StopManagedServices(IServiceProvider provider)
+    {
+        try
+        {
+            var processManager = provider.GetRequiredService<IProcessManager>();
+            var catalog = provider.GetRequiredService<ServiceCatalog>();
+
+            foreach (var definition in catalog.GetDefaultServices())
+            {
+                try
+                {
+                    processManager.StopAsync(definition).GetAwaiter().GetResult();
+                }
+                catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+                {
+                    TryWriteStartupLog($"Unable to stop {definition.DisplayName} during DevBox exit: {ex.Message}");
+                }
+            }
+
+            try
+            {
+                provider.GetRequiredService<PhpRuntimePoolManager>().StopAllAsync().GetAwaiter().GetResult();
+            }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+            {
+                TryWriteStartupLog($"Unable to stop versioned PHP pools during DevBox exit: {ex.Message}");
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+        }
     }
 
     private static async Task StartConfiguredPhpPoolsAsync(IServiceProvider provider)

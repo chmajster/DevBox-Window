@@ -21,6 +21,7 @@ public sealed partial class LocalCertificateManager
         Directory.CreateDirectory(_certificateRoot);
         var certificatePath = CertificatePath(normalizedDomain);
         var privateKeyPath = PrivateKeyPath(normalizedDomain);
+        string? replacedThumbprint = null;
 
         if (File.Exists(certificatePath) && File.Exists(privateKeyPath))
         {
@@ -31,6 +32,7 @@ public sealed partial class LocalCertificateManager
                 {
                     return ToModel(normalizedDomain, certificatePath, privateKeyPath, existing);
                 }
+                replacedThumbprint = existing.Thumbprint;
             }
             catch (CryptographicException)
             {
@@ -61,6 +63,13 @@ public sealed partial class LocalCertificateManager
 
         AtomicWrite(certificatePath, certificate.ExportCertificatePem());
         AtomicWrite(privateKeyPath, rsa.ExportPkcs8PrivateKeyPem());
+
+        if (!string.IsNullOrWhiteSpace(replacedThumbprint) &&
+            !replacedThumbprint.Equals(certificate.Thumbprint, StringComparison.OrdinalIgnoreCase))
+        {
+            RemoveTrustedThumbprint(replacedThumbprint);
+        }
+
         return ToModel(normalizedDomain, certificatePath, privateKeyPath, certificate);
     }
 
@@ -99,12 +108,7 @@ public sealed partial class LocalCertificateManager
         }
 
         using var certificate = X509Certificate2.CreateFromPemFile(certificatePath);
-        using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
-        store.Open(OpenFlags.ReadWrite);
-        foreach (var match in store.Certificates.Find(X509FindType.FindByThumbprint, certificate.Thumbprint, validOnly: false))
-        {
-            store.Remove(match);
-        }
+        RemoveTrustedThumbprint(certificate.Thumbprint);
     }
 
     public void Delete(string domain)
@@ -113,6 +117,16 @@ public sealed partial class LocalCertificateManager
         UntrustForCurrentUser(normalizedDomain);
         DeleteIfExists(CertificatePath(normalizedDomain));
         DeleteIfExists(PrivateKeyPath(normalizedDomain));
+    }
+
+    private static void RemoveTrustedThumbprint(string thumbprint)
+    {
+        using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
+        store.Open(OpenFlags.ReadWrite);
+        foreach (var match in store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, validOnly: false))
+        {
+            store.Remove(match);
+        }
     }
 
     private string CertificatePath(string domain) => Path.Combine(_certificateRoot, $"{domain}.crt.pem");
