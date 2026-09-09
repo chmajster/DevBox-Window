@@ -56,6 +56,49 @@ public sealed class SiteManagerTests
     }
 
     [Fact]
+    public void SetPhpVersion_UpdatesMetadataAndRoutesToDedicatedFastCgiPort()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var manager = new SiteManager(root);
+            manager.Create("demo");
+
+            var updated = manager.SetPhpVersion("demo", "8.5.10");
+            var config = File.ReadAllText(manager.GetNginxConfigPath("demo.test"));
+            var expectedPort = PhpRuntimePoolManager.GetPort("8.5.10");
+
+            Assert.Equal("8.5.10", updated.PhpVersion);
+            Assert.Equal("8.5.10", manager.GetSites().Single().PhpVersion);
+            Assert.Contains($"fastcgi_pass 127.0.0.1:{expectedPort};", config, StringComparison.Ordinal);
+
+            manager.SetPhpVersion("demo", null);
+            config = File.ReadAllText(manager.GetNginxConfigPath("demo.test"));
+            Assert.Contains("fastcgi_pass 127.0.0.1:9084;", config, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void SetPhpVersion_RejectsUnsafeVersion()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var manager = new SiteManager(root);
+            manager.Create("demo");
+            Assert.Throws<ArgumentException>(() => manager.SetPhpVersion("demo", "../../evil"));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public void Create_RejectsNonTestDomain()
     {
         var root = TemporaryRoot();
