@@ -58,6 +58,21 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         ArgumentNullException.ThrowIfNull(definition);
         ValidateDefinition(definition);
 
+        var bundledPath = VersionPath(definition.Key, definition.Version);
+        if (Directory.Exists(bundledPath))
+        {
+            ValidateRuntimeExecutable(bundledPath, definition.ExecutableRelativePath);
+            File.WriteAllText(Path.Combine(bundledPath, VersionMarker), definition.Version);
+            await ActivateAsync(definition.Key, definition.Version, definition.ExecutableRelativePath, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (!definition.HasRemotePackage)
+        {
+            throw new InvalidOperationException(
+                $"{definition.DisplayName} {definition.Version} is distributed with packaged DevBox releases, but the bundled runtime is missing from this installation.");
+        }
+
         var tempRoot = Path.Combine(_rootPath, "tmp", "runtimes", definition.Key, Guid.NewGuid().ToString("N"));
         var archivePath = Path.Combine(tempRoot, "package.zip");
         var extractPath = Path.Combine(tempRoot, "extract");
@@ -66,8 +81,8 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
 
         try
         {
-            await DownloadAsync(definition.DownloadUrl, archivePath, cancellationToken).ConfigureAwait(false);
-            VerifySha256(archivePath, definition.Sha256);
+            await DownloadAsync(definition.DownloadUrl!, archivePath, cancellationToken).ConfigureAwait(false);
+            VerifySha256(archivePath, definition.Sha256!);
             ExtractZipSafely(archivePath, extractPath);
 
             var sourcePath = string.IsNullOrWhiteSpace(definition.ArchiveRootDirectory)
@@ -233,6 +248,13 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         if (!string.IsNullOrWhiteSpace(definition.ArchiveRootDirectory))
         {
             ValidateRelativePath(definition.ArchiveRootDirectory, nameof(definition.ArchiveRootDirectory));
+        }
+
+        var hasUrl = !string.IsNullOrWhiteSpace(definition.DownloadUrl);
+        var hasSha256 = !string.IsNullOrWhiteSpace(definition.Sha256);
+        if (hasUrl != hasSha256)
+        {
+            throw new InvalidDataException("Runtime definitions must provide both a download URL and SHA-256, or neither for bundled-only runtimes.");
         }
     }
 
