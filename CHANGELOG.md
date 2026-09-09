@@ -4,12 +4,19 @@ All notable changes to DevBox Windows are documented here.
 
 ## 0.2.1 - 2026-09-09
 
+### Added
+
+- Official release packages now carry Nginx `1.31.5`, PHP FastCGI `8.5.10` NTS and MySQL `8.4.11` LTS runtime payloads under versioned `runtime/` directories.
+- First Run can activate a bundled runtime locally without making an HTTP request.
+- Release packaging records runtime source URLs and calculated SHA-256 values in `runtime/bundled-runtimes.json`; PHP and Nginx archives are also verified against pinned SHA-256 values before packaging.
+- MySQL becomes an automatic First Run action when its bundled payload is present in the packaged application.
+
 ### Fixed
 
 - Closing the First Run dialog no longer shuts down DevBox before the main dashboard is shown.
 - `Continue to DevBox` now closes only the setup dialog and continues into the main window.
 - First Run runtime `Install` buttons now use an explicit ancestor binding to the setup ViewModel command.
-- `Install` is disabled for checks that are already ready or require manual action, including MySQL when no verified automatic package is available.
+- `Install` is disabled for checks that are already ready or require manual action, including a source/development build where a bundled-only MySQL payload is absent.
 
 ## 0.2.0 - 2026-09-09
 
@@ -43,5 +50,5 @@ All notable changes to DevBox Windows are documented here.
 
 ### Known limitations
 
-- Built-in automatic MySQL download remains disabled until the package can satisfy the same pinned SHA-256 policy as other runtimes.
+- Built-in automatic MySQL download remains disabled until the package can satisfy the same pinned SHA-256 policy as other remote runtimes. Packaged releases from 0.2.1 onward carry the MySQL runtime directly.
 - The generated Windows installer is not Authenticode code-signed.
