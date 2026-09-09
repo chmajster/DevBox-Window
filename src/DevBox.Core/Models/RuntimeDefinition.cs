@@ -4,10 +4,15 @@ public sealed record RuntimeDefinition(
     string Key,
     string DisplayName,
     string Version,
-    string DownloadUrl,
-    string Sha256,
+    string? DownloadUrl,
+    string? Sha256,
     string ExecutableRelativePath,
-    string? ArchiveRootDirectory = null);
+    string? ArchiveRootDirectory = null)
+{
+    public bool HasRemotePackage =>
+        !string.IsNullOrWhiteSpace(DownloadUrl) &&
+        !string.IsNullOrWhiteSpace(Sha256);
+}
 
 public sealed record RuntimeInstallation(
     string Key,
