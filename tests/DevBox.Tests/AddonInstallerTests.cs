@@ -11,7 +11,7 @@ namespace DevBox.Tests;
 public sealed class AddonInstallerTests
 {
     [Fact]
-    public async Task InstallAsync_VerifiedArchive_InstallsAddon()
+    public async Task InstallAsync_VerifiedArchive_InstallsAndConfiguresPhpMyAdmin()
     {
         var root = TempRoot();
         try
@@ -20,12 +20,16 @@ public sealed class AddonInstallerTests
             var hash = Convert.ToHexString(SHA256.HashData(archive)).ToLowerInvariant();
             var addon = Definition(root, hash);
             using var http = new HttpClient(new StaticResponseHandler(archive));
-            var installer = new AddonInstaller(root, http);
+            using var installer = new AddonInstaller(root, http);
 
             await installer.InstallAsync(addon);
 
             Assert.True(File.Exists(addon.EntryPointPath));
             Assert.Equal("<?php echo 'ok';", File.ReadAllText(addon.EntryPointPath));
+            var config = Path.Combine(addon.InstallPath, "config.inc.php");
+            Assert.True(File.Exists(config));
+            Assert.Contains("blowfish_secret", File.ReadAllText(config), StringComparison.Ordinal);
+            Assert.True(Directory.Exists(Path.Combine(addon.InstallPath, "tmp")));
         }
         finally
         {
@@ -42,7 +46,7 @@ public sealed class AddonInstallerTests
             var archive = CreateArchive(("package/index.php", "<?php echo 'ok';"));
             var addon = Definition(root, new string('0', 64));
             using var http = new HttpClient(new StaticResponseHandler(archive));
-            var installer = new AddonInstaller(root, http);
+            using var installer = new AddonInstaller(root, http);
 
             await Assert.ThrowsAsync<InvalidDataException>(() => installer.InstallAsync(addon));
             Assert.False(File.Exists(addon.EntryPointPath));
@@ -63,11 +67,53 @@ public sealed class AddonInstallerTests
             var hash = Convert.ToHexString(SHA256.HashData(archive)).ToLowerInvariant();
             var addon = Definition(root, hash);
             using var http = new HttpClient(new StaticResponseHandler(archive));
-            var installer = new AddonInstaller(root, http);
+            using var installer = new AddonInstaller(root, http);
 
             await Assert.ThrowsAsync<InvalidDataException>(() => installer.InstallAsync(addon));
             Assert.False(File.Exists(Path.Combine(root, "tmp", "addons", "escape.txt")));
             Assert.False(File.Exists(addon.EntryPointPath));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task UninstallAsync_RemovesOnlyAddonDirectory()
+    {
+        var root = TempRoot();
+        try
+        {
+            var addon = Definition(root, new string('0', 64));
+            Directory.CreateDirectory(addon.InstallPath);
+            File.WriteAllText(addon.EntryPointPath, "ok");
+            var sibling = Path.Combine(root, "www", "keep.txt");
+            File.WriteAllText(sibling, "keep");
+            using var installer = new AddonInstaller(root, new HttpClient(new StaticResponseHandler(Array.Empty<byte>())));
+
+            await installer.UninstallAsync(addon);
+
+            Assert.False(Directory.Exists(addon.InstallPath));
+            Assert.True(File.Exists(sibling));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task UninstallAsync_PathOutsideWww_IsRejected()
+    {
+        var root = TempRoot();
+        try
+        {
+            var outside = Path.Combine(root, "outside");
+            var addon = new AddonDefinition("bad", "Bad", "test", outside, Path.Combine(outside, "index.php"), "http://bad.test", [], "1", "https://example.test/a.zip", new string('0', 64), "package");
+            using var installer = new AddonInstaller(root, new HttpClient(new StaticResponseHandler(Array.Empty<byte>())));
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => installer.UninstallAsync(addon));
         }
         finally
         {
