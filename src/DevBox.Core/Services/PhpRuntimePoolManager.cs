@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -72,10 +73,18 @@ public sealed partial class PhpRuntimePoolManager : IDisposable
             startInfo.ArgumentList.Add(phpIni);
 
             var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-            if (!process.Start())
+            try
+            {
+                if (!process.Start())
+                {
+                    process.Dispose();
+                    throw new InvalidOperationException($"Unable to start PHP {normalized} FastCGI.");
+                }
+            }
+            catch (Win32Exception ex)
             {
                 process.Dispose();
-                throw new InvalidOperationException($"Unable to start PHP {normalized} FastCGI.");
+                throw new InvalidOperationException($"Unable to start PHP {normalized} FastCGI: {ex.Message}", ex);
             }
 
             try
@@ -283,7 +292,7 @@ public sealed partial class PhpRuntimePoolManager : IDisposable
         catch (InvalidOperationException)
         {
         }
-        catch (System.ComponentModel.Win32Exception)
+        catch (Win32Exception)
         {
         }
     }
