@@ -21,13 +21,13 @@ Current application version: `0.2.1`.
 ### First Run and runtimes
 
 - First Run Wizard reports missing environment components.
-- Versioned runtime directories under `runtime/<runtime>/<version>`.
+- Official packaged releases include Nginx `1.31.5`, PHP FastCGI `8.5.10` NTS and MySQL `8.4.11` LTS runtime payloads.
+- Bundled runtimes are stored under versioned `runtime/<runtime>/<version>` directories and can be activated by First Run without downloading them again.
 - Atomic activation through `runtime/<runtime>/current`.
-- HTTPS download, pinned SHA-256 verification, safe ZIP extraction, staging and rollback.
-- Built-in verified catalog for PHP and Nginx packages.
+- PHP and Nginx retain an HTTPS download fallback with pinned SHA-256 verification, safe ZIP extraction, staging and rollback when their bundled payload is not present.
+- MySQL remote installation remains disabled when its bundled payload is missing; packaged releases provide the MySQL runtime locally instead.
 - Runtime Install / Activate / Remove lifecycle.
-
-MySQL automatic download is intentionally not enabled in the built-in catalog until its package can be verified under the same pinned SHA-256 policy. A manually provided MySQL runtime is supported.
+- Release packaging records runtime source URLs and calculated SHA-256 values in `runtime/bundled-runtimes.json`; PHP and Nginx source archives are additionally checked against pinned SHA-256 values during packaging.
 
 ### Sites
 
@@ -97,7 +97,7 @@ SHA-256: 2d2e13c735366d318425c78e4ee2cc8fc648d77faba3ddea2cd516e43885733f
 
 ## Runtime layout
 
-Third-party runtime binaries are not committed to Git.
+Third-party runtime binaries are not committed to Git. The release workflow downloads the selected upstream archives into the build workspace, validates the expected layout, verifies pinned checksums where available, and places the extracted runtimes directly in the packaged application.
 
 ```text
 DevBox/
@@ -122,15 +122,16 @@ DevBox/
   tools/
     composer/
   runtime/
+    bundled-runtimes.json
     nginx/
       current/
-      <version>/
+      1.31.5/
     php/
       current/
-      <version>/
+      8.5.10/
     mysql/
       current/
-      <version>/
+      8.4.11/
   www/
 ```
 
@@ -178,6 +179,8 @@ A publishing run builds:
 
 - self-contained `win-x64`,
 - self-contained `win-arm64`,
+- bundled Nginx, PHP FastCGI and MySQL runtime payloads,
+- `runtime/bundled-runtimes.json` with source and checksum metadata,
 - portable ZIP archives,
 - an Inno Setup per-user installer,
 - `SHA256SUMS.txt`,
