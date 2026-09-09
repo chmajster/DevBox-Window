@@ -76,7 +76,7 @@ public sealed class PhpManagerTests
     }
 
     [Fact]
-    public void SetExtensionEnabled_RecognizesInlineComment()
+    public void SetExtensionEnabled_RecognizesInlineCommentAndCanonicalizesEntry()
     {
         var root = TemporaryRoot();
         try
@@ -88,7 +88,11 @@ public sealed class PhpManagerTests
             var manager = new PhpManager(root);
 
             Assert.True(manager.GetExtensions().Single(item => item.Name == "curl").Enabled);
-            Assert.False(manager.SetExtensionEnabled("curl", true) && File.ReadAllLines(phpIni).Length > 1);
+            Assert.True(manager.SetExtensionEnabled("curl", true));
+
+            var lines = File.ReadAllLines(phpIni);
+            Assert.Single(lines);
+            Assert.Equal("extension=curl", lines[0]);
         }
         finally
         {
