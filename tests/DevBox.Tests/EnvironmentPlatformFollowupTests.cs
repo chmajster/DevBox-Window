@@ -187,6 +187,41 @@ public sealed class EnvironmentPlatformFollowupTests
         }
     }
 
+    [Fact]
+    public void LocalCa_RemoveAuthorityKeepsPasswordWhenPfxDeletionFails()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var root = TemporaryRoot();
+        try
+        {
+            using var authority = new LocalCertificateAuthorityService(root);
+            using (authority.EnsureAuthority(trustCurrentUser: false))
+            {
+            }
+
+            var secrets = new SecureSecretStore(root);
+            const string passwordKey = "ssl.local-ca.pfx-password";
+            Assert.NotNull(secrets.Get(passwordKey));
+
+            var pfxPath = Path.Combine(root, "config", "ssl", "ca", "devbox-local-ca.pfx");
+            using (var locked = new FileStream(pfxPath, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                Assert.ThrowsAny<IOException>(() => authority.RemoveAuthority());
+                Assert.NotNull(secrets.Get(passwordKey));
+                Assert.True(File.Exists(pfxPath));
+            }
+
+            authority.RemoveAuthority();
+            Assert.Null(secrets.Get(passwordKey));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
     private static string TemporaryRoot()
     {
         var root = Path.Combine(Path.GetTempPath(), "devbox-followup-tests", Guid.NewGuid().ToString("N"));
