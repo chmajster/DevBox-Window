@@ -10,8 +10,11 @@
     <Grid Margin="26">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
         <Grid Grid.Row="0" Margin="0,0,0,18">
-            <StackPanel><TextBlock Text="Developer Tools" FontSize="27" FontWeight="SemiBold"/><TextBlock Text="Composer, Node.js, npm and pnpm." Foreground="#6B7280" Margin="0,4,0,0"/></StackPanel>
-            <Button HorizontalAlignment="Right" VerticalAlignment="Center" Content="Refresh" Style="{StaticResource Primary}" Command="{Binding RefreshCommand}"/>
+            <StackPanel><TextBlock Text="Developer Tools" FontSize="27" FontWeight="SemiBold"/><TextBlock Text="Composer, Node.js, npm, pnpm and project workflows." Foreground="#6B7280" Margin="0,4,0,0"/></StackPanel>
+            <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center" Orientation="Horizontal">
+                <Button Content="Project Manager" Click="ProjectManager_Click"/>
+                <Button Content="Refresh" Style="{StaticResource Primary}" Command="{Binding RefreshCommand}"/>
+            </StackPanel>
         </Grid>
         <Border Grid.Row="1" Background="#EFF6FF" BorderBrush="#BFDBFE" BorderThickness="1" CornerRadius="7" Padding="12" Margin="0,0,0,14">
             <DockPanel><TextBlock Text="{Binding Status}" Foreground="#1E40AF"/><StackPanel DockPanel.Dock="Right" Orientation="Horizontal"><Button Content="Install Composer" Command="{Binding InstallComposerCommand}"/><Button Content="Install Node LTS" Command="{Binding InstallNodeCommand}"/><Button Content="Install pnpm" Command="{Binding InstallPnpmCommand}"/></StackPanel></DockPanel>
