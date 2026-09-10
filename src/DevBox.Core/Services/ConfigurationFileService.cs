@@ -53,7 +53,7 @@ public sealed class ConfigurationFileService
             var extension = normalized == "php" ? ".ini" : ".conf";
             var tempPath = Path.Combine(tempRoot, normalized + extension);
             await File.WriteAllTextAsync(tempPath, content, cancellationToken).ConfigureAwait(false);
-            var validation = normalized switch
+            (bool Valid, string Message) validation = normalized switch
             {
                 "nginx" => await ValidateNginxAsync(tempPath, cancellationToken).ConfigureAwait(false),
                 "php" => await ValidatePhpAsync(tempPath, cancellationToken).ConfigureAwait(false),
