@@ -43,6 +43,37 @@ public sealed class EnvironmentPlatformFollowupTests
     }
 
     [Fact]
+    public async Task SnapshotRestore_RejectsUnsafeManifestDomainBeforeTlsAccess()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var source = Path.Combine(root, "www", "unsafe-domain");
+            Directory.CreateDirectory(source);
+            File.WriteAllText(Path.Combine(source, "index.html"), "fixture");
+            File.WriteAllText(
+                Path.Combine(source, ProjectWorkspaceService.ManifestFileName),
+                JsonSerializer.Serialize(new
+                {
+                    Name = "unsafe-domain",
+                    Domain = "../../outside.test",
+                    DatabaseEngine = "none",
+                    Https = true
+                }));
+
+            var snapshots = new ProjectSnapshotService(root);
+            var snapshot = await snapshots.CreateAsync(source);
+
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                snapshots.RestoreAsync(snapshot.SnapshotPath, "unsafe-domain", overwrite: true));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public void ExportProjectLock_ReportsWhenActionsWereOmitted()
     {
         var root = TemporaryRoot();
