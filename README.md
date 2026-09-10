@@ -221,29 +221,30 @@ dotnet run --project src/DevBox.App/DevBox.App.csproj
 
 ## CI and security scanning
 
-Pull requests run Windows CI with:
+Pull requests targeting `main` automatically run `PR Tests`. The workflow is also reusable by the release workflow and validates:
 
 - restore,
 - NuGet vulnerability audit,
 - Release build,
 - tests and coverage collection,
 - self-contained `win-x64` GUI publish,
-- self-contained single-file `devbox.exe` CLI publish into `cli\`,
-- installer compilation against the combined GUI + CLI layout.
+- self-contained single-file `cli\devbox.exe` publish,
+- protection against replacing the WPF `DevBox.exe` with the CLI,
+- Inno Setup installer compilation.
 
-CodeQL scans C# separately. Dependabot monitors NuGet and GitHub Actions dependencies.
+Normal pushes to `main` do not run the PR test workflow. CodeQL runs for pull requests and on the weekly security schedule. Dependabot monitors NuGet and GitHub Actions dependencies.
 
 ## Releases
 
-The release workflow supports three guarded paths:
+Publishing is intentionally manual. Open **Actions → Manual Release → Run workflow**, select the `main` branch and choose the semantic version increment:
 
-1. A tag matching `v*.*.*` builds and publishes that tagged version.
-2. A commit on `main` whose first line is exactly `release: vX.Y.Z` builds the current SHA, creates tag `vX.Y.Z` on that SHA and publishes the GitHub Release only after restore, vulnerability audit, build and tests succeed.
-3. `workflow_dispatch` performs a packaging dry-run for the supplied version and uploads the release artifact without creating a tag or GitHub Release.
+- `patch`: `0.2.2` → `0.2.3`,
+- `minor`: `0.2.2` → `0.3.0`,
+- `major`: `0.2.2` → `1.0.0`.
 
-Normal pushes to `main` do not execute the release job.
+The manual workflow first invokes the same validation used by pull requests. After it succeeds, the release job reads the current version from `src/DevBox.App/DevBox.App.csproj`, calculates the next version and updates the application version, assembly/file versions, Inno Setup fallback version and the README version marker in its release workspace.
 
-A publishing run builds:
+The release job then builds:
 
 - self-contained GUI `win-x64` and `win-arm64`,
 - self-contained single-file CLI `cli\devbox.exe` for x64 and ARM64,
@@ -251,8 +252,11 @@ A publishing run builds:
 - `runtime/bundled-runtimes.json` with source and checksum metadata,
 - portable ZIP archives,
 - an Inno Setup per-user x64 installer,
-- `SHA256SUMS.txt`,
-- a GitHub Release containing the packaged artifacts.
+- `SHA256SUMS.txt`.
+
+Only after packaging succeeds does the workflow commit the version bump, create an annotated `vMAJOR.MINOR.PATCH` tag and atomically push both the commit and tag to `main`. If `main` changed while the release was being built, publication stops and must be restarted from the latest `main`. The workflow then creates the GitHub Release and attaches all packaged artifacts.
+
+Pushes and tags do not start publishing automatically. Concurrent manual releases are serialized so two runs cannot allocate the same next version.
 
 The release workflow supports Authenticode signing of DevBox-owned binaries and the installer. Signing is enabled only when `WINDOWS_SIGNING_CERTIFICATE_BASE64` and `WINDOWS_SIGNING_CERTIFICATE_PASSWORD` repository secrets are configured. Without those secrets, artifacts remain unsigned and SHA-256 release checksums continue to provide integrity verification.
 
