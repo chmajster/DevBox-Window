@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using DevBox.Core.Models;
 
 namespace DevBox.Core.Services;
@@ -66,7 +67,7 @@ public sealed class ProjectSnapshotService
                 ProjectName = projectName,
                 CreatedAtUtc = DateTimeOffset.UtcNow,
                 Options = options,
-                DatabaseBackups = databaseBackups?.Where(File.Exists).Select(Path.GetFileName).ToArray() ?? Array.Empty<string>()
+                DatabaseBackups = databaseBackups?.Where(File.Exists).Select(path => Path.GetFileName(path)!).ToArray() ?? Array.Empty<string>()
             };
             var metadataEntry = archive.CreateEntry("snapshot.json", CompressionLevel.Optimal);
             using var writer = new StreamWriter(metadataEntry.Open());
@@ -89,14 +90,19 @@ public sealed class ProjectSnapshotService
         var safeName = NormalizeProjectName(destinationProjectName);
         var destination = Path.Combine(_wwwRoot, safeName);
         var tempRoot = Path.Combine(_rootPath, "tmp", "snapshot-restore", Guid.NewGuid().ToString("N"));
-        var staging = Path.Combine(tempRoot, safeName);
+        var staging = Path.Combine(tempRoot, "project");
+        var databaseStaging = Path.Combine(tempRoot, "database");
         Directory.CreateDirectory(staging);
         string? previous = null;
+        string? databaseDestination = null;
         try
         {
-            ExtractProject(source, staging, cancellationToken);
-            if (!File.Exists(Path.Combine(staging, ProjectWorkspaceService.ManifestFileName)))
+            ExtractSnapshot(source, staging, databaseStaging, cancellationToken);
+            var manifestPath = Path.Combine(staging, ProjectWorkspaceService.ManifestFileName);
+            if (!File.Exists(manifestPath))
                 throw new InvalidDataException("Snapshot does not contain devbox.json.");
+
+            RewriteIdentity(staging, safeName);
 
             if (Directory.Exists(destination))
             {
@@ -109,11 +115,27 @@ public sealed class ProjectSnapshotService
             try
             {
                 Directory.Move(staging, destination);
+                if (Directory.Exists(databaseStaging) && Directory.EnumerateFiles(databaseStaging).Any())
+                {
+                    var snapshotKey = SafeFileName(Path.GetFileNameWithoutExtension(source));
+                    databaseDestination = Path.Combine(_rootPath, "backups", "snapshot-restores", safeName, snapshotKey);
+                    if (Directory.Exists(databaseDestination))
+                    {
+                        if (!overwrite)
+                            throw new InvalidOperationException($"Snapshot database backup destination already exists: {databaseDestination}");
+                        Directory.Delete(databaseDestination, recursive: true);
+                    }
+                    Directory.CreateDirectory(Path.GetDirectoryName(databaseDestination)!);
+                    Directory.Move(databaseStaging, databaseDestination);
+                }
             }
             catch
             {
+                TryDeleteDirectory(destination);
                 if (previous is not null && Directory.Exists(previous) && !Directory.Exists(destination))
                     Directory.Move(previous, destination);
+                if (databaseDestination is not null)
+                    TryDeleteDirectory(databaseDestination);
                 throw;
             }
 
@@ -124,6 +146,49 @@ public sealed class ProjectSnapshotService
         finally
         {
             TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private void RewriteIdentity(string projectRoot, string projectName)
+    {
+        var manifestPath = Path.Combine(projectRoot, ProjectWorkspaceService.ManifestFileName);
+        JsonObject manifest;
+        try
+        {
+            manifest = JsonNode.Parse(File.ReadAllText(manifestPath)) as JsonObject
+                ?? throw new InvalidDataException("devbox.json must contain a JSON object.");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException("Snapshot devbox.json contains invalid JSON.", ex);
+        }
+
+        var originalName = GetString(manifest, "Name") ?? Path.GetFileName(projectRoot);
+        var originalDomain = GetString(manifest, "Domain");
+        var domain = projectName.Equals(originalName, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(originalDomain)
+            ? originalDomain!
+            : BuildDomain(projectName);
+        SetProperty(manifest, "Name", projectName);
+        SetProperty(manifest, "Domain", domain);
+        AtomicWrite(manifestPath, manifest.ToJsonString(JsonOptions));
+
+        var lockPath = Path.Combine(projectRoot, EnvironmentLockService.LockFileName);
+        if (!File.Exists(lockPath))
+            return;
+        try
+        {
+            var lockFile = JsonSerializer.Deserialize<EnvironmentLockFile>(File.ReadAllText(lockPath), JsonOptions)
+                ?? throw new InvalidDataException("Snapshot devbox.lock.json is empty.");
+            AtomicWrite(lockPath, JsonSerializer.Serialize(lockFile with
+            {
+                ProjectName = projectName,
+                Domain = domain,
+                GeneratedAtUtc = DateTimeOffset.UtcNow
+            }, JsonOptions));
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException("Snapshot devbox.lock.json contains invalid JSON.", ex);
         }
     }
 
@@ -157,26 +222,39 @@ public sealed class ProjectSnapshotService
         }
     }
 
-    private static void ExtractProject(string archivePath, string destination, CancellationToken cancellationToken)
+    private static void ExtractSnapshot(string archivePath, string projectDestination, string databaseDestination, CancellationToken cancellationToken)
     {
         using var archive = ZipFile.OpenRead(archivePath);
         if (archive.Entries.Count > MaximumEntries)
             throw new InvalidDataException("Snapshot contains too many entries.");
-        var destinationRoot = Path.GetFullPath(destination).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var projectRoot = Path.GetFullPath(projectDestination).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var databaseRoot = Path.GetFullPath(databaseDestination).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         long total = 0;
         foreach (var entry in archive.Entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!entry.FullName.StartsWith("project/", StringComparison.Ordinal) || entry.FullName.EndsWith('/', StringComparison.Ordinal))
-                continue;
-            if (entry.FullName.Contains(':', StringComparison.Ordinal) || entry.FullName.Contains("..", StringComparison.Ordinal))
+            var normalized = entry.FullName.Replace('\\', '/');
+            if (normalized.StartsWith("/", StringComparison.Ordinal) || normalized.Contains(':', StringComparison.Ordinal) || normalized.Split('/').Any(part => part == ".."))
                 throw new InvalidDataException("Snapshot contains an unsafe entry path.");
-            total = checked(total + entry.Length);
+            if (normalized.EndsWith("/", StringComparison.Ordinal))
+                continue;
+            var isProject = normalized.StartsWith("project/", StringComparison.Ordinal);
+            var isDatabase = normalized.StartsWith("database/", StringComparison.Ordinal);
+            if (!isProject && !isDatabase)
+                continue;
+
+            total = checked(total + Math.Max(0, entry.Length));
             if (total > MaximumRestoredBytes)
                 throw new InvalidDataException("Snapshot exceeds the maximum restored size.");
-            var relative = entry.FullName["project/".Length..].Replace('/', Path.DirectorySeparatorChar);
-            var target = Path.GetFullPath(Path.Combine(destination, relative));
-            if (!target.StartsWith(destinationRoot, StringComparison.OrdinalIgnoreCase))
+
+            var prefix = isProject ? "project/" : "database/";
+            var root = isProject ? projectDestination : databaseDestination;
+            var rootPrefix = isProject ? projectRoot : databaseRoot;
+            var relative = normalized[prefix.Length..];
+            if (string.IsNullOrWhiteSpace(relative) || relative.Contains('/', StringComparison.Ordinal) && isDatabase)
+                throw new InvalidDataException("Snapshot database payload must contain plain backup files only.");
+            var target = Path.GetFullPath(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
+            if (!target.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Snapshot entry escapes the destination directory.");
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             using var input = entry.Open();
@@ -197,6 +275,30 @@ public sealed class ProjectSnapshotService
         return root;
     }
 
+    private static string? GetString(JsonObject value, string name)
+    {
+        foreach (var pair in value)
+        {
+            if (pair.Key.Equals(name, StringComparison.OrdinalIgnoreCase) && pair.Value is JsonValue node && node.TryGetValue<string>(out var text))
+                return text;
+        }
+        return null;
+    }
+
+    private static void SetProperty(JsonObject value, string name, object? propertyValue)
+    {
+        var existing = value.FirstOrDefault(pair => pair.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Key;
+        value[string.IsNullOrEmpty(existing) ? name : existing] = JsonValue.Create(propertyValue);
+    }
+
+    private static string BuildDomain(string projectName)
+    {
+        var label = new string(projectName.ToLowerInvariant().Select(ch => char.IsLetterOrDigit(ch) || ch == '-' ? ch : '-').ToArray()).Trim('-');
+        if (string.IsNullOrWhiteSpace(label))
+            label = "project";
+        return $"{label}.test";
+    }
+
     private static string NormalizeProjectName(string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
@@ -206,7 +308,25 @@ public sealed class ProjectSnapshotService
         return trimmed;
     }
 
-    private static string SafeFileName(string value) => new(value.Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '-').ToArray());
+    private static string SafeFileName(string value) => new(value.Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' or '.' ? ch : '-').ToArray());
+
+    private static void AtomicWrite(string path, string content)
+    {
+        var temp = path + $".{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(temp, content);
+            if (File.Exists(path))
+                File.Replace(temp, path, null);
+            else
+                File.Move(temp, path);
+        }
+        finally
+        {
+            if (File.Exists(temp))
+                File.Delete(temp);
+        }
+    }
 
     private static void TryDeleteDirectory(string path)
     {
@@ -219,5 +339,5 @@ public sealed class ProjectSnapshotService
         catch (UnauthorizedAccessException) { }
     }
 
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
 }
