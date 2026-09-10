@@ -12,6 +12,7 @@ public sealed class AddonMarketplaceService : IDisposable
     private readonly string _rootPath;
     private readonly string _sourcePath;
     private readonly string _addonsPath;
+    private readonly string _localAddonsPath;
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
     private bool _disposed;
@@ -22,6 +23,7 @@ public sealed class AddonMarketplaceService : IDisposable
         _rootPath = Path.GetFullPath(rootPath);
         _sourcePath = Path.Combine(_rootPath, "config", "addon-marketplace-source.json");
         _addonsPath = Path.Combine(_rootPath, "config", "addons.json");
+        _localAddonsPath = Path.Combine(_rootPath, "config", "addons.local.json");
         _ownsHttpClient = httpClient is null;
         _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
     }
@@ -31,6 +33,7 @@ public sealed class AddonMarketplaceService : IDisposable
         ThrowIfDisposed();
         var source = new MarketplaceSource(catalogUrl, signatureUrl, publicKeyPem);
         ValidateSource(source);
+        EnsureLocalCatalog();
         Directory.CreateDirectory(Path.GetDirectoryName(_sourcePath)!);
         AtomicWrite(_sourcePath, JsonSerializer.Serialize(source, JsonOptions));
     }
@@ -41,6 +44,7 @@ public sealed class AddonMarketplaceService : IDisposable
     {
         ThrowIfDisposed();
         var source = LoadSource();
+        EnsureLocalCatalog();
         var catalogBytes = await DownloadBytesAsync(source.CatalogUrl, MaximumCatalogBytes, cancellationToken).ConfigureAwait(false);
         var signatureBytes = await DownloadBytesAsync(source.SignatureUrl, 64 * 1024, cancellationToken).ConfigureAwait(false);
         VerifySignature(source.PublicKeyPem, catalogBytes, signatureBytes);
@@ -56,11 +60,22 @@ public sealed class AddonMarketplaceService : IDisposable
             throw new InvalidDataException("Marketplace catalog contains invalid JSON.", ex);
         }
 
-        var merged = MergeCatalogs(LoadLocalCatalogArray(), marketplace);
+        var merged = MergeCatalogs(LoadCatalogArray(_localAddonsPath, "Local ADDONS catalog"), marketplace);
         ValidateCatalogWithAddonCatalog(merged);
         Directory.CreateDirectory(Path.GetDirectoryName(_addonsPath)!);
         AtomicWrite(_addonsPath, merged.ToJsonString(JsonOptions));
         return new AddonCatalog(_rootPath).GetAddons();
+    }
+
+    public void SaveLocalCatalog(IReadOnlyList<AddonDefinition> addons)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(addons);
+        var array = JsonSerializer.SerializeToNode(addons.Select(ToManifestEntry).ToArray(), JsonOptions) as JsonArray
+            ?? throw new InvalidDataException("Unable to serialize the local ADDONS catalog.");
+        ValidateCatalogWithAddonCatalog(array);
+        Directory.CreateDirectory(Path.GetDirectoryName(_localAddonsPath)!);
+        AtomicWrite(_localAddonsPath, array.ToJsonString(JsonOptions));
     }
 
     public async Task InstallOrUpdateAsync(string key, bool syncFirst = true, CancellationToken cancellationToken = default)
@@ -111,17 +126,28 @@ public sealed class AddonMarketplaceService : IDisposable
         }
     }
 
-    private JsonArray LoadLocalCatalogArray()
+    private void EnsureLocalCatalog()
     {
+        if (File.Exists(_localAddonsPath))
+            return;
+
         _ = new AddonCatalog(_rootPath).GetAddons();
+        var local = LoadCatalogArray(_addonsPath, "ADDONS catalog");
+        ValidateCatalogWithAddonCatalog(local);
+        Directory.CreateDirectory(Path.GetDirectoryName(_localAddonsPath)!);
+        AtomicWrite(_localAddonsPath, local.ToJsonString(JsonOptions));
+    }
+
+    private static JsonArray LoadCatalogArray(string path, string label)
+    {
         try
         {
-            return JsonNode.Parse(File.ReadAllText(_addonsPath)) as JsonArray
-                ?? throw new InvalidDataException("Local ADDONS catalog root must be a JSON array.");
+            return JsonNode.Parse(File.ReadAllText(path)) as JsonArray
+                ?? throw new InvalidDataException($"{label} root must be a JSON array.");
         }
         catch (JsonException ex)
         {
-            throw new InvalidDataException("Local ADDONS catalog contains invalid JSON.", ex);
+            throw new InvalidDataException($"{label} contains invalid JSON.", ex);
         }
     }
 
@@ -222,6 +248,21 @@ public sealed class AddonMarketplaceService : IDisposable
         if (string.IsNullOrWhiteSpace(source.PublicKeyPem) || !source.PublicKeyPem.Contains("BEGIN PUBLIC KEY", StringComparison.Ordinal))
             throw new InvalidDataException("Marketplace source requires an RSA public key in PEM format.");
     }
+
+    private static object ToManifestEntry(AddonDefinition addon) => new
+    {
+        key = addon.Key,
+        displayName = addon.DisplayName,
+        description = addon.Description,
+        installRelativePath = addon.InstallPath.Replace('\\', '/'),
+        entryPointRelativePath = addon.EntryPointPath.Replace('\\', '/'),
+        localUrl = addon.LocalUrl,
+        requiredPhpExtensions = addon.RequiredPhpExtensions,
+        version = addon.Version,
+        downloadUrl = addon.DownloadUrl,
+        sha256 = addon.Sha256,
+        archiveRootDirectory = addon.ArchiveRootDirectory
+    };
 
     private static void AtomicWrite(string path, string content)
     {
