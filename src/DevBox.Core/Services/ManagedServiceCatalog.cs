@@ -45,8 +45,35 @@ public sealed partial class ManagedServiceCatalog
     {
         return GetManifests()
             .Where(manifest => manifest.Enabled)
-            .Select(ToDefinition)
+            .Select(GetDefinition)
             .ToArray();
+    }
+
+    public ServiceDefinition GetDefinition(ManagedServiceManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        Validate(manifest);
+        var executable = ResolveRelativeFile(manifest.ExecutableRelativePath, nameof(manifest.ExecutableRelativePath));
+        var workingDirectory = ResolveRelativeDirectory(manifest.WorkingDirectoryRelativePath, nameof(manifest.WorkingDirectoryRelativePath));
+        var stopExecutable = string.IsNullOrWhiteSpace(manifest.StopExecutableRelativePath)
+            ? null
+            : ResolveRelativeFile(manifest.StopExecutableRelativePath, nameof(manifest.StopExecutableRelativePath));
+        var logPath = string.IsNullOrWhiteSpace(manifest.LogRelativePath)
+            ? Path.Combine(_rootPath, "logs", $"{manifest.Key}-process.log")
+            : ResolveRelativeFile(manifest.LogRelativePath, nameof(manifest.LogRelativePath));
+
+        return new ServiceDefinition(
+            manifest.Key,
+            manifest.DisplayName,
+            executable,
+            manifest.Arguments.ToArray(),
+            workingDirectory,
+            manifest.Port,
+            manifest.Version,
+            stopExecutable,
+            manifest.StopArguments?.ToArray(),
+            TimeSpan.FromSeconds(manifest.GracefulStopTimeoutSeconds),
+            logPath);
     }
 
     public void Save(IReadOnlyCollection<ManagedServiceManifest> manifests)
@@ -109,31 +136,6 @@ public sealed partial class ManagedServiceCatalog
         "current",
         Enabled: true,
         LogRelativePath: "logs/redis-process.log");
-
-    private ServiceDefinition ToDefinition(ManagedServiceManifest manifest)
-    {
-        var executable = ResolveRelativeFile(manifest.ExecutableRelativePath, nameof(manifest.ExecutableRelativePath));
-        var workingDirectory = ResolveRelativeDirectory(manifest.WorkingDirectoryRelativePath, nameof(manifest.WorkingDirectoryRelativePath));
-        var stopExecutable = string.IsNullOrWhiteSpace(manifest.StopExecutableRelativePath)
-            ? null
-            : ResolveRelativeFile(manifest.StopExecutableRelativePath, nameof(manifest.StopExecutableRelativePath));
-        var logPath = string.IsNullOrWhiteSpace(manifest.LogRelativePath)
-            ? Path.Combine(_rootPath, "logs", $"{manifest.Key}-process.log")
-            : ResolveRelativeFile(manifest.LogRelativePath, nameof(manifest.LogRelativePath));
-
-        return new ServiceDefinition(
-            manifest.Key,
-            manifest.DisplayName,
-            executable,
-            manifest.Arguments.ToArray(),
-            workingDirectory,
-            manifest.Port,
-            manifest.Version,
-            stopExecutable,
-            manifest.StopArguments?.ToArray(),
-            TimeSpan.FromSeconds(manifest.GracefulStopTimeoutSeconds),
-            logPath);
-    }
 
     private void ValidateAll(IEnumerable<ManagedServiceManifest> manifests)
     {
