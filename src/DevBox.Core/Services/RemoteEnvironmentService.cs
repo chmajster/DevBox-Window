@@ -38,7 +38,7 @@ public sealed class RemoteEnvironmentService
             Https = lockFile.Https,
             Addons = lockFile.Addons,
             Services = lockFile.Services,
-            Actions = Array.Empty<ProjectActionDefinition>(),
+            Actions = lockFile.Actions,
             Description = $"Portable environment definition exported from {lockFile.ProjectName}. Database name, project actions and sensitive authentication material are intentionally excluded."
         };
         return Export(profile, $"project-{lockFile.ProjectName}", destinationPath);
