@@ -4,9 +4,12 @@ namespace DevBox.Core.Services;
 
 public sealed class ServiceCatalog
 {
+    private readonly ManagedServiceCatalog _managedServices;
+
     public ServiceCatalog(string rootPath)
     {
         RootPath = Path.GetFullPath(rootPath);
+        _managedServices = new ManagedServiceCatalog(RootPath);
     }
 
     public string RootPath { get; }
@@ -44,6 +47,22 @@ public sealed class ServiceCatalog
                 TimeSpan.FromSeconds(6),
                 At("logs", "mysql-process.log"))
         };
+    }
+
+    public IReadOnlyList<ServiceDefinition> GetServices()
+    {
+        var services = GetDefaultServices().Concat(_managedServices.GetEnabledDefinitions()).ToArray();
+        var duplicateKey = services.GroupBy(item => item.Key, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);
+        if (duplicateKey is not null)
+        {
+            throw new InvalidDataException($"Duplicate service key: {duplicateKey.Key}.");
+        }
+        var duplicatePort = services.GroupBy(item => item.Port).FirstOrDefault(group => group.Count() > 1);
+        if (duplicatePort is not null)
+        {
+            throw new InvalidDataException($"Multiple DevBox services use TCP port {duplicatePort.Key}.");
+        }
+        return services;
     }
 
     private string At(params string[] parts) => Path.Combine(new[] { RootPath }.Concat(parts).ToArray());
