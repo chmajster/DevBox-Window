@@ -9,4 +9,5 @@ public sealed record ProjectStackProfile(
     string DatabaseEngine,
     bool Https,
     IReadOnlyList<string> Addons,
+    IReadOnlyList<string> Services,
     string Description);
