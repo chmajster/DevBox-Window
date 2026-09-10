@@ -58,13 +58,14 @@ public sealed class DatabaseRuntimeService : IDisposable
             throw new FileNotFoundException($"{DisplayEngine(kind)} server executable was not found for version {version}.", executable);
 
         var registrations = LoadRegistrations().ToList();
-        var selectedPort = port ?? ChooseAvailablePort(kind, registrations);
+        var index = registrations.FindIndex(item => item.Engine.Equals(normalizedEngine, StringComparison.OrdinalIgnoreCase) && item.Version.Equals(version, StringComparison.OrdinalIgnoreCase));
+        var existing = index >= 0 ? registrations[index] : null;
+        var selectedPort = port ?? existing?.Port ?? ChooseAvailablePort(kind, registrations);
         if (selectedPort is < 1 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(port), "Database port must be between 1 and 65535.");
         if (registrations.Any(item => item.Port == selectedPort && !(item.Engine.Equals(normalizedEngine, StringComparison.OrdinalIgnoreCase) && item.Version.Equals(version, StringComparison.OrdinalIgnoreCase))))
             throw new InvalidOperationException($"Port {selectedPort} is already assigned to another DevBox database runtime.");
 
-        var index = registrations.FindIndex(item => item.Engine.Equals(normalizedEngine, StringComparison.OrdinalIgnoreCase) && item.Version.Equals(version, StringComparison.OrdinalIgnoreCase));
         var registration = new DatabaseRuntimeRegistration(normalizedEngine, version, selectedPort);
         if (index >= 0)
             registrations[index] = registration;
@@ -153,8 +154,9 @@ public sealed class DatabaseRuntimeService : IDisposable
 
     public async Task<ServiceSnapshot> RestartAsync(string engine, string version, DatabaseConnectionOptions? credentials = null, CancellationToken cancellationToken = default)
     {
+        var registration = GetRegistration(engine, version);
         await StopAsync(engine, version, credentials, cancellationToken).ConfigureAwait(false);
-        return await StartAsync(engine, version, null, cancellationToken).ConfigureAwait(false);
+        return await StartAsync(engine, version, registration.Port, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<DatabaseBackupResult> BackupAsync(
