@@ -39,7 +39,7 @@ public partial class MainWindow : Window
         var tools = FindButton(this, "Tools");
         if (tools?.Parent is not StackPanel panel)
             return;
-        var button = new Button
+        var button = new System.Windows.Controls.Button
         {
             Content = "Environment Center",
             Style = (Style)FindResource("SidebarButton")
@@ -49,11 +49,11 @@ public partial class MainWindow : Window
         panel.Children.Insert(index < 0 ? panel.Children.Count : index + 1, button);
     }
 
-    private static Button? FindButton(DependencyObject parent, string content)
+    private static System.Windows.Controls.Button? FindButton(DependencyObject parent, string content)
     {
         foreach (var child in LogicalTreeHelper.GetChildren(parent))
         {
-            if (child is Button button && string.Equals(button.Content?.ToString(), content, StringComparison.Ordinal))
+            if (child is System.Windows.Controls.Button button && string.Equals(button.Content?.ToString(), content, StringComparison.Ordinal))
                 return button;
             if (child is DependencyObject dependency)
             {
