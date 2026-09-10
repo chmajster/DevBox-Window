@@ -39,6 +39,7 @@ All notable changes to DevBox Windows are documented here.
 
 ### Fixed
 
+- Release and CI packaging no longer copy the CLI over the case-insensitively identical `DevBox.exe` GUI path on Windows. The GUI executable now keeps its embedded application icon and starts normally after installation, while the CLI is packaged separately as `cli\devbox.exe`.
 - Sites pinned to a specific PHP version now ensure their dedicated FastCGI pool is running before opening over either HTTP or HTTPS instead of always starting the global PHP service.
 - Asynchronous WPF commands now contain and trace unexpected exceptions at the command boundary instead of leaking them through `async void` execution.
 - Dashboard refreshes are non-reentrant, run every two seconds, and throttle expensive ADDONS health checks to a 15-second cadence.

@@ -1,6 +1,6 @@
 # DevBox Windows
 
-DevBox Windows is a native Windows local-development environment built with .NET 8 and WPF. It manages native Nginx, PHP FastCGI and MySQL processes without Docker, supports optional local services and keeps the development environment under one portable DevBox root. A standalone `devbox.exe` CLI exposes the same core runtime and project operations for automation.
+DevBox Windows is a native Windows local-development environment built with .NET 8 and WPF. It manages native Nginx, PHP FastCGI and MySQL processes without Docker, supports optional local services and keeps the development environment under one portable DevBox root. A standalone `cli\devbox.exe` CLI exposes the same core runtime and project operations for automation.
 
 Current application version: `0.2.2`.
 
@@ -116,17 +116,17 @@ SHA-256: 2d2e13c735366d318425c78e4ee2cc8fc648d77faba3ddea2cd516e43885733f
 
 ### CLI
 
-The packaged application includes `devbox.exe`, a self-contained CLI backed by `DevBox.Core` rather than a separate implementation.
+The packaged application includes `cli\devbox.exe`, a self-contained CLI backed by `DevBox.Core` rather than a separate implementation. It is deliberately stored in a separate directory because Windows treats `DevBox.exe` and `devbox.exe` as the same filename; `DevBox.exe` is reserved for the WPF GUI.
 
 ```text
-devbox status [all|service]
-devbox start [all|service]
-devbox stop [all|service]
-devbox restart [all|service]
-devbox site create <name> [domain]
-devbox php use <version>
-devbox db create <name> [mysql|mariadb|postgresql]
-devbox addon install <key>
+cli\devbox status [all|service]
+cli\devbox start [all|service]
+cli\devbox stop [all|service]
+cli\devbox restart [all|service]
+cli\devbox site create <name> [domain]
+cli\devbox php use <version>
+cli\devbox db create <name> [mysql|mariadb|postgresql]
+cli\devbox addon install <key>
 ```
 
 `DEVBOX_ROOT` can explicitly target another portable DevBox root.
@@ -146,7 +146,8 @@ Third-party runtime binaries are not committed to Git. Release builds download s
 ```text
 DevBox/
   DevBox.exe
-  devbox.exe
+  cli/
+    devbox.exe
   config/
     addons.json
     appsettings.json
@@ -227,7 +228,7 @@ Pull requests run Windows CI with:
 - Release build,
 - tests and coverage collection,
 - self-contained `win-x64` GUI publish,
-- self-contained single-file `devbox.exe` publish,
+- self-contained single-file `devbox.exe` CLI publish into `cli\`,
 - installer compilation against the combined GUI + CLI layout.
 
 CodeQL scans C# separately. Dependabot monitors NuGet and GitHub Actions dependencies.
@@ -245,7 +246,7 @@ Normal pushes to `main` do not execute the release job.
 A publishing run builds:
 
 - self-contained GUI `win-x64` and `win-arm64`,
-- self-contained single-file CLI `devbox.exe` for x64 and ARM64,
+- self-contained single-file CLI `cli\devbox.exe` for x64 and ARM64,
 - bundled Nginx, PHP FastCGI and MySQL runtime payloads,
 - `runtime/bundled-runtimes.json` with source and checksum metadata,
 - portable ZIP archives,
