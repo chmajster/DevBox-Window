@@ -118,6 +118,8 @@ public sealed class ProjectTransferService
 
             UpdateManifestIdentity(stagedProject, name, domain);
             var destination = Path.Combine(_wwwRoot, name);
+            var siteRollback = CaptureSiteState(name);
+            var movedDatabaseBackups = new List<string>();
             string? previous = null;
             if (Directory.Exists(destination))
             {
@@ -131,13 +133,16 @@ public sealed class ProjectTransferService
             {
                 Directory.Move(stagedProject, destination);
                 RegisterImportedSite(destination, name, domain);
-                MoveDatabaseBackups(tempRoot, name);
+                MoveDatabaseBackups(tempRoot, name, movedDatabaseBackups);
             }
             catch
             {
+                foreach (var path in movedDatabaseBackups)
+                    TryDeleteFile(path);
                 TryDeleteDirectory(destination);
                 if (previous is not null && Directory.Exists(previous))
                     Directory.Move(previous, destination);
+                RestoreSiteState(name, domain, siteRollback);
                 throw;
             }
 
@@ -149,6 +154,40 @@ public sealed class ProjectTransferService
         {
             TryDeleteDirectory(tempRoot);
         }
+    }
+
+    private SiteRollbackState CaptureSiteState(string name)
+    {
+        var site = _sites.GetSites().FirstOrDefault(item => item.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (site is null)
+            return new SiteRollbackState(null, null, null);
+        var certPath = CertificatePath(site.Domain);
+        var keyPath = PrivateKeyPath(site.Domain);
+        return new SiteRollbackState(
+            site,
+            File.Exists(certPath) ? File.ReadAllBytes(certPath) : null,
+            File.Exists(keyPath) ? File.ReadAllBytes(keyPath) : null);
+    }
+
+    private void RestoreSiteState(string name, string importedDomain, SiteRollbackState rollback)
+    {
+        var current = _sites.GetSites().FirstOrDefault(item => item.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (rollback.Site is null)
+        {
+            if (current is not null)
+                _sites.Delete(name, deleteDocumentRoot: false);
+            DeleteCertificateFiles(importedDomain);
+            return;
+        }
+
+        if (current is null)
+            _ = _sites.Create(rollback.Site.Name, rollback.Site.Domain, rollback.Site.DocumentRoot);
+        _ = _sites.Update(rollback.Site);
+
+        if (!importedDomain.Equals(rollback.Site.Domain, StringComparison.OrdinalIgnoreCase))
+            DeleteCertificateFiles(importedDomain);
+        RestoreBytes(CertificatePath(rollback.Site.Domain), rollback.Certificate);
+        RestoreBytes(PrivateKeyPath(rollback.Site.Domain), rollback.PrivateKey);
     }
 
     private void RegisterImportedSite(string projectRoot, string name, string domain)
@@ -163,10 +202,7 @@ public sealed class ProjectTransferService
         var existing = _sites.GetSites().FirstOrDefault(item => item.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
 
         if (existing is not null && !existing.Domain.Equals(domain, StringComparison.OrdinalIgnoreCase))
-        {
-            try { new LocalCertificateManager(_rootPath).Delete(existing.Domain); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) { }
-        }
+            DeleteCertificateFiles(existing.Domain);
 
         if (https)
         {
@@ -175,17 +211,19 @@ public sealed class ProjectTransferService
             else
                 _ = new LocalCertificateManager(_rootPath).Ensure(domain);
         }
+        else
+        {
+            DeleteCertificateFiles(domain);
+        }
 
         if (existing is null)
-        {
             _ = _sites.Create(name, domain, documentRoot);
-        }
 
         var desired = new SiteDefinition(name, domain, documentRoot, "php", phpVersion, https);
         _ = _sites.Update(desired);
     }
 
-    private void MoveDatabaseBackups(string tempRoot, string projectName)
+    private void MoveDatabaseBackups(string tempRoot, string projectName, ICollection<string> movedTargets)
     {
         var source = Path.Combine(tempRoot, "database");
         if (!Directory.Exists(source))
@@ -198,6 +236,7 @@ public sealed class ProjectTransferService
             if (File.Exists(target))
                 target = Path.Combine(destination, $"{Path.GetFileNameWithoutExtension(file)}-{Guid.NewGuid():N}{Path.GetExtension(file)}");
             File.Move(file, target);
+            movedTargets.Add(target);
         }
     }
 
@@ -318,6 +357,45 @@ public sealed class ProjectTransferService
         }
     }
 
+    private string CertificatePath(string domain) => Path.Combine(_rootPath, "config", "ssl", "sites", $"{domain}.crt.pem");
+    private string PrivateKeyPath(string domain) => Path.Combine(_rootPath, "config", "ssl", "sites", $"{domain}.key.pem");
+
+    private void DeleteCertificateFiles(string domain)
+    {
+        try
+        {
+            new LocalCertificateManager(_rootPath).Delete(domain);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.Security.Cryptography.CryptographicException)
+        {
+            TryDeleteFile(CertificatePath(domain));
+            TryDeleteFile(PrivateKeyPath(domain));
+        }
+    }
+
+    private static void RestoreBytes(string path, byte[]? content)
+    {
+        if (content is null)
+        {
+            TryDeleteFile(path);
+            return;
+        }
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temp = path + $".{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllBytes(temp, content);
+            if (File.Exists(path))
+                File.Replace(temp, path, null);
+            else
+                File.Move(temp, path);
+        }
+        finally
+        {
+            TryDeleteFile(temp);
+        }
+    }
+
     private static JsonNode? FindProperty(JsonObject value, string name)
     {
         foreach (var pair in value)
@@ -376,8 +454,7 @@ public sealed class ProjectTransferService
         }
         finally
         {
-            if (File.Exists(temp))
-                File.Delete(temp);
+            TryDeleteFile(temp);
         }
     }
 
@@ -391,6 +468,19 @@ public sealed class ProjectTransferService
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
     }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    private sealed record SiteRollbackState(SiteDefinition? Site, byte[]? Certificate, byte[]? PrivateKey);
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
 }
