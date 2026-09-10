@@ -127,6 +127,66 @@ public sealed class EnvironmentPlatformFollowupTests
         }
     }
 
+    [Fact]
+    public void SiteRegistration_RemovesVhostWhenMetadataPersistenceFails()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var project = Path.Combine(root, "www", "registration-rollback");
+            Directory.CreateDirectory(project);
+            File.WriteAllText(Path.Combine(project, "index.html"), "fixture");
+
+            // A directory at the metadata path makes the final atomic move fail after
+            // the vhost has already been staged, exercising registration rollback.
+            Directory.CreateDirectory(Path.Combine(root, "config", "sites.json"));
+
+            var sites = new SiteManager(root);
+            Assert.ThrowsAny<IOException>(() =>
+                sites.RegisterExisting("registration-rollback", "registration-rollback.test", project));
+
+            Assert.False(File.Exists(Path.Combine(
+                root,
+                "config",
+                "nginx",
+                "sites-enabled",
+                "registration-rollback.test.conf")));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void LocalCa_ReplacesCorruptExistingLeafPem()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var root = TemporaryRoot();
+        try
+        {
+            var sitesDirectory = Path.Combine(root, "config", "ssl", "sites");
+            Directory.CreateDirectory(sitesDirectory);
+            var certificatePath = Path.Combine(sitesDirectory, "corrupt-leaf.test.crt.pem");
+            var privateKeyPath = Path.Combine(sitesDirectory, "corrupt-leaf.test.key.pem");
+            File.WriteAllText(certificatePath, "not-a-certificate");
+            File.WriteAllText(privateKeyPath, "not-a-private-key");
+
+            using var authority = new LocalCertificateAuthorityService(root);
+            using var certificate = authority.IssueSiteCertificate("corrupt-leaf.test", trustAuthority: false);
+
+            Assert.False(string.IsNullOrWhiteSpace(certificate.Thumbprint));
+            Assert.Contains("BEGIN CERTIFICATE", File.ReadAllText(certificatePath));
+            Assert.Contains("BEGIN PRIVATE KEY", File.ReadAllText(privateKeyPath));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
     private static string TemporaryRoot()
     {
         var root = Path.Combine(Path.GetTempPath(), "devbox-followup-tests", Guid.NewGuid().ToString("N"));
