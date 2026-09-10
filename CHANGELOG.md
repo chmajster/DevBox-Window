@@ -6,82 +6,72 @@ All notable changes to DevBox Windows are documented here.
 
 ### Added
 
+- WPF **Environment Center** as a separate feature window/ViewModel for Profiles/Lock & Drift, Runtime Platform, database runtimes, Task Center, Advanced Diagnostics, configuration management, snapshots/transfers, Git bootstrap, WordPress Toolkit, Local CA, DPAPI Secrets and ADDONS Marketplace.
+- **CLI 2.0** with `--json` support and commands for runtime lifecycle, database runtime lifecycle/backup/restore, environment profiles/lock/apply/drift/export/import, project snapshot/restore/export/import/clone/actions, diagnostics, secrets and WordPress workflows.
+- Runtime Platform with side-by-side versions, install/activate/downgrade/remove, architecture-aware catalog entries, support/EOL metadata and verified local runtime ZIP imports.
+- Full native MySQL, MariaDB and PostgreSQL runtime registration, initialization, start/stop/restart, per-version ports/data directories and backup/restore workflows.
+- Environment Profiles plus reproducible `devbox.lock.json` desired-state files covering runtimes, database configuration, HTTPS, ADDONS, managed services and ordered Project Actions.
+- Drift detection across runtime availability, database runtime/port, project manifest/Site state, ADDONS, Project Actions and HTTPS certificate material.
+- Declarative Project Actions restricted to approved tools and argument arrays; declaration order is preserved.
+- Project snapshots with optional DB payloads, safe restore, identity rewrite and deterministic restored-backup storage.
+- Safe project transfer/export/import with full Site state synchronization on overwrite.
+- Portable environment profile/lock export/import that explicitly excludes credentials.
+- Task Center with bounded concurrency, cancellation, progress and persisted history.
+- Advanced Diagnostics for filesystem, disk space, runtimes/EOL, services/ports, Sites/TLS, lock drift, configuration and stale transaction artifacts.
+- Validated Nginx/PHP/MySQL configuration editor with atomic save and backup/restore support.
+- Current-user Windows DPAPI secret store.
+- Shared DevBox Local Development CA with DPAPI-protected PFX password, current-user trust, per-site certificate issuance and CA rotation.
+- Signed ADDONS Marketplace using HTTPS plus detached RSA-SHA256 signatures and a separate persistent local catalog.
+- Git project bootstrap workflow for clone, stack detection, DevBox import/provisioning, optional environment profile application and safe bootstrap actions.
+- WordPress Toolkit using SHA-256-verified WP-CLI; sensitive database/admin values are supplied via stdin instead of ordinary process arguments.
+- Regression coverage for flat runtime archives, Project Action ordering, Task Center terminal states, portable environment metadata, snapshot rename/DB restore, environment-lock synchronization and marketplace revocation.
 - Project Manager WPF workflow for creating, importing, diagnosing, repairing and operating local projects.
 - Automatic stack detection for Laravel, Symfony, WordPress, Composer PHP and Node projects, including Composer `ext-*` requirement discovery.
 - Versioned per-project `devbox.json` manifests and persistent built-in/custom stack profiles.
 - Project Health and Repair checks for document roots, Nginx vhosts, PHP runtimes/extensions, manifests and local TLS files.
-- Safe predefined project command presets for Composer, npm, Laravel Artisan and Symfony Console workflows.
-- Project provisioning that combines Site registration, project metadata, database creation and optional managed-service declarations.
-- Multi-engine project database provisioning for MySQL, MariaDB and PostgreSQL using native clients without placing passwords on process command lines.
+- Project provisioning combining Site registration, project metadata, database creation and optional managed-service declarations.
 - MySQL database size/charset/collation metadata plus protected drop, clone and rename operations.
-- Manifest-driven optional services in `config/services.json` and integration with the existing DevBox process lifecycle.
-- Verified Mailpit `1.31.1` installer for Windows x64/ARM64 using pinned GitHub release SHA-256 values; web UI listens on `8025` and SMTP on `1025`.
-- Verified Microsoft Garnet `2.1.7` installer as the native Redis-compatible Windows service on `127.0.0.1:6379`, using pinned x64/ARM64 ReadyToRun package SHA-256 values.
-- Xdebug configuration UI and safe local DLL installation with PE validation, optional SHA-256 verification, atomic replacement and recorded provenance checksum.
-- Portable Node.js LTS `24.19.0` runtime catalog for Windows x64/ARM64 with pinned official SHA-256 values and versioned installation under `runtime/node/<version>`.
-- Per-project Node.js pinning: npm presets use the exact `NodeVersion` recorded in `devbox.json` instead of silently falling back to another Node.js installation from `PATH`.
-- Standalone `devbox.exe` CLI backed by `DevBox.Core`, with service status/start/stop/restart, Site creation, PHP runtime activation, database creation and ADDON installation commands.
-- Verified application self-update flow that downloads the stable release installer and `SHA256SUMS.txt`, checks the installer hash before execution, closes DevBox through the normal shutdown path and relaunches it after installation.
-- Release builds now package `devbox.exe` with the GUI application for both x64 and ARM64 portable layouts.
-- Release workflow support for Authenticode signing of DevBox-owned binaries and the installer when `WINDOWS_SIGNING_CERTIFICATE_BASE64` and `WINDOWS_SIGNING_CERTIFICATE_PASSWORD` secrets are configured.
-- CI now publishes the CLI as a self-contained single-file executable and validates that it is included in the installer input layout.
-- Official DevBox 0.2.2 release packages now bundle Nginx `1.31.5`, PHP FastCGI `8.5.10` NTS and MySQL `8.4.11` LTS under versioned `runtime/` directories.
-- First Run can activate a bundled runtime locally without making an HTTP request; PHP and Nginx retain their verified remote fallback when the bundle is absent.
-- Release packaging records upstream source URLs and calculated SHA-256 values in `runtime/bundled-runtimes.json`; PHP and Nginx archives are additionally verified against pinned SHA-256 values before extraction.
-- MySQL becomes an automatic First Run action when the packaged MySQL payload is available, while remote MySQL download remains disabled without a pinned SHA-256 source.
-- New DevBox application icon with editable SVG source and Windows ICO asset.
-- DevBox branding is now embedded in the executable, applied to WPF windows and used by the Inno Setup installer.
-- Installer now always exposes the installation directory so the target path can be changed.
-- Installer options now control desktop and Start menu shortcuts and whether DevBox starts after installation.
-- Existing DevBox installations are detected and presented with upgrade/update, reinstall, or uninstall maintenance actions.
-- Reinstall removes the existing package before continuing, while upgrade/update keeps the installation and replaces application files.
-- CI now compiles the Inno Setup script on pull requests to catch installer regressions before merge.
+- Manifest-driven optional services in `config/services.json` integrated with the DevBox process lifecycle.
+- Verified Mailpit `1.31.1`, Microsoft Garnet `2.1.7`, portable Node.js LTS `24.19.0` and local Xdebug binary workflows.
+- Verified application self-update flow with stable release resolution and installer SHA-256 verification.
+- Self-contained x64/ARM64 CLI packaging alongside the GUI and installer package-layout validation.
+- Optional Authenticode signing of DevBox-owned binaries and installer when signing secrets are configured.
+- Official DevBox 0.2.2 packages bundle Nginx `1.31.5`, PHP FastCGI `8.5.10` NTS and MySQL `8.4.11` LTS runtime payloads.
+- New DevBox application icon/branding and installer maintenance options for install path, shortcuts, launch-after-install, upgrade/update, reinstall and uninstall.
 
 ### Fixed
 
-- Sites pinned to a specific PHP version now ensure their dedicated FastCGI pool is running before opening over either HTTP or HTTPS instead of always starting the global PHP service.
-- Asynchronous WPF commands now contain and trace unexpected exceptions at the command boundary instead of leaking them through `async void` execution.
-- Dashboard refreshes are non-reentrant, run every two seconds, and throttle expensive ADDONS health checks to a 15-second cadence.
-- Site metadata validation now rejects duplicate names/domains/document roots and dedicated PHP versions that map to the same FastCGI port before accepting `sites.json`.
-- Service PID markers are written atomically and include process start time, reducing PID-reuse misidentification; failed post-start registration now terminates the partially started process.
-- MySQL shutdown can reuse the last successful connection credentials kept only in process memory before falling back to the standard managed-process stop path.
-- Windows autostart detection now requires an exact normalized `"DevBox.exe" --startup` command instead of accepting substring matches.
-- The Inno Setup fallback application version is aligned with DevBox `0.2.2`.
-- Managed-service discovery in Project Manager is side-effect free and no longer rewrites `services.json` while displaying disabled services.
-- Redis project profiles now map to the Windows-native Garnet executable instead of an unavailable `redis-server.exe` assumption.
-- Xdebug tests comply with the xUnit single-item analyzer and no longer stop Release builds before tests execute.
-- DevBox now stops managed Nginx, PHP and MySQL processes during application exit and can re-adopt processes recorded by a previous DevBox session.
-- Fresh MySQL data directories are initialized automatically before first startup, while partial/non-empty initialization states fail safely.
-- First Run is shown whenever any required environment component is incomplete, including manual-action items.
-- Composer, npm and pnpm `.cmd`/`.bat` launchers are executed through the Windows command processor.
-- Runtime versions are sorted semantically rather than lexicographically.
-- Runtime activation restores a service that was running before the switch, and PHP runtimes assigned to Sites cannot be removed.
-- Runtime discovery ignores transactional `.backup-*` directories left behind after interrupted replacement/rollback operations.
-- Bulk service actions continue after individual failures and report aggregate failures/missing runtimes.
-- Service shutdown falls back to managed process-tree termination when a configured graceful-stop executable is corrupt or cannot be launched.
-- Invalid service executables now fail with a controlled DevBox startup error instead of leaking the underlying Windows process-start exception.
-- Versioned PHP pool start/stop operations are serialized per version and PHP FastCGI port collisions are rejected when assigning runtimes to Sites.
-- Corrupt or non-executable versioned `php-cgi.exe` runtimes now fail with a controlled FastCGI startup error and release the failed process object.
-- ADDONS installation keeps the previous version until configuration succeeds and rolls back on configuration failure.
-- ADDONS checksum verification consistently accepts valid SHA-256 values with surrounding whitespace.
-- ADDONS manifests validate required fields before duplicate-key processing and reject installation directly into the shared `www` root.
-- ADDONS PHP extension requirements are normalized and validated before they can be written to `php.ini`, preventing malformed directive injection and false prerequisite failures.
-- phpMyAdmin Repair now regenerates an incomplete or damaged `config.inc.php`.
-- phpMyAdmin local cookie authentication permits the intentionally passwordless local MySQL root account.
-- Conflicting duplicate hosts-file entries for a DevBox domain are normalized to one loopback mapping.
-- Expired/replaced local TLS certificates are removed from the current-user trusted root store during rotation.
-- The Windows autostart setting is synchronized with the actual `HKCU\...\Run` registration.
-- Site document roots are constrained to the DevBox `www` directory.
-- Invalid or unsafe `config/sites.json` metadata is quarantined to a backup instead of crashing DevBox during startup or site refresh.
-- PHP extension configuration now matches only the exact `extension=` directive, so `extension_dir=` is never mistaken for a loaded module.
-- PHP extension parsing recognizes inline `php.ini` comments and extension toggling collapses duplicate entries to a single canonical directive.
-- PHP extension checks report the runtime as unavailable when PHP CLI cannot be started, including corrupt or non-executable runtime files.
-- Default MySQL shutdown explicitly uses the local root account and a bounded connection timeout before process termination fallback.
+- Flat runtime ZIP archives without `ArchiveRootDirectory` now use the extraction root while preserving traversal protection.
+- `EnvironmentLockService.ApplyLockAsync` now restores the complete locked state rather than only runtimes/database/actions; empty lists also clear stale actions/addons/services metadata.
+- Marketplace entries withdrawn upstream disappear after the next successful sync instead of becoming permanent local baseline entries.
+- Snapshot restore now restores `database/*` payloads and rewrites `devbox.json` / `devbox.lock.json` identity when restoring under another project name.
+- MySQL/MariaDB backup/restore semantics now allow a dump to be restored into the explicitly selected destination database.
+- Project Actions are no longer alphabetically reordered.
+- Portable environment exports no longer reject their own `containsSecrets=false` metadata while secret-like fields remain blocked.
+- Late Task Center progress callbacks can no longer change `Completed`, `Failed` or `Cancelled` tasks back to `Running`.
+- Project-transfer overwrite now updates complete Site domain/document-root/PHP/HTTPS state and regenerates the corresponding vhost/TLS state.
+- Duplicate `DiagnosticSeverity`, configuration tuple access, nullable `PhpPort` assumptions and WPF `Button` ambiguity compilation failures were corrected.
+- Sites pinned to a PHP version ensure their dedicated FastCGI pool is running before opening.
+- Asynchronous WPF commands contain and trace unexpected exceptions at the command boundary.
+- Dashboard refresh is non-reentrant and expensive ADDONS checks are throttled.
+- Site metadata rejects duplicate names/domains/document roots and PHP-port collisions; invalid metadata is quarantined.
+- Service PID markers are atomic and include process start time; failed post-start registration terminates the partial process.
+- Runtime activation restores a previously running service; assigned PHP runtimes cannot be removed; transactional backup directories are ignored by discovery.
+- MySQL shutdown can reuse last successful in-memory credentials before managed-process fallback.
+- Managed-service discovery is side-effect free and Redis project profiles target Garnet on Windows.
+- MySQL data directories initialize safely on first start and partial initialization fails closed.
+- Composer/npm/pnpm Windows launcher handling, semantic runtime sorting, bulk service failure aggregation and graceful-stop fallbacks were hardened.
+- ADDONS install/rollback, checksum handling, manifest/path validation, PHP-extension validation and phpMyAdmin repair/passwordless-local-root behavior were corrected.
+- Hosts-file duplicate mappings, TLS certificate rotation, current-user autostart state, Site document-root boundaries and PHP extension parsing/toggling were hardened.
 
 ### Security
 
-- Runtime and ADDONS downloads now enforce explicit byte limits, and ZIP extraction enforces entry-count/extracted-size limits while rejecting traversal, NTFS alternate data streams, symbolic-link entries and suspicious compression ratios.
-- Bundled MySQL packaging verifies the vendor-published digest before extraction and records SHA-256 provenance for the packaged archive.
+- Runtime and ADDONS downloads enforce byte limits; archive extraction enforces entry-count/extracted-size limits and rejects traversal, NTFS alternate data streams, symlink/reparse entries and suspicious compression ratios.
+- Environment/project archive restore validates paths and limits before writing data.
+- Runtime, addon and marketplace payloads use pinned checksum/signature verification where applicable.
+- Project Actions do not accept arbitrary shell text.
+- Database, WordPress and secret workflows keep passwords/tokens/private keys out of ordinary process command arguments, exports and routine logs.
+- Shared Local CA private material is protected with current-user DPAPI and trust is scoped to the current-user certificate store.
 
 ## 0.2.1 - 2026-09-09
 
@@ -89,7 +79,7 @@ All notable changes to DevBox Windows are documented here.
 
 - Closing the First Run dialog no longer shuts down DevBox before the main dashboard is shown.
 - `Continue to DevBox` now closes only the setup dialog and continues into the main window.
-- First Run runtime `Install` buttons now use an explicit ancestor binding to the setup ViewModel command.
+- First Run runtime `Install` buttons use an explicit ancestor binding to the setup ViewModel command.
 - `Install` is disabled for checks that are already ready or require manual action, including MySQL when no verified automatic package is available.
 
 ## 0.2.0 - 2026-09-09
