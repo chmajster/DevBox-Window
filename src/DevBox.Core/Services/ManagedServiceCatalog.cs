@@ -113,7 +113,7 @@ public sealed partial class ManagedServiceCatalog
         return removed;
     }
 
-    public static ManagedServiceManifest MailpitTemplate() => new(
+    public static ManagedServiceManifest MailpitTemplate(string version = "current") => new(
         ManagedServiceManifest.CurrentSchemaVersion,
         "mailpit",
         "Mailpit",
@@ -121,19 +121,19 @@ public sealed partial class ManagedServiceCatalog
         ["--listen", "127.0.0.1:8025", "--smtp", "127.0.0.1:1025"],
         ".",
         8025,
-        "current",
+        version,
         Enabled: true,
         LogRelativePath: "logs/mailpit-process.log");
 
-    public static ManagedServiceManifest RedisTemplate() => new(
+    public static ManagedServiceManifest RedisTemplate(string version = "current") => new(
         ManagedServiceManifest.CurrentSchemaVersion,
         "redis",
-        "Redis-compatible server",
-        "runtime/redis/current/redis-server.exe",
+        "Garnet (Redis-compatible)",
+        "runtime/redis/current/GarnetServer.exe",
         ["--bind", "127.0.0.1", "--port", "6379"],
         ".",
         6379,
-        "current",
+        version,
         Enabled: true,
         LogRelativePath: "logs/redis-process.log");
 
