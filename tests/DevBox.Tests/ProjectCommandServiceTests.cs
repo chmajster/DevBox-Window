@@ -1,3 +1,4 @@
+using DevBox.Core.Models;
 using DevBox.Core.Services;
 using Xunit;
 
@@ -26,6 +27,77 @@ public sealed class ProjectCommandServiceTests
             Assert.Contains(presets, preset => preset.Key == "laravel-migrate");
             Assert.Contains(presets, preset => preset.Key == "laravel-optimize-clear");
             Assert.DoesNotContain(presets, preset => preset.Arguments.Any(argument => argument.Contains("cmd.exe", StringComparison.OrdinalIgnoreCase)));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void ResolveTool_UsesNodeVersionPinnedByProjectManifest()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            RuntimeLayout.EnsureInitialized(root);
+            var project = Path.Combine(root, "www", "demo");
+            Directory.CreateDirectory(project);
+            File.WriteAllText(Path.Combine(project, "package.json"), "{}");
+            var runtime = Path.Combine(root, "runtime", "node", NodeRuntimeCatalog.RecommendedVersion);
+            Directory.CreateDirectory(runtime);
+            var npm = Path.Combine(runtime, "npm.cmd");
+            File.WriteAllText(npm, "@echo off");
+
+            var workspace = CreateWorkspace(root);
+            workspace.SaveManifest(project, new DevBoxProjectManifest(
+                DevBoxProjectManifest.CurrentSchemaVersion,
+                "demo",
+                "demo.test",
+                ProjectKind.Php,
+                null,
+                NodeRuntimeCatalog.RecommendedVersion,
+                "none",
+                null,
+                false,
+                Array.Empty<string>(),
+                Array.Empty<string>()));
+            var service = new ProjectCommandService(root, workspace);
+
+            Assert.Equal(npm, service.ResolveTool("npm", project));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void ResolveTool_DoesNotFallBackWhenPinnedNodeIsMissing()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            RuntimeLayout.EnsureInitialized(root);
+            var project = Path.Combine(root, "www", "demo");
+            Directory.CreateDirectory(project);
+            File.WriteAllText(Path.Combine(project, "package.json"), "{}");
+            var workspace = CreateWorkspace(root);
+            workspace.SaveManifest(project, new DevBoxProjectManifest(
+                DevBoxProjectManifest.CurrentSchemaVersion,
+                "demo",
+                "demo.test",
+                ProjectKind.Php,
+                null,
+                "99.0.0",
+                "none",
+                null,
+                false,
+                Array.Empty<string>(),
+                Array.Empty<string>()));
+            var service = new ProjectCommandService(root, workspace);
+
+            Assert.Throws<FileNotFoundException>(() => service.ResolveTool("npm", project));
         }
         finally
         {
@@ -74,13 +146,18 @@ public sealed class ProjectCommandServiceTests
 
     private static ProjectCommandService CreateService(string root)
     {
+        var workspace = CreateWorkspace(root);
+        return new ProjectCommandService(root, workspace);
+    }
+
+    private static ProjectWorkspaceService CreateWorkspace(string root)
+    {
         var siteManager = new SiteManager(root);
-        var workspace = new ProjectWorkspaceService(
+        return new ProjectWorkspaceService(
             root,
             siteManager,
             new PhpExtensionInspector(root),
             new LocalCertificateManager(root));
-        return new ProjectCommandService(root, workspace);
     }
 
     private static string TemporaryRoot()
@@ -92,9 +169,6 @@ public sealed class ProjectCommandServiceTests
 
     private static void DeleteRoot(string root)
     {
-        if (Directory.Exists(root))
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
     }
 }
