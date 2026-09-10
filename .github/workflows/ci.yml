@@ -34,8 +34,19 @@ jobs:
       - name: Test
         run: dotnet test DevBox.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --collect "XPlat Code Coverage"
 
-      - name: Publish win-x64
+      - name: Publish GUI win-x64
         run: dotnet publish src/DevBox.App/DevBox.App.csproj --configuration Release --runtime win-x64 --self-contained true --output artifacts/win-x64
+
+      - name: Publish CLI win-x64
+        run: dotnet publish src/DevBox.Cli/DevBox.Cli.csproj --configuration Release --runtime win-x64 --self-contained true --output artifacts/cli-win-x64 /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true
+
+      - name: Add CLI to application layout
+        shell: pwsh
+        run: |
+          if (-not (Test-Path artifacts/cli-win-x64/devbox.exe)) {
+            throw "CLI publish did not produce devbox.exe"
+          }
+          Copy-Item artifacts/cli-win-x64/devbox.exe artifacts/win-x64/devbox.exe -Force
 
       - name: Ensure Inno Setup
         shell: pwsh
