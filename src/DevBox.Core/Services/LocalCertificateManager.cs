@@ -17,7 +17,7 @@ public sealed partial class LocalCertificateManager
 
     public LocalCertificate Ensure(string domain)
     {
-        var normalizedDomain = ValidateDomain(domain);
+        var normalizedDomain = NormalizeDomain(domain);
         Directory.CreateDirectory(_certificateRoot);
         var certificatePath = CertificatePath(normalizedDomain);
         var privateKeyPath = PrivateKeyPath(normalizedDomain);
@@ -75,7 +75,7 @@ public sealed partial class LocalCertificateManager
 
     public bool IsTrustedForCurrentUser(string domain)
     {
-        var certificatePath = CertificatePath(ValidateDomain(domain));
+        var certificatePath = CertificatePath(NormalizeDomain(domain));
         if (!File.Exists(certificatePath))
         {
             return false;
@@ -101,7 +101,7 @@ public sealed partial class LocalCertificateManager
 
     public void UntrustForCurrentUser(string domain)
     {
-        var certificatePath = CertificatePath(ValidateDomain(domain));
+        var certificatePath = CertificatePath(NormalizeDomain(domain));
         if (!File.Exists(certificatePath))
         {
             return;
@@ -113,7 +113,7 @@ public sealed partial class LocalCertificateManager
 
     public void Delete(string domain)
     {
-        var normalizedDomain = ValidateDomain(domain);
+        var normalizedDomain = NormalizeDomain(domain);
         UntrustForCurrentUser(normalizedDomain);
         DeleteIfExists(CertificatePath(normalizedDomain));
         DeleteIfExists(PrivateKeyPath(normalizedDomain));
@@ -141,7 +141,7 @@ public sealed partial class LocalCertificateManager
             certificate.NotBefore.ToUniversalTime(),
             certificate.NotAfter.ToUniversalTime());
 
-    private static string ValidateDomain(string domain)
+    internal static string NormalizeDomain(string domain)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
         var normalized = domain.Trim().TrimEnd('.').ToLowerInvariant();
