@@ -296,18 +296,20 @@ public sealed class EnvironmentPlatformRegressionTests
 
             handler.Catalog = JsonSerializer.SerializeToUtf8Bytes(new[]
             {
-                new AddonDefinition(
-                    "remote-fixture",
-                    "Remote Fixture",
-                    "Regression fixture",
-                    "www/addons/remote-fixture",
-                    "index.php",
-                    "http://remote-fixture.test",
-                    Array.Empty<string>(),
-                    "1.0.0",
-                    "https://marketplace.test/remote-fixture.zip",
-                    new string('a', 64),
-                    string.Empty)
+                new
+                {
+                    Key = "remote-fixture",
+                    DisplayName = "Remote Fixture",
+                    Description = "Regression fixture",
+                    InstallRelativePath = "www/addons/remote-fixture",
+                    EntryPointRelativePath = "www/addons/remote-fixture/index.php",
+                    LocalUrl = "http://remote-fixture.test",
+                    RequiredPhpExtensions = Array.Empty<string>(),
+                    Version = "1.0.0",
+                    DownloadUrl = "https://marketplace.test/remote-fixture.zip",
+                    Sha256 = new string('a', 64),
+                    ArchiveRootDirectory = "remote-fixture"
+                }
             }, WebJson);
 
             var first = await marketplace.SyncAsync();
