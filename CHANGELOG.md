@@ -6,6 +6,10 @@ All notable changes to DevBox Windows are documented here.
 
 ### Added
 
+- Official DevBox 0.2.2 release packages now bundle Nginx `1.31.5`, PHP FastCGI `8.5.10` NTS and MySQL `8.4.11` LTS under versioned `runtime/` directories.
+- First Run can activate a bundled runtime locally without making an HTTP request; PHP and Nginx retain their verified remote fallback when the bundle is absent.
+- Release packaging records upstream source URLs and calculated SHA-256 values in `runtime/bundled-runtimes.json`; PHP and Nginx archives are additionally verified against pinned SHA-256 values before extraction.
+- MySQL becomes an automatic First Run action when the packaged MySQL payload is available, while remote MySQL download remains disabled without a pinned SHA-256 source.
 - New DevBox application icon with editable SVG source and Windows ICO asset.
 - DevBox branding is now embedded in the executable, applied to WPF windows and used by the Inno Setup installer.
 - Installer now always exposes the installation directory so the target path can be changed.
@@ -85,5 +89,5 @@ All notable changes to DevBox Windows are documented here.
 
 ### Known limitations
 
-- Built-in automatic MySQL download remains disabled until the package can satisfy the same pinned SHA-256 policy as other runtimes.
+- Built-in automatic MySQL download remains disabled until the package can satisfy the same pinned SHA-256 policy as other remote runtimes. Packaged DevBox 0.2.2 releases carry MySQL directly.
 - The generated Windows installer is not Authenticode code-signed.

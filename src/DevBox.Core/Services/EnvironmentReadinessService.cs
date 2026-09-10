@@ -17,6 +17,7 @@ public sealed class EnvironmentReadinessService
     public EnvironmentReadiness Check()
     {
         var automaticallyInstallable = _runtimeCatalog.GetRecommendedWindowsRuntimes()
+            .Where(runtime => runtime.HasRemotePackage || BundledRuntimeExists(runtime))
             .Select(runtime => runtime.Key)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -29,6 +30,17 @@ public sealed class EnvironmentReadinessService
             FileCheck("config", "PHP config", Path.Combine("config", "php", "php.ini")),
             FileCheck("config", "MySQL config", Path.Combine("config", "mysql", "my.ini"))
         ]);
+    }
+
+    private bool BundledRuntimeExists(RuntimeDefinition runtime)
+    {
+        var executablePath = Path.Combine(
+            _rootPath,
+            "runtime",
+            runtime.Key,
+            runtime.Version,
+            runtime.ExecutableRelativePath);
+        return File.Exists(executablePath);
     }
 
     private EnvironmentReadinessItem Runtime(
