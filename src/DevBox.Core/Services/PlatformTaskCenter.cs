@@ -29,7 +29,7 @@ public sealed class PlatformTaskCenter : IDisposable
     {
         ThrowIfDisposed();
         return _entries.Values
-            .Select(entry => entry.Snapshot)
+            .Select(entry => ReadSnapshot(entry))
             .OrderByDescending(item => item.CreatedAtUtc)
             .Take(Math.Clamp(limit, 1, 1000))
             .ToArray();
@@ -38,7 +38,7 @@ public sealed class PlatformTaskCenter : IDisposable
     public PlatformTaskSnapshot? GetTask(Guid id)
     {
         ThrowIfDisposed();
-        return _entries.TryGetValue(id, out var entry) ? entry.Snapshot : null;
+        return _entries.TryGetValue(id, out var entry) ? ReadSnapshot(entry) : null;
     }
 
     public Guid Enqueue(
@@ -75,8 +75,11 @@ public sealed class PlatformTaskCenter : IDisposable
         ThrowIfDisposed();
         if (!_entries.TryGetValue(id, out var entry) || entry.Cancellation is null)
             return false;
-        if (entry.Snapshot.State is PlatformTaskState.Completed or PlatformTaskState.Failed or PlatformTaskState.Cancelled)
-            return false;
+        lock (entry.Sync)
+        {
+            if (IsTerminal(entry.Snapshot.State))
+                return false;
+        }
         entry.Cancellation.Cancel();
         return true;
     }
@@ -88,7 +91,7 @@ public sealed class PlatformTaskCenter : IDisposable
             throw new KeyNotFoundException($"Task '{id}' was not found.");
         if (entry.Execution is not null)
             await entry.Execution.WaitAsync(cancellationToken).ConfigureAwait(false);
-        return entry.Snapshot;
+        return ReadSnapshot(entry);
     }
 
     public void ClearCompleted()
@@ -96,7 +99,7 @@ public sealed class PlatformTaskCenter : IDisposable
         ThrowIfDisposed();
         foreach (var pair in _entries.ToArray())
         {
-            if (pair.Value.Snapshot.State is not (PlatformTaskState.Completed or PlatformTaskState.Failed or PlatformTaskState.Cancelled))
+            if (!IsTerminal(ReadSnapshot(pair.Value).State))
                 continue;
             if (_entries.TryRemove(pair.Key, out var removed))
                 removed.Cancellation?.Dispose();
@@ -110,10 +113,7 @@ public sealed class PlatformTaskCenter : IDisposable
             return;
         _disposed = true;
         foreach (var entry in _entries.Values)
-        {
             entry.Cancellation?.Cancel();
-            entry.Cancellation?.Dispose();
-        }
         _parallelism.Dispose();
     }
 
@@ -122,22 +122,27 @@ public sealed class PlatformTaskCenter : IDisposable
         Func<IProgress<(double Progress, string? Message)>, CancellationToken, Task> operation)
     {
         var token = entry.Cancellation!.Token;
+        var acquired = false;
         try
         {
             await _parallelism.WaitAsync(token).ConfigureAwait(false);
+            acquired = true;
         }
         catch (OperationCanceledException)
         {
-            Update(entry, PlatformTaskState.Cancelled, entry.Snapshot.Progress, "Cancelled before execution.", null, finished: true);
+            Update(entry, PlatformTaskState.Cancelled, ReadSnapshot(entry).Progress, "Cancelled before execution.", null, finished: true);
             return;
         }
 
         try
         {
-            Update(entry, PlatformTaskState.Running, Math.Max(0, entry.Snapshot.Progress), "Running", null, started: true);
-            var progress = new Progress<(double Progress, string? Message)>(value =>
+            Update(entry, PlatformTaskState.Running, Math.Max(0, ReadSnapshot(entry).Progress), "Running", null, started: true);
+            var progress = new InlineProgress<(double Progress, string? Message)>(value =>
             {
-                var normalized = double.IsFinite(value.Progress) ? Math.Clamp(value.Progress, 0, 100) : entry.Snapshot.Progress;
+                var current = ReadSnapshot(entry);
+                if (IsTerminal(current.State))
+                    return;
+                var normalized = double.IsFinite(value.Progress) ? Math.Clamp(value.Progress, 0, 100) : current.Progress;
                 Update(entry, PlatformTaskState.Running, normalized, value.Message, null);
             });
             await operation(progress, token).ConfigureAwait(false);
@@ -145,15 +150,16 @@ public sealed class PlatformTaskCenter : IDisposable
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            Update(entry, PlatformTaskState.Cancelled, entry.Snapshot.Progress, "Cancelled", null, finished: true);
+            Update(entry, PlatformTaskState.Cancelled, ReadSnapshot(entry).Progress, "Cancelled", null, finished: true);
         }
         catch (Exception ex)
         {
-            Update(entry, PlatformTaskState.Failed, entry.Snapshot.Progress, "Failed", SanitizeError(ex), finished: true);
+            Update(entry, PlatformTaskState.Failed, ReadSnapshot(entry).Progress, "Failed", SanitizeError(ex), finished: true);
         }
         finally
         {
-            _parallelism.Release();
+            if (acquired)
+                _parallelism.Release();
         }
     }
 
@@ -166,9 +172,15 @@ public sealed class PlatformTaskCenter : IDisposable
         bool started = false,
         bool finished = false)
     {
+        PlatformTaskSnapshot published;
         lock (entry.Sync)
         {
             var current = entry.Snapshot;
+            if (IsTerminal(current.State) && !IsTerminal(state))
+                return;
+            if (IsTerminal(current.State) && IsTerminal(state) && current.State != state)
+                return;
+
             entry.Snapshot = current with
             {
                 State = state,
@@ -178,13 +190,16 @@ public sealed class PlatformTaskCenter : IDisposable
                 StartedAtUtc = started && current.StartedAtUtc is null ? DateTimeOffset.UtcNow : current.StartedAtUtc,
                 FinishedAtUtc = finished ? DateTimeOffset.UtcNow : current.FinishedAtUtc
             };
+            published = entry.Snapshot;
         }
-        Publish(entry, persist: finished);
+        Publish(published, persist: finished);
     }
 
-    private void Publish(TaskEntry entry, bool persist)
+    private void Publish(TaskEntry entry, bool persist) => Publish(ReadSnapshot(entry), persist);
+
+    private void Publish(PlatformTaskSnapshot snapshot, bool persist)
     {
-        TaskChanged?.Invoke(this, entry.Snapshot);
+        TaskChanged?.Invoke(this, snapshot);
         if (persist)
             PersistHistory();
     }
@@ -221,7 +236,7 @@ public sealed class PlatformTaskCenter : IDisposable
         lock (_historySync)
         {
             var values = _entries.Values
-                .Select(entry => entry.Snapshot)
+                .Select(ReadSnapshot)
                 .OrderByDescending(item => item.CreatedAtUtc)
                 .Take(500)
                 .ToArray();
@@ -243,6 +258,15 @@ public sealed class PlatformTaskCenter : IDisposable
         }
     }
 
+    private static PlatformTaskSnapshot ReadSnapshot(TaskEntry entry)
+    {
+        lock (entry.Sync)
+            return entry.Snapshot;
+    }
+
+    private static bool IsTerminal(PlatformTaskState state) =>
+        state is PlatformTaskState.Completed or PlatformTaskState.Failed or PlatformTaskState.Cancelled;
+
     private static string SanitizeError(Exception ex)
     {
         var message = ex.Message.Replace('\r', ' ').Replace('\n', ' ').Trim();
@@ -250,6 +274,12 @@ public sealed class PlatformTaskCenter : IDisposable
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
+
+    private sealed class InlineProgress<T>(Action<T> callback) : IProgress<T>
+    {
+        private readonly Action<T> _callback = callback ?? throw new ArgumentNullException(nameof(callback));
+        public void Report(T value) => _callback(value);
+    }
 
     private sealed class TaskEntry
     {
