@@ -105,6 +105,19 @@ public sealed class ProjectSnapshotService
                 throw new InvalidDataException("Snapshot does not contain devbox.json.");
 
             RewriteIdentity(staging, safeName);
+            JsonObject restoredManifest;
+            try
+            {
+                restoredManifest = JsonNode.Parse(File.ReadAllText(manifestPath)) as JsonObject
+                    ?? throw new InvalidDataException("Restored devbox.json must contain a JSON object.");
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidDataException("Restored devbox.json contains invalid JSON.", ex);
+            }
+            var restoredDomain = GetString(restoredManifest, "Domain") ?? BuildDomain(safeName);
+            var tlsRollback = new TlsRollbackStateService(_rootPath);
+            var tlsStates = CaptureTlsStates(tlsRollback, previousSite?.Domain, restoredDomain);
 
             if (Directory.Exists(destination))
             {
@@ -138,6 +151,8 @@ public sealed class ProjectSnapshotService
                 if (previous is not null && Directory.Exists(previous) && !Directory.Exists(destination))
                     Directory.Move(previous, destination);
                 RestoreSite(sites, safeName, previousSite);
+                foreach (var tlsState in tlsStates.Reverse())
+                    tlsRollback.Restore(tlsState);
                 if (databaseDestination is not null)
                     TryDeleteDirectory(databaseDestination);
                 throw;
@@ -218,6 +233,15 @@ public sealed class ProjectSnapshotService
             ? Path.Combine(projectRoot, "public")
             : projectRoot;
 
+        var desired = new SiteDefinition(name, domain, documentRoot, "php", phpVersion, https);
+        var existing = sites.GetSites().FirstOrDefault(item => item.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (existing is null)
+            _ = sites.Create(name, domain, documentRoot);
+        _ = sites.Update(desired);
+
+        if (existing is not null && !existing.Domain.Equals(domain, StringComparison.OrdinalIgnoreCase))
+            DeleteCertificateFiles(existing.Domain);
+
         if (https)
         {
             if (OperatingSystem.IsWindows())
@@ -229,14 +253,10 @@ public sealed class ProjectSnapshotService
                 _ = new LocalCertificateManager(_rootPath).Ensure(domain);
             }
         }
-
-        var desired = new SiteDefinition(name, domain, documentRoot, "php", phpVersion, https);
-        var existing = sites.GetSites().FirstOrDefault(item => item.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
-        if (existing is null)
+        else
         {
-            _ = sites.Create(name, domain, documentRoot);
+            DeleteCertificateFiles(domain);
         }
-        _ = sites.Update(desired);
     }
 
     private static void RestoreSite(SiteManager sites, string name, SiteDefinition? previous)
@@ -253,6 +273,30 @@ public sealed class ProjectSnapshotService
             _ = sites.Create(previous.Name, previous.Domain, previous.DocumentRoot);
         _ = sites.Update(previous);
     }
+
+    private static IReadOnlyList<TlsRollbackState> CaptureTlsStates(TlsRollbackStateService service, params string?[] domains) =>
+        domains
+            .Where(domain => !string.IsNullOrWhiteSpace(domain))
+            .Select(domain => domain!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(service.Capture)
+            .ToArray();
+
+    private void DeleteCertificateFiles(string domain)
+    {
+        try
+        {
+            new LocalCertificateManager(_rootPath).Delete(domain);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.Security.Cryptography.CryptographicException)
+        {
+            TryDeleteFile(CertificatePath(domain));
+            TryDeleteFile(PrivateKeyPath(domain));
+        }
+    }
+
+    private string CertificatePath(string domain) => Path.Combine(_rootPath, "config", "ssl", "sites", $"{domain}.crt.pem");
+    private string PrivateKeyPath(string domain) => Path.Combine(_rootPath, "config", "ssl", "sites", $"{domain}.key.pem");
 
     private IEnumerable<string> EnumerateProjectFiles(string root, ProjectSnapshotOptions options)
     {
@@ -395,8 +439,7 @@ public sealed class ProjectSnapshotService
         }
         finally
         {
-            if (File.Exists(temp))
-                File.Delete(temp);
+            TryDeleteFile(temp);
         }
     }
 
@@ -406,6 +449,17 @@ public sealed class ProjectSnapshotService
         {
             if (Directory.Exists(path))
                 Directory.Delete(path, recursive: true);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
         }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
