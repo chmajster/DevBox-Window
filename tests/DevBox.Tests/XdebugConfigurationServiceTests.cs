@@ -70,8 +70,8 @@ public sealed class XdebugConfigurationServiceTests
 
             Assert.False(status.Enabled);
             var lines = File.ReadAllLines(phpIni);
-            Assert.Single(lines.Where(XdebugConfigurationService.IsXdebugZendExtension));
-            Assert.Single(lines.Where(line => line.TrimStart().StartsWith("xdebug.mode=", StringComparison.OrdinalIgnoreCase)));
+            Assert.Single(lines, XdebugConfigurationService.IsXdebugZendExtension);
+            Assert.Single(lines, line => line.TrimStart().StartsWith("xdebug.mode=", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
