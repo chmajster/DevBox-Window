@@ -45,6 +45,16 @@ public sealed class ProjectProvisioningService
         _workspace.SaveManifest(projectRoot, manifest);
         actions.Add("Saved devbox.json project manifest.");
 
+        if (!string.IsNullOrWhiteSpace(manifest.NodeVersion))
+        {
+            var nodeExe = Path.Combine(_rootPath, "runtime", "node", manifest.NodeVersion, "node.exe");
+            var npmCmd = Path.Combine(_rootPath, "runtime", "node", manifest.NodeVersion, "npm.cmd");
+            if (File.Exists(nodeExe) && File.Exists(npmCmd))
+                actions.Add($"Pinned Node.js {manifest.NodeVersion} is available for project commands.");
+            else
+                warnings.Add($"Node.js {manifest.NodeVersion} is pinned by the profile but is not installed. Install the portable Node LTS runtime from Developer Tools before running npm presets.");
+        }
+
         if (manifest.DatabaseEngine.Equals("mysql", StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(manifest.DatabaseName))
         {
@@ -81,13 +91,9 @@ public sealed class ProjectProvisioningService
             var enabled = File.Exists(executablePath);
             _managedServices.Upsert(template with { Enabled = enabled });
             if (enabled)
-            {
                 actions.Add($"Registered managed service {template.DisplayName}.");
-            }
             else
-            {
                 warnings.Add($"{template.DisplayName} is required by the profile but its runtime is not installed. The service definition was registered disabled.");
-            }
         }
 
         return new ProjectProvisioningResult(site, manifest, actions, warnings);
