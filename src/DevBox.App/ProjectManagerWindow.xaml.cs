@@ -36,6 +36,7 @@ public partial class ProjectManagerWindow : Window
             new ProjectCommandService(root),
             new XdebugConfigurationService(root),
             managedServices,
+            sites,
             processManager,
             hosts,
             files,
