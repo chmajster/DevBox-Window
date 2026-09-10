@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using DevBox.App.Services;
 using DevBox.Core.Services;
 
@@ -7,6 +8,7 @@ namespace DevBox.App.ViewModels;
 public sealed class UpdateWindowViewModel : ObservableObject
 {
     private readonly ApplicationUpdateService _updates;
+    private readonly ApplicationSelfUpdateService _selfUpdater;
     private readonly IShellService _shell;
     private readonly IDialogService _dialogs;
     private string _currentVersion;
@@ -15,13 +17,19 @@ public sealed class UpdateWindowViewModel : ObservableObject
     private string? _releaseUrl;
     private bool _updateAvailable;
 
-    public UpdateWindowViewModel(ApplicationUpdateService updates, IShellService shell, IDialogService dialogs)
+    public UpdateWindowViewModel(
+        ApplicationUpdateService updates,
+        ApplicationSelfUpdateService selfUpdater,
+        IShellService shell,
+        IDialogService dialogs)
     {
         _updates = updates;
+        _selfUpdater = selfUpdater;
         _shell = shell;
         _dialogs = dialogs;
         _currentVersion = typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
         CheckCommand = new AsyncRelayCommand(CheckAsync);
+        InstallUpdateCommand = new AsyncRelayCommand(InstallUpdateAsync, () => UpdateAvailable);
         OpenReleaseCommand = new RelayCommand(OpenRelease, () => !string.IsNullOrWhiteSpace(ReleaseUrl));
     }
 
@@ -34,13 +42,21 @@ public sealed class UpdateWindowViewModel : ObservableObject
         private set
         {
             if (SetProperty(ref _releaseUrl, value))
-            {
                 OpenReleaseCommand.RaiseCanExecuteChanged();
-            }
         }
     }
-    public bool UpdateAvailable { get => _updateAvailable; private set => SetProperty(ref _updateAvailable, value); }
+    public bool UpdateAvailable
+    {
+        get => _updateAvailable;
+        private set
+        {
+            if (SetProperty(ref _updateAvailable, value))
+                InstallUpdateCommand.RaiseCanExecuteChanged();
+        }
+    }
+
     public AsyncRelayCommand CheckCommand { get; }
+    public AsyncRelayCommand InstallUpdateCommand { get; }
     public RelayCommand OpenReleaseCommand { get; }
 
     public async Task CheckAsync()
@@ -62,12 +78,40 @@ public sealed class UpdateWindowViewModel : ObservableObject
         }
     }
 
+    private async Task InstallUpdateAsync()
+    {
+        try
+        {
+            Status = "Downloading and verifying update...";
+            var current = Version.TryParse(CurrentVersion, out var parsed) ? parsed : new Version(0, 0, 0);
+            var package = await _selfUpdater.DownloadLatestInstallerAsync(current);
+            Status = $"Verified DevBox {package.Version.ToString(3)}. Starting installer...";
+
+            var startInfo = new ProcessStartInfo(package.InstallerPath)
+            {
+                UseShellExecute = true
+            };
+            startInfo.ArgumentList.Add("/VERYSILENT");
+            startInfo.ArgumentList.Add("/SUPPRESSMSGBOXES");
+            startInfo.ArgumentList.Add("/NORESTART");
+            startInfo.ArgumentList.Add("/CLOSEAPPLICATIONS");
+
+            if (Process.Start(startInfo) is null)
+                throw new InvalidOperationException("Windows refused to start the verified DevBox installer.");
+
+            App.RequestExit();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or Win32Exception)
+        {
+            Status = "Update installation failed";
+            _dialogs.Error("Update installation failed", ex.Message);
+        }
+    }
+
     private void OpenRelease()
     {
         if (ReleaseUrl is null)
-        {
             return;
-        }
         try
         {
             _shell.Open(ReleaseUrl);
