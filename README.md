@@ -1,6 +1,6 @@
 # DevBox Windows
 
-DevBox Windows is a native Windows local-development environment built with .NET 8 and WPF. It manages native Nginx, PHP FastCGI and MySQL processes without Docker and keeps the development environment under one portable DevBox root.
+DevBox Windows is a native Windows local-development environment built with .NET 8 and WPF. It manages native Nginx, PHP FastCGI and MySQL processes without Docker, supports optional local services and keeps the development environment under one portable DevBox root. A standalone `devbox.exe` CLI exposes the same core runtime and project operations for automation.
 
 Current application version: `0.2.2`.
 
@@ -30,6 +30,7 @@ Current application version: `0.2.2`.
 - Runtime Install / Activate / Remove lifecycle.
 - Release packaging records upstream URLs and calculated SHA-256 values in `runtime/bundled-runtimes.json`; PHP and Nginx archives are additionally verified against pinned source checksums before packaging.
 - Optional Mailpit and Garnet runtimes use architecture-specific Windows packages with pinned SHA-256 values and the same verified runtime lifecycle.
+- Portable Node.js LTS `24.19.0` is available as a versioned x64/ARM64 runtime with pinned official SHA-256 packages.
 
 ### Sites
 
@@ -47,10 +48,11 @@ Current application version: `0.2.2`.
 - Create projects from built-in stack profiles or import existing source trees.
 - Built-in Laravel, Symfony, WordPress and plain-PHP profiles plus persistent custom profiles in `config/project-profiles.json`.
 - Versioned per-project `devbox.json` manifest for domain, project kind, PHP/Node versions, database, HTTPS, addons and services.
+- Laravel and Symfony profiles pin Node.js `24.19.0`; npm presets use that exact version from `runtime/node/<version>` and do not silently fall back to another Node installation.
 - Project Health checks for document roots, generated vhosts, PHP runtime/extensions, manifest and TLS files.
 - Repair workflow for generated vhosts, TLS state, missing project manifest and available Composer-required PHP extensions.
 - Safe predefined command presets for Composer, npm, Laravel Artisan and Symfony Console workflows; arbitrary command text is not accepted by the project command runner.
-- Project provisioning combines Site registration, project manifest, MySQL database creation when available and optional managed-service registration.
+- Project provisioning combines Site registration, project manifest, MySQL/MariaDB/PostgreSQL database creation when the matching native client runtime is available, and optional managed-service registration.
 
 ### PHP and Xdebug
 
@@ -81,7 +83,8 @@ Current application version: `0.2.2`.
 - Drop, clone and rename operations with system-database protection.
 - Backup through `mysqldump`.
 - Restore through the native MySQL client.
-- Connection passwords are not passed on the process command line. DevBox uses a short-lived client defaults file and removes it after the operation.
+- Project provisioning providers for MySQL, MariaDB and PostgreSQL. MariaDB uses `runtime/mariadb/current/bin`; PostgreSQL uses `runtime/postgresql/current/bin`.
+- MySQL/MariaDB credentials use short-lived client configuration files; PostgreSQL uses a short-lived `PGPASSFILE`. Passwords are not placed on process command lines.
 
 ### ADDONS
 
@@ -104,11 +107,29 @@ SHA-256: 2d2e13c735366d318425c78e4ee2cc8fc648d77faba3ddea2cd516e43885733f
 
 - Detection of Composer, Node.js, npm and pnpm.
 - Composer installer downloaded from the official Composer endpoint and checked against the published SHA-384 installer signature before execution.
-- Node.js LTS installation through the exact winget package ID `OpenJS.NodeJS.LTS`.
+- Node.js LTS installation through the exact winget package ID `OpenJS.NodeJS.LTS` for the global developer toolchain.
+- Portable Node.js LTS `24.19.0` installation for deterministic per-project npm commands.
 - pnpm installation through npm after Node.js is available.
 - Mailpit `1.31.1` installation for Windows x64/ARM64 through pinned SHA-256 release packages; local web UI uses port `8025` and SMTP uses `1025`.
 - Microsoft Garnet `2.1.7` provides the native Redis-compatible Windows service on `127.0.0.1:6379`, using pinned SHA-256 Windows ReadyToRun packages.
 - Local Xdebug DLL selection and verified/recorded installation into the active PHP extension directory.
+
+### CLI
+
+The packaged application includes `devbox.exe`, a self-contained CLI backed by `DevBox.Core` rather than a separate implementation.
+
+```text
+devbox status [all|service]
+devbox start [all|service]
+devbox stop [all|service]
+devbox restart [all|service]
+devbox site create <name> [domain]
+devbox php use <version>
+devbox db create <name> [mysql|mariadb|postgresql]
+devbox addon install <key>
+```
+
+`DEVBOX_ROOT` can explicitly target another portable DevBox root.
 
 ### Diagnostics, logs and updates
 
@@ -116,6 +137,7 @@ SHA-256: 2d2e13c735366d318425c78e4ee2cc8fc648d77faba3ddea2cd516e43885733f
 - GUI log viewer with tail and clear operations constrained to the DevBox log root.
 - Stable-release check through the repository's GitHub Releases API.
 - Release URL validation is restricted to HTTPS `github.com` links and stable `vMAJOR.MINOR.PATCH` tags.
+- `Install update` downloads the exact stable x64 installer and `SHA256SUMS.txt`, verifies the installer SHA-256 before execution, exits through the normal managed-service shutdown path and relaunches DevBox through the installer after the update.
 
 ## Runtime layout
 
@@ -123,6 +145,8 @@ Third-party runtime binaries are not committed to Git. Release builds download s
 
 ```text
 DevBox/
+  DevBox.exe
+  devbox.exe
   config/
     addons.json
     appsettings.json
@@ -156,12 +180,20 @@ DevBox/
     mysql/
       current/
       8.4.11/
+    node/
+      24.19.0/
     mailpit/
       current/
       <version>/
     redis/
       current/
       <version>/
+    mariadb/
+      current/
+      bin/
+    postgresql/
+      current/
+      bin/
   www/
     <project>/
       devbox.json
@@ -176,6 +208,7 @@ dotnet restore DevBox.sln
 dotnet build DevBox.sln --configuration Release
 dotnet test DevBox.sln --configuration Release
 dotnet run --project src/DevBox.App/DevBox.App.csproj
+dotnet run --project src/DevBox.Cli/DevBox.Cli.csproj -- status
 ```
 
 Example custom root:
@@ -193,7 +226,9 @@ Pull requests run Windows CI with:
 - NuGet vulnerability audit,
 - Release build,
 - tests and coverage collection,
-- self-contained `win-x64` publish artifact.
+- self-contained `win-x64` GUI publish,
+- self-contained single-file `devbox.exe` publish,
+- installer compilation against the combined GUI + CLI layout.
 
 CodeQL scans C# separately. Dependabot monitors NuGet and GitHub Actions dependencies.
 
@@ -209,20 +244,21 @@ Normal pushes to `main` do not execute the release job.
 
 A publishing run builds:
 
-- self-contained `win-x64`,
-- self-contained `win-arm64`,
+- self-contained GUI `win-x64` and `win-arm64`,
+- self-contained single-file CLI `devbox.exe` for x64 and ARM64,
 - bundled Nginx, PHP FastCGI and MySQL runtime payloads,
 - `runtime/bundled-runtimes.json` with source and checksum metadata,
 - portable ZIP archives,
-- an Inno Setup per-user installer,
+- an Inno Setup per-user x64 installer,
 - `SHA256SUMS.txt`,
 - a GitHub Release containing the packaged artifacts.
 
-The installer is not currently code-signed. Release SHA-256 checksums provide integrity verification but are not a substitute for Authenticode publisher signing.
+The release workflow supports Authenticode signing of DevBox-owned binaries and the installer. Signing is enabled only when `WINDOWS_SIGNING_CERTIFICATE_BASE64` and `WINDOWS_SIGNING_CERTIFICATE_PASSWORD` repository secrets are configured. Without those secrets, artifacts remain unsigned and SHA-256 release checksums continue to provide integrity verification.
 
 ## Architecture
 
 - `DevBox.App` — WPF views, ViewModels, desktop dialogs, system tray and current-user desktop integration.
+- `DevBox.Cli` — command-line surface backed by the shared Core service layer.
 - `DevBox.Core` — runtime/process/site/project/PHP/database/SSL/addon/managed-service/update business logic.
 - `DevBox.Tests` — non-destructive tests using temporary directories and mocked HTTP where applicable.
 
