@@ -57,14 +57,7 @@ public sealed partial class SiteManager
             : EnsureDocumentRootUnderWww(documentRoot);
 
         var sites = GetSites().ToList();
-        if (sites.Any(site => site.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase)))
-        {
-            throw new InvalidOperationException($"Site '{normalizedName}' already exists.");
-        }
-        if (sites.Any(site => site.Domain.Equals(normalizedDomain, StringComparison.OrdinalIgnoreCase)))
-        {
-            throw new InvalidOperationException($"Domain '{normalizedDomain}' is already assigned to another site.");
-        }
+        ValidateNewSite(sites, normalizedName, normalizedDomain);
 
         Directory.CreateDirectory(root);
         var indexPath = Path.Combine(root, "index.php");
@@ -72,6 +65,24 @@ public sealed partial class SiteManager
         {
             File.WriteAllText(indexPath, "<?php\nphpinfo();\n");
         }
+
+        var site = new SiteDefinition(normalizedName, normalizedDomain, root);
+        WriteNginxConfig(site);
+        sites.Add(site);
+        SaveSites(sites);
+        return site;
+    }
+
+    public SiteDefinition RegisterExisting(string name, string domain, string documentRoot)
+    {
+        var normalizedName = NormalizeName(name);
+        var normalizedDomain = NormalizeDomain(domain);
+        var root = EnsureDocumentRootUnderWww(documentRoot);
+        if (!Directory.Exists(root))
+            throw new DirectoryNotFoundException($"Site document root was not found: {root}");
+
+        var sites = GetSites().ToList();
+        ValidateNewSite(sites, normalizedName, normalizedDomain);
 
         var site = new SiteDefinition(normalizedName, normalizedDomain, root);
         WriteNginxConfig(site);
@@ -192,6 +203,14 @@ public sealed partial class SiteManager
 
     public string GetNginxConfigPath(string domain) =>
         Path.Combine(_rootPath, "config", "nginx", "sites-enabled", $"{NormalizeDomain(domain)}.conf");
+
+    private static void ValidateNewSite(IReadOnlyCollection<SiteDefinition> sites, string normalizedName, string normalizedDomain)
+    {
+        if (sites.Any(site => site.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"Site '{normalizedName}' already exists.");
+        if (sites.Any(site => site.Domain.Equals(normalizedDomain, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"Domain '{normalizedDomain}' is already assigned to another site.");
+    }
 
     private void WriteNginxConfig(SiteDefinition site)
     {
