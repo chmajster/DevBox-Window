@@ -1,147 +1,203 @@
 # DevBox Windows
 
-DevBox Windows is a native Windows local-development environment built with .NET 8 and WPF. It manages native Nginx, PHP FastCGI and MySQL processes without Docker, supports optional local services and keeps the development environment under one portable DevBox root. A standalone `devbox.exe` CLI exposes the same core runtime and project operations for automation.
+DevBox Windows is a native Windows local-development environment built with .NET 8 and WPF. It manages Nginx, PHP FastCGI, MySQL/MariaDB/PostgreSQL, Node.js and optional local services without Docker. The GUI and the self-contained `devbox.exe` CLI share the same `DevBox.Core` implementation.
 
 Current application version: `0.2.2`.
 
-## Implemented modules
+## Main capabilities
 
-### Dashboard and services
+### Dashboard and native services
 
-- Native Start / Stop / Restart for Nginx, PHP FastCGI and MySQL.
-- Start All / Stop All / Restart All.
-- PID, TCP port and uptime reporting.
-- Port-conflict detection before startup.
-- Direct process invocation with `ProcessStartInfo.ArgumentList`; no arbitrary shell-command composition.
-- Managed-process termination only; DevBox does not kill unrelated processes occupying a port.
-- Manifest-driven optional managed services in `config/services.json`.
-- Service logs under `logs/`.
-- System-tray controls for Open, Start All, Restart All, Stop All and Exit.
-- Optional start with Windows, minimize-to-tray and automatic service startup.
+- Start / Stop / Restart for DevBox-owned Nginx, PHP FastCGI and MySQL processes.
+- Start All / Stop All / Restart All, PID/port/uptime reporting and port-conflict detection.
+- System tray, start with Windows, minimize to tray and configured service startup.
+- Process arguments use `ProcessStartInfo.ArgumentList`; DevBox does not compose arbitrary shell commands.
+- PID ownership/start-time tracking prevents unrelated processes from being killed after PID reuse.
 
-### First Run and runtimes
+### Runtime Platform
 
-- First Run Wizard reports missing environment components.
-- Official DevBox `0.2.2` packaged releases include Nginx `1.31.5`, PHP FastCGI `8.5.10` NTS and MySQL `8.4.11` LTS runtime payloads.
-- Bundled runtimes are stored under versioned `runtime/<runtime>/<version>` directories and First Run can activate them without network access.
-- Atomic activation through `runtime/<runtime>/current`.
-- PHP and Nginx retain an HTTPS download fallback with pinned SHA-256 verification, safe ZIP extraction, staging and rollback when a bundled payload is absent.
-- MySQL remote installation remains disabled when its bundled payload is missing because DevBox does not accept an unpinned remote package.
-- Runtime Install / Activate / Remove lifecycle.
-- Release packaging records upstream URLs and calculated SHA-256 values in `runtime/bundled-runtimes.json`; PHP and Nginx archives are additionally verified against pinned source checksums before packaging.
-- Optional Mailpit and Garnet runtimes use architecture-specific Windows packages with pinned SHA-256 values and the same verified runtime lifecycle.
-- Portable Node.js LTS `24.19.0` is available as a versioned x64/ARM64 runtime with pinned official SHA-256 packages.
+DevBox supports side-by-side versioned runtimes under `runtime/<key>/<version>` with an atomic `current` activation directory.
 
-### Sites
+- install, activate/downgrade and remove runtime versions,
+- built-in and custom runtime catalog,
+- Windows architecture awareness,
+- runtime EOL/support metadata,
+- verified HTTPS downloads with pinned SHA-256,
+- verified local ZIP import,
+- both flat ZIPs and archives with a declared root directory,
+- extraction limits for path traversal, ADS, symbolic/reparse entries, entry count, extracted bytes and suspicious compression ratios.
 
-- Create local projects with `.test` domains.
-- Automatic document-root and Nginx-vhost generation.
-- Safe site metadata in `config/sites.json`.
-- Narrow UAC elevation only when a `.test` entry must be added to or removed from the Windows hosts file.
-- Project files are retained by default when a site registration is deleted.
+Official `0.2.2` packages contain Nginx `1.31.5`, PHP `8.5.10` NTS and MySQL `8.4.11` LTS. Portable Node.js LTS `24.19.0`, Mailpit `1.31.1` and Microsoft Garnet `2.1.7` are available through verified runtime installers.
 
-### Project Manager
+### Projects, profiles and environment locks
 
-- WPF Project Manager available from Developer Tools.
-- Stack detection for Laravel, Symfony, WordPress, Composer PHP and Node projects.
-- Composer `ext-*` requirement discovery.
-- Create projects from built-in stack profiles or import existing source trees.
-- Built-in Laravel, Symfony, WordPress and plain-PHP profiles plus persistent custom profiles in `config/project-profiles.json`.
-- Versioned per-project `devbox.json` manifest for domain, project kind, PHP/Node versions, database, HTTPS, addons and services.
-- Laravel and Symfony profiles pin Node.js `24.19.0`; npm presets use that exact version from `runtime/node/<version>` and do not silently fall back to another Node installation.
-- Project Health checks for document roots, generated vhosts, PHP runtime/extensions, manifest and TLS files.
-- Repair workflow for generated vhosts, TLS state, missing project manifest and available Composer-required PHP extensions.
-- Safe predefined command presets for Composer, npm, Laravel Artisan and Symfony Console workflows; arbitrary command text is not accepted by the project command runner.
-- Project provisioning combines Site registration, project manifest, MySQL/MariaDB/PostgreSQL database creation when the matching native client runtime is available, and optional managed-service registration.
+Project Manager detects Laravel, Symfony, WordPress, Composer PHP and Node projects and stores compatible project metadata in `devbox.json`.
 
-### PHP and Xdebug
+Environment Profiles provide reusable stack definitions. `devbox.lock.json` is the reproducible desired-state record for:
 
-- Active PHP version reporting.
-- `php.ini` access.
-- PHP extension discovery from the active runtime.
-- Enable / disable extensions with safe `php.ini` updates.
-- Per-site PHP runtime selection.
-- Dedicated FastCGI process and stable local port for each pinned PHP version.
-- Nginx automatically routes each site to its selected PHP version; sites without a pin use the global PHP FastCGI service on port `9084`.
-- Configured per-site PHP pools are restored when DevBox starts.
-- Xdebug status and configuration for `mode`, client port and `start_with_request`.
-- Local Xdebug DLL installation validates the Windows PE structure, optionally verifies a supplied SHA-256, copies atomically and records the installed binary checksum. DevBox intentionally does not auto-download an Xdebug DLL without a trusted pinned checksum.
+- PHP/Nginx/Node/runtime versions,
+- database engine/version/port/name,
+- HTTPS,
+- ADDONS,
+- managed services,
+- ordered Project Actions.
 
-### SSL
+Applying a lock synchronizes the project manifest and Site registration, prepares required runtimes/database runtime/ADDONS, restores the Site PHP pin and HTTPS state, synchronizes known managed-service declarations and replaces Project Actions. Drift detection reports differences between the lock and the current machine/project state.
 
-- Local certificates for valid `.test` domains.
-- RSA-3072 keys and SHA-256 certificates.
-- Subject Alternative Name for the target domain.
-- Trust / untrust in the current-user Windows Root store; the whole application does not run as Administrator.
-- Nginx HTTPS vhost generation with TLS 1.2 / 1.3.
-- HTTP to HTTPS redirect for SSL-enabled sites.
+Built-in profiles include full Laravel, Symfony and WordPress environments plus full/minimal plain PHP profiles.
 
-### Databases
+### Project Actions
 
-- MySQL database listing and creation.
-- Database size, charset and collation metadata.
-- Drop, clone and rename operations with system-database protection.
-- Backup through `mysqldump`.
-- Restore through the native MySQL client.
-- Project provisioning providers for MySQL, MariaDB and PostgreSQL. MariaDB uses `runtime/mariadb/current/bin`; PostgreSQL uses `runtime/postgresql/current/bin`.
-- MySQL/MariaDB credentials use short-lived client configuration files; PostgreSQL uses a short-lived `PGPASSFILE`. Passwords are not placed on process command lines.
+Projects can define ordered allow-listed actions in `devbox.json`, for example Composer install, npm install or framework commands. DevBox executes only supported tools and argument arrays; actions are not arbitrary shell snippets. Declaration order is preserved.
 
-### ADDONS
+### Environment Center
 
-- Manifest-driven addon catalog stored in `config/addons.json`.
-- Validation of addon keys, paths, `.test` URLs, HTTPS downloads and SHA-256 values.
-- Verified installation with ZIP-slip/path-traversal protection.
-- Staging, replacement and rollback.
-- Addon-owned Nginx vhost lifecycle: install/repair creates it; uninstall removes it.
-- Health checks for hosts mapping, config and PHP requirements.
-- phpMyAdmin `5.2.3` is included as the default addon definition.
+The WPF **Environment Center** is a separate feature window/ViewModel and exposes the platform without inflating the main dashboard ViewModel. It provides one UI for:
 
-Default phpMyAdmin package:
+- Profiles, Lock & Drift,
+- Runtime Platform,
+- MySQL/MariaDB/PostgreSQL runtime instances,
+- project snapshots and transfer archives,
+- Git bootstrap,
+- Task Center,
+- Advanced Diagnostics,
+- Nginx/PHP/MySQL configuration validation/editing,
+- DPAPI Secrets,
+- DevBox Local CA,
+- signed ADDONS Marketplace,
+- WordPress Toolkit.
 
-```text
-https://files.phpmyadmin.net/phpMyAdmin/5.2.3/phpMyAdmin-5.2.3-all-languages.zip
-SHA-256: 2d2e13c735366d318425c78e4ee2cc8fc648d77faba3ddea2cd516e43885733f
-```
+### Sites and PHP per-site
 
-### Developer Tools
+- `.test` domains and generated Nginx vhosts,
+- hosts-file integration with narrow UAC elevation only when required,
+- per-site PHP version selection,
+- dedicated FastCGI pool/port per pinned PHP version,
+- unpinned sites use global PHP FastCGI on `127.0.0.1:9084`,
+- project files are retained by default when a Site registration is removed.
 
-- Detection of Composer, Node.js, npm and pnpm.
-- Composer installer downloaded from the official Composer endpoint and checked against the published SHA-384 installer signature before execution.
-- Node.js LTS installation through the exact winget package ID `OpenJS.NodeJS.LTS` for the global developer toolchain.
-- Portable Node.js LTS `24.19.0` installation for deterministic per-project npm commands.
-- pnpm installation through npm after Node.js is available.
-- Mailpit `1.31.1` installation for Windows x64/ARM64 through pinned SHA-256 release packages; local web UI uses port `8025` and SMTP uses `1025`.
-- Microsoft Garnet `2.1.7` provides the native Redis-compatible Windows service on `127.0.0.1:6379`, using pinned SHA-256 Windows ReadyToRun packages.
-- Local Xdebug DLL selection and verified/recorded installation into the active PHP extension directory.
+### Database platform
 
-### CLI
+DevBox supports two database layers:
 
-The packaged application includes `devbox.exe`, a self-contained CLI backed by `DevBox.Core` rather than a separate implementation.
+1. Project/database administration through native clients.
+2. `DatabaseRuntimeService` for side-by-side MySQL, MariaDB and PostgreSQL server instances.
+
+Database runtimes support registration, automatic data-directory initialization, per-version ports, start/stop/restart and backup/restore. MySQL/MariaDB backups can be restored into an explicitly selected destination database; PostgreSQL uses custom-format `pg_dump`/`pg_restore`.
+
+Passwords are supplied through short-lived client files or environment mechanisms rather than ordinary process arguments.
+
+### Snapshots, clone and transfer
+
+- project snapshots with configurable `.git`, `vendor` and `node_modules` inclusion,
+- optional database backup payloads,
+- safe restore with archive limits,
+- identity rewrite of `devbox.json` and `devbox.lock.json` when restored under another project name,
+- restored DB payloads stored under `backups/snapshot-restores/<project>/...`,
+- portable project export/import,
+- overwrite import updates full Site state rather than retaining stale domain/document-root/PHP/HTTPS metadata,
+- project clone workflows are exposed through the CLI/platform services.
+
+### Git bootstrap
+
+Git bootstrap can clone a repository, detect the project stack, prepare the DevBox project, apply an optional Environment Profile and run configured safe bootstrap actions.
+
+### WordPress Toolkit
+
+WordPress Toolkit uses a locally imported, SHA-256-verified `wp-cli.phar` and can create/status WordPress projects. Database and administrator passwords are supplied over stdin instead of process command-line arguments.
+
+### SSL and Local CA
+
+DevBox supports individual `.test` certificates and a shared local development CA. The CA:
+
+- uses a 4096-bit RSA key,
+- stores its PFX password in the current-user DPAPI secret store,
+- is trusted only in the current-user Windows Root store,
+- issues bounded per-site `.test` certificates,
+- can be rotated and untrusted.
+
+Nginx HTTPS vhosts use TLS 1.2/1.3 and HTTP-to-HTTPS redirects.
+
+### Secrets
+
+`SecureSecretStore` protects local secrets using current-user Windows DPAPI. Only encrypted payloads are serialized to `config/secrets.dpapi.json`. CLI secret values are read from stdin/hidden interactive input and are not accepted as ordinary command-line values.
+
+### ADDONS and signed Marketplace
+
+`AddonCatalog` / `AddonInstaller` provide manifest-driven, checksum-verified addon installation with staging, rollback, health checks and addon-owned Nginx vhosts. phpMyAdmin `5.2.3` remains the default local addon.
+
+`AddonMarketplaceService` can synchronize an HTTPS catalog only after detached RSA-SHA256 signature verification. Persistent local/user entries live separately from synchronized marketplace state, so an item withdrawn upstream disappears on the next successful sync.
+
+### Task Center and diagnostics
+
+Task Center provides a bounded operation queue, progress, cancellation and persisted history. Terminal states (`Completed`, `Failed`, `Cancelled`) are monotonic; delayed progress callbacks cannot reopen a task.
+
+Advanced Diagnostics inspects filesystem layout, free disk space, runtime validity/EOL state, service ports/processes, Sites/TLS, environment locks/drift, configuration files and stale transaction artifacts.
+
+### Configuration management
+
+Environment Center can read, validate and atomically save known Nginx, PHP and MySQL configuration files. Native runtime validators are used when available; validated replacements keep timestamped backups under `backups/configuration`.
+
+## CLI 2.0
+
+`devbox.exe` is backed by `DevBox.Core`. Add `--json` to supported commands for machine-readable output.
+
+Representative commands:
 
 ```text
 devbox status [all|service]
 devbox start [all|service]
 devbox stop [all|service]
 devbox restart [all|service]
+
 devbox site create <name> [domain]
 devbox php use <version>
+
+devbox runtime list [key]
+devbox runtime install <key> <version>
+devbox runtime use <key> <version>
+devbox runtime remove <key> <version>
+
 devbox db create <name> [mysql|mariadb|postgresql]
-devbox addon install <key>
+devbox db runtime list [engine]
+devbox db runtime register <engine> <version> [port]
+devbox db runtime start <engine> <version>
+devbox db runtime stop <engine> <version>
+devbox db runtime restart <engine> <version>
+devbox db backup <engine> <version> <database> [destination]
+devbox db restore <engine> <version> <database> <backup>
+
+devbox env profiles
+devbox env lock <project> [profile]
+devbox env apply <project>
+devbox env drift <project>
+devbox env export ...
+devbox env import ...
+
+devbox project snapshot ...
+devbox project restore ...
+devbox project export ...
+devbox project import ...
+devbox project clone ...
+devbox project action ...
+
+devbox diagnostics
+devbox secret list
+devbox secret set <key>
+devbox secret delete <key>
+devbox wordpress ...
 ```
 
-`DEVBOX_ROOT` can explicitly target another portable DevBox root.
+Run `devbox --help` for the exact syntax available in the installed build. Set `DEVBOX_ROOT` to operate on another portable DevBox root.
 
-### Diagnostics, logs and updates
+Example JSON automation:
 
-- Diagnostics for filesystem, configuration, runtimes and managed services.
-- GUI log viewer with tail and clear operations constrained to the DevBox log root.
-- Stable-release check through the repository's GitHub Releases API.
-- Release URL validation is restricted to HTTPS `github.com` links and stable `vMAJOR.MINOR.PATCH` tags.
-- `Install update` downloads the exact stable x64 installer and `SHA256SUMS.txt`, verifies the installer SHA-256 before execution, exits through the normal managed-service shutdown path and relaunches DevBox through the installer after the update.
+```powershell
+devbox runtime list --json
+devbox diagnostics --json
+```
 
 ## Runtime layout
-
-Third-party runtime binaries are not committed to Git. Release builds download selected upstream archives into the CI workspace, validate the expected executable layout, verify pinned checksums where available and copy the extracted runtimes into each packaged application. Optional runtimes are downloaded only through definitions carrying a pinned SHA-256.
 
 ```text
 DevBox/
@@ -149,66 +205,61 @@ DevBox/
   devbox.exe
   config/
     addons.json
+    addons.local.json
+    addon-marketplace-source.json
     appsettings.json
+    database-runtimes.json
+    environment-profiles.json
     project-profiles.json
+    runtime-catalog.json
     services.json
     sites.json
+    secrets.dpapi.json
     nginx/
-      nginx.conf
-      fastcgi_params
-      sites-enabled/
     php/
-      php.ini
     mysql/
-      my.ini
     ssl/
+      ca/
       sites/
   data/
-    mysql/
+    mysql/<version>/
+    mariadb/<version>/
+    postgresql/<version>/
+  backups/
+    configuration/
+    databases/
+    environment-shares/
+    exports/
+    projects/
+    snapshot-restores/
   logs/
   tmp/
   tools/
     composer/
+    wp-cli/
   runtime/
-    bundled-runtimes.json
-    nginx/
-      current/
-      1.31.5/
-    php/
-      current/
-      8.5.10/
-    mysql/
-      current/
-      8.4.11/
-    node/
-      24.19.0/
-    mailpit/
-      current/
-      <version>/
-    redis/
-      current/
-      <version>/
-    mariadb/
-      current/
-      bin/
-    postgresql/
-      current/
-      bin/
+    nginx/<version>/
+    php/<version>/
+    mysql/<version>/
+    mariadb/<version>/
+    postgresql/<version>/
+    node/<version>/
+    mailpit/<version>/
+    redis/<version>/
   www/
     <project>/
       devbox.json
+      devbox.lock.json
 ```
 
-`DEVBOX_ROOT` can point to a different root while developing or running a portable layout.
-
-## Build and run
+## Build and test
 
 ```powershell
 dotnet restore DevBox.sln
 dotnet build DevBox.sln --configuration Release
 dotnet test DevBox.sln --configuration Release
 dotnet run --project src/DevBox.App/DevBox.App.csproj
-dotnet run --project src/DevBox.Cli/DevBox.Cli.csproj -- status
+dotnet run --project src/DevBox.Cli/DevBox.Cli.csproj -- diagnostics --json
 ```
 
 Example custom root:
@@ -220,46 +271,19 @@ dotnet run --project src/DevBox.App/DevBox.App.csproj
 
 ## CI and security scanning
 
-Pull requests run Windows CI with:
+Pull requests run on Windows and perform restore, NuGet vulnerability audit, Release build, tests/coverage, self-contained GUI/CLI publish, package-layout validation and Inno Setup compilation. CodeQL scans C# separately. Dependabot monitors NuGet and GitHub Actions dependencies.
 
-- restore,
-- NuGet vulnerability audit,
-- Release build,
-- tests and coverage collection,
-- self-contained `win-x64` GUI publish,
-- self-contained single-file `devbox.exe` publish,
-- installer compilation against the combined GUI + CLI layout.
-
-CodeQL scans C# separately. Dependabot monitors NuGet and GitHub Actions dependencies.
+Security boundaries include pinned checksums, safe archive extraction, no arbitrary project shell execution, current-user DPAPI, constrained hosts-file elevation, database credentials outside ordinary process arguments and stable-release installer SHA-256 verification.
 
 ## Releases
 
-The release workflow supports three guarded paths:
-
-1. A tag matching `v*.*.*` builds and publishes that tagged version.
-2. A commit on `main` whose first line is exactly `release: vX.Y.Z` builds the current SHA, creates tag `vX.Y.Z` on that SHA and publishes the GitHub Release only after restore, vulnerability audit, build and tests succeed.
-3. `workflow_dispatch` performs a packaging dry-run for the supplied version and uploads the release artifact without creating a tag or GitHub Release.
-
-Normal pushes to `main` do not execute the release job.
-
-A publishing run builds:
-
-- self-contained GUI `win-x64` and `win-arm64`,
-- self-contained single-file CLI `devbox.exe` for x64 and ARM64,
-- bundled Nginx, PHP FastCGI and MySQL runtime payloads,
-- `runtime/bundled-runtimes.json` with source and checksum metadata,
-- portable ZIP archives,
-- an Inno Setup per-user x64 installer,
-- `SHA256SUMS.txt`,
-- a GitHub Release containing the packaged artifacts.
-
-The release workflow supports Authenticode signing of DevBox-owned binaries and the installer. Signing is enabled only when `WINDOWS_SIGNING_CERTIFICATE_BASE64` and `WINDOWS_SIGNING_CERTIFICATE_PASSWORD` repository secrets are configured. Without those secrets, artifacts remain unsigned and SHA-256 release checksums continue to provide integrity verification.
+Release CI builds self-contained `win-x64` and `win-arm64` GUI/CLI packages, portable ZIPs, an Inno Setup installer and `SHA256SUMS.txt`. Authenticode signing is enabled only when the configured signing certificate/password repository secrets are available.
 
 ## Architecture
 
-- `DevBox.App` — WPF views, ViewModels, desktop dialogs, system tray and current-user desktop integration.
-- `DevBox.Cli` — command-line surface backed by the shared Core service layer.
-- `DevBox.Core` — runtime/process/site/project/PHP/database/SSL/addon/managed-service/update business logic.
-- `DevBox.Tests` — non-destructive tests using temporary directories and mocked HTTP where applicable.
+- `DevBox.App` — WPF UI, Environment Center, dialogs, tray and desktop integration.
+- `DevBox.Cli` — automation surface backed by shared Core services.
+- `DevBox.Core` — runtime/database/environment/project/security business logic.
+- `DevBox.Tests` — non-destructive unit/regression tests using temporary roots and mocked HTTP.
 
-See `ARCHITECTURE.md` and `SECURITY.md` for the detailed boundaries and threat controls.
+See `ARCHITECTURE.md` and `SECURITY.md` for detailed boundaries and design decisions.
