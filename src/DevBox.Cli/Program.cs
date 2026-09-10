@@ -32,7 +32,7 @@ internal static class Program
                 _ => Fail($"Unknown command '{args[0]}'. Use 'devbox --help'.")
             };
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FileNotFoundException or HttpRequestException or ArgumentException or NotSupportedException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or HttpRequestException or ArgumentException or NotSupportedException or KeyNotFoundException or System.ComponentModel.Win32Exception)
         {
             Console.Error.WriteLine($"Error: {ex.Message}");
             return 1;
