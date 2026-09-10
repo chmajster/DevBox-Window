@@ -189,7 +189,7 @@ public sealed partial class LocalCertificateAuthorityService
     private X509Certificate2 LoadAuthority(bool publicOnly = false)
     {
         if (publicOnly)
-            return X509Certificate2.CreateFromPemFile(_caPemPath);
+            return LocalCertificateManager.LoadPublicCertificate(_caPemPath);
         var password = _secrets.Get(PasswordSecretKey)
             ?? throw new InvalidDataException("The local CA private-key password is missing from the DPAPI secret store.");
         try
