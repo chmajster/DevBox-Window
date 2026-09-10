@@ -80,7 +80,17 @@ public sealed partial class LocalCertificateAuthorityService
             var keyPath = Path.Combine(sitesDirectory, $"{normalizedDomain}.key.pem");
 
             if (File.Exists(certPath))
-                new LocalCertificateManager(_rootPath).UntrustForCurrentUser(normalizedDomain);
+            {
+                try
+                {
+                    new LocalCertificateManager(_rootPath).UntrustForCurrentUser(normalizedDomain);
+                }
+                catch (CryptographicException)
+                {
+                    // A corrupt previous PEM has no recoverable thumbprint. The raw bytes were
+                    // already captured above, so replacement can proceed and rollback remains safe.
+                }
+            }
 
             AtomicWrite(certPath, certificate.ExportCertificatePem() + authority.ExportCertificatePem());
             AtomicWrite(keyPath, key.ExportPkcs8PrivateKeyPem());
