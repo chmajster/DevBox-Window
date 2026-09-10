@@ -1,15 +1,19 @@
-name: CI
+name: PR Tests
 
 on:
-  push:
-    branches: [ main ]
   pull_request:
+    branches: [ main ]
+  workflow_call:
 
 permissions:
   contents: read
 
+concurrency:
+  group: pr-tests-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  build-test:
+  test-and-package-validation:
     runs-on: windows-2025
     steps:
       - name: Checkout
@@ -40,13 +44,32 @@ jobs:
       - name: Publish CLI win-x64
         run: dotnet publish src/DevBox.Cli/DevBox.Cli.csproj --configuration Release --runtime win-x64 --self-contained true --output artifacts/cli-win-x64 /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true
 
-      - name: Add CLI to application layout
+      - name: Validate GUI and CLI package layout
         shell: pwsh
         run: |
-          if (-not (Test-Path artifacts/cli-win-x64/devbox.exe)) {
-            throw "CLI publish did not produce devbox.exe"
+          $guiPath = 'artifacts/win-x64/DevBox.exe'
+          $cliSource = 'artifacts/cli-win-x64/devbox.exe'
+          $cliDirectory = 'artifacts/win-x64/cli'
+          $cliTarget = Join-Path $cliDirectory 'devbox.exe'
+
+          if (-not (Test-Path $guiPath)) {
+            throw 'GUI publish did not produce DevBox.exe'
           }
-          Copy-Item artifacts/cli-win-x64/devbox.exe artifacts/win-x64/devbox.exe -Force
+          if (-not (Test-Path $cliSource)) {
+            throw 'CLI publish did not produce devbox.exe'
+          }
+
+          $guiHashBefore = (Get-FileHash $guiPath -Algorithm SHA256).Hash
+          New-Item -ItemType Directory -Force $cliDirectory | Out-Null
+          Copy-Item $cliSource $cliTarget -Force
+          $guiHashAfter = (Get-FileHash $guiPath -Algorithm SHA256).Hash
+
+          if ($guiHashBefore -ne $guiHashAfter) {
+            throw 'DevBox.exe changed while adding the CLI to the application layout'
+          }
+          if (-not (Test-Path $cliTarget)) {
+            throw 'CLI was not added to the application layout'
+          }
 
       - name: Ensure Inno Setup
         shell: pwsh
@@ -68,11 +91,3 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "Inno Setup failed with exit code $LASTEXITCODE"
           }
-
-      - name: Upload win-x64 artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: DevBox-win-x64
-          path: artifacts/win-x64
-          if-no-files-found: error
-          retention-days: 14
