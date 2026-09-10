@@ -1,6 +1,6 @@
 # Architecture
 
-DevBox uses a layered native-desktop architecture. `DevBox.App` owns WPF presentation and narrow Windows desktop integration. `DevBox.Core` owns environment lifecycle and business rules. Runtime binaries, generated configuration and user project state remain outside compiled assemblies.
+DevBox uses a layered native-desktop architecture. `DevBox.App` owns WPF presentation and narrow Windows desktop integration, `DevBox.Cli` exposes automation-friendly commands, and `DevBox.Core` owns environment lifecycle and business rules. Both user interfaces call the same Core services; runtime binaries, generated configuration, secrets and project state remain outside compiled assemblies.
 
 ## Layers
 
@@ -11,121 +11,139 @@ Responsibilities:
 - WPF windows and ViewModels,
 - dependency-injection composition,
 - dialogs and shell navigation,
-- current-user startup settings,
-- system-tray integration,
-- requesting the narrowly scoped hosts-file elevation helper.
+- current-user startup settings and system tray,
+- narrowly scoped hosts-file elevation,
+- `EnvironmentCenterWindow` as the orchestration surface for the environment platform.
 
-Views do not directly implement Nginx/PHP/MySQL lifecycle rules.
+`EnvironmentCenterViewModel` is deliberately separate from `MainWindowViewModel`. The dashboard therefore remains focused on global service status while Environment Center coordinates profiles, locks, runtimes, DB runtimes, snapshots/transfers, Task Center, diagnostics, configuration, Local CA, secrets, ADDONS Marketplace, Git bootstrap and WordPress Toolkit.
+
+Views do not implement runtime, database, TLS or archive lifecycle rules directly.
+
+### DevBox.Cli
+
+`devbox.exe` is a self-contained CLI backed by `DevBox.Core`. It provides service operations plus Runtime Platform, database-runtime lifecycle, environment profile/lock workflows, snapshots/transfers, project actions, diagnostics, secrets and WordPress operations. `--json` provides machine-readable output for supported commands.
+
+Sensitive values are not accepted as ordinary command-line arguments where they would be exposed through process listings. Secret values and WordPress passwords are supplied through stdin/interactive input and delegated to the Core secret/process boundaries.
 
 ### DevBox.Core
 
-Core services include:
+Important services include:
 
-- `IProcessManager` / `ProcessManager` — managed service lifecycle,
-- `IRuntimeManager` / `RuntimeManager` — versioned runtime install/activate/remove,
-- `RuntimeCatalog` — verified built-in runtime definitions,
-- `SiteManager` — site metadata and Nginx vhosts,
-- `PhpManager` — `php.ini` and PHP extensions,
-- `PhpRuntimePoolManager` — per-version FastCGI processes for PHP-per-site,
-- `DatabaseManager` — native MySQL administration, backup and restore,
-- `LocalCertificateManager` — local `.test` certificates,
-- `AddonCatalog` / `AddonInstaller` — manifest-driven optional web tools,
-- `DiagnosticsService` and `LogReader`,
-- `EnvironmentReadinessService`,
-- `DeveloperToolsService`,
-- `ApplicationUpdateService`.
+- `IProcessManager` / `ProcessManager` — managed process lifecycle and PID ownership,
+- `IRuntimeManager` / `RuntimeManager` — transactional versioned runtime install/activate/remove,
+- `RuntimePlatformService` — multi-runtime catalog, side-by-side versions, EOL metadata and verified local imports,
+- `DatabaseRuntimeService` — MySQL/MariaDB/PostgreSQL server registration, initialization, start/stop/restart and backup/restore,
+- `EnvironmentProfileService` — built-in and user environment profiles,
+- `EnvironmentLockService` — `devbox.lock.json`, desired-state application and drift detection,
+- `ProjectActionService` — ordered, allow-listed declarative project actions,
+- `ProjectSnapshotService` — project snapshots plus optional database payloads,
+- `ProjectTransferService` — safe project export/import between DevBox installations,
+- `RemoteEnvironmentService` — portable environment definitions without credentials,
+- `PlatformTaskCenter` — bounded background operation queue, progress, cancellation and persisted terminal history,
+- `AdvancedDiagnosticsService` — filesystem/runtime/service/site/lock/config diagnostics,
+- `ConfigurationFileService` — validated Nginx/PHP/MySQL configuration editing with backups,
+- `SecureSecretStore` — current-user Windows DPAPI secret storage,
+- `LocalCertificateAuthorityService` — one DevBox local CA and per-site certificates,
+- `AddonMarketplaceService` — signed remote ADDONS catalogs separated from persistent local catalog entries,
+- `GitProjectBootstrapService` — clone/detect/provision/apply-profile bootstrap,
+- `WordPressToolkitService` — verified WP-CLI integration and WordPress provisioning,
+- `SiteManager`, `PhpManager`, `PhpRuntimePoolManager`, `DatabaseManager`, `AddonCatalog`, `AddonInstaller`, `DiagnosticsService`, `LogReader` and update services.
 
 ### DevBox.Tests
 
-Tests use temporary filesystem roots and mocked HTTP responses where external downloads are involved. They must not modify the real hosts file, certificate store, production databases or installed runtimes.
+Tests use temporary DevBox roots and mocked HTTP responses. They must not modify the real hosts file, certificate store, production databases or installed runtimes. Environment-platform regressions cover archive roots, action ordering, terminal Task Center state, portable environment metadata, snapshot identity/database payload restore, lock synchronization and marketplace revocation.
 
 ## Root and filesystem model
 
-All environment paths resolve from one DevBox root. The root is either:
+All environment paths resolve from one DevBox root. The root is either `DEVBOX_ROOT`, when explicitly set, or the application directory.
 
-1. `DEVBOX_ROOT`, when explicitly set, or
-2. the application directory.
+Important subtrees:
 
-Important subtrees are `runtime/`, `config/`, `data/`, `logs/`, `tmp/`, `tools/` and `www/`. Path-sensitive services normalize paths and reject operations that would escape the expected root.
+```text
+config/     persistent configuration, catalogs, Site metadata and encrypted secret payloads
+runtime/    versioned native runtimes
+data/       database server data directories
+www/        project roots and project manifests
+backups/    database/config/project snapshots, exports and restored snapshot DB payloads
+logs/       service logs and Task Center history
+tmp/        transactional staging and short-lived authentication material
+tools/      tools such as Composer and WP-CLI
+```
 
-## Managed service lifecycle
+Path-sensitive services normalize candidate paths and reject traversal, reparse points or escapes outside the expected root where applicable.
 
-`IProcessManager` is the boundary for the global Nginx, PHP FastCGI and MySQL services.
+## Environment source of truth
 
-A start validates the executable and configured port before launch. Arguments use `ProcessStartInfo.ArgumentList`. The process manager tracks only processes it starts.
+`devbox.json` remains the user-facing project manifest and keeps schema-v1 compatibility. `devbox.lock.json` captures the reproducible desired state: runtime versions, database engine/version/port/name, HTTPS, ADDONS, managed services and ordered project actions.
 
-A stop prefers a configured graceful command. Forced process-tree termination is a timeout fallback limited to the tracked process.
+`EnvironmentLockService.ApplyLockAsync` synchronizes compatible `devbox.json` metadata and the registered Site, ensures required runtimes/database runtime/ADDONS, synchronizes known service declarations, updates the PHP Site pin, manages HTTPS certificate/vhost state and replaces Project Actions even when the locked list is empty.
+
+Drift detection compares the current installation and project registration with the lock rather than merely checking that a lock file exists.
 
 ## Runtime lifecycle
 
-Versioned packages are installed under:
+Versioned packages are installed under `runtime/<key>/<version>/` and the active global version is materialized through `runtime/<key>/current/`.
+
+Runtime installation is transactional:
 
 ```text
-runtime/<key>/<version>/
-```
-
-The active version is materialized through:
-
-```text
-runtime/<key>/current/
-```
-
-Runtime installation is transactional at the application level:
-
-```text
-HTTPS download
+HTTPS download or verified local archive
   -> SHA-256 verification
-  -> safe extraction
-  -> validation
-  -> staging
-  -> replacement/activation
-  -> cleanup
+  -> archive safety validation
+  -> extraction/staging
+  -> executable validation
+  -> atomic placement/activation
+  -> rollback/cleanup
 ```
 
-The built-in catalog deliberately omits a package when it cannot satisfy this verification policy.
+Flat archives and archives with a declared root directory are supported. Archive extraction enforces path, entry-count, extracted-size and compression-ratio controls.
+
+## Managed processes and Task Center
+
+`IProcessManager` tracks only DevBox-owned processes. Startup validates the executable and port; arguments are supplied through `ProcessStartInfo.ArgumentList`. Graceful stop is preferred and managed process-tree termination is a bounded fallback.
+
+`PlatformTaskCenter` limits parallel operations, supports cancellation and records task history. `Completed`, `Failed` and `Cancelled` are terminal states: delayed progress callbacks cannot reopen a finished operation.
 
 ## Sites and PHP per-site
 
-`SiteManager` stores project definitions in `config/sites.json` and renders Nginx vhosts from that metadata.
+`SiteManager` stores definitions in `config/sites.json` and renders Nginx vhosts from normalized metadata. Sites without a PHP pin use the global FastCGI endpoint at `127.0.0.1:9084`; pinned sites use a stable dedicated port for the selected version and `PhpRuntimePoolManager` owns that FastCGI process.
 
-Sites without a pinned PHP version use the global FastCGI endpoint:
+## Database runtime boundary
 
-```text
-127.0.0.1:9084
-```
+`DatabaseRuntimeService` manages side-by-side MySQL, MariaDB and PostgreSQL instances with per-version data directories and ports. Database backup/restore uses native vendor clients. MySQL/MariaDB dumps are database-content dumps that can be restored into an explicitly selected destination database; PostgreSQL uses custom-format dumps and `pg_restore`.
 
-A site pinned to a version such as `8.5.10` is routed to a stable dedicated port calculated for that validated version. `PhpRuntimePoolManager` starts the matching `runtime/php/<version>/php-cgi.exe` process and tracks it for the DevBox process lifetime.
+Credentials are passed through short-lived client configuration/environment mechanisms, never embedded in ordinary process arguments.
 
-This design allows several installed PHP versions to serve different local sites concurrently while keeping the global PHP service available for unpinned sites.
+## Snapshots and transfers
 
-## SSL
+`ProjectSnapshotService` archives a project with optional database backup files. Restore enforces archive limits, rewrites `devbox.json` and `devbox.lock.json` identity when restoring under another name, and places database payloads under a deterministic `backups/snapshot-restores/<project>/...` subtree.
 
-`LocalCertificateManager` generates local certificates and optionally trusts them in the current-user Root store. `SiteManager` owns the corresponding Nginx TLS configuration. Enabling HTTPS therefore updates site metadata and regenerates the vhost rather than patching arbitrary Nginx text from the UI.
+`ProjectTransferService` exports portable project archives and safely imports them into `www/`. Overwrite import updates the complete Site registration rather than retaining stale domain, document-root, PHP or HTTPS state.
+
+`RemoteEnvironmentService` exports profiles/locks separately from project contents. These definitions explicitly exclude credentials and may be shared between machines.
+
+## SSL and secrets
+
+`SecureSecretStore` protects local secret values with current-user Windows DPAPI. The serialized store contains only protected payloads.
+
+`LocalCertificateAuthorityService` creates a long-lived DevBox development CA, stores its private-key password in DPAPI, trusts only the CA in the current-user Root store and issues bounded per-site `.test` certificates. Nginx TLS state is regenerated through Site metadata rather than arbitrary UI text mutation.
+
+## ADDONS Marketplace
+
+`AddonCatalog` / `AddonInstaller` own the effective local addon definitions and verified installation lifecycle. `AddonMarketplaceService` verifies detached RSA-SHA256 signatures before accepting a remote catalog.
+
+Persistent user/local entries are stored separately from the synchronized marketplace result. A marketplace item removed upstream therefore disappears on the next successful synchronization instead of becoming a permanent local baseline.
+
+## Configuration management
+
+`ConfigurationFileService` exposes known Nginx, PHP and MySQL configurations, performs native-validator checks when the relevant runtime exists, falls back to structural validation where appropriate, backs up the previous configuration and writes replacements atomically.
 
 ## Hosts file boundary
 
-Normal application code uses `IHostMappingService`. Direct modification of the Windows hosts file is attempted as the current user first. If elevation is necessary, the application restarts only a constrained helper command and validates that the target domain ends in `.test`.
-
-The main WPF process does not run elevated.
-
-## Database boundary
-
-`DatabaseManager` invokes native MySQL tools without shell command composition. Passwords are supplied through a short-lived client defaults file, not process arguments.
-
-## ADDONS
-
-Addon metadata is manifest-driven. `AddonCatalog` resolves and validates definitions; `AddonInstaller` owns download, verification, extraction, replacement, addon-specific configuration and vhost lifecycle.
-
-`RuntimeLayout` creates only baseline environment state. It does not pretend optional addons are installed.
-
-## Desktop lifecycle
-
-`AppSettingsService` persists startup/tray preferences under the DevBox config root and uses only the current-user Windows startup registry key.
-
-`TrayService` owns the notification icon and provides service lifecycle shortcuts. Closing the main window can hide it instead of terminating the application; explicit tray Exit requests application shutdown.
+Normal application code uses `IHostMappingService`. If the Windows hosts file requires elevation, DevBox restarts only a constrained helper command after validating the `.test` domain. The main WPF process does not run elevated.
 
 ## Updates and releases
 
-`ApplicationUpdateService` is intentionally a release checker, not a self-replacing executable updater. It validates stable GitHub release metadata and opens the release page for an explicit user-controlled update.
+Stable updates are resolved through GitHub Releases. Installer URLs and release metadata are validated, the downloaded installer is checked against `SHA256SUMS.txt`, and installation is started only after integrity verification and normal managed-service shutdown.
 
-The release workflow produces self-contained x64/ARM64 artifacts, portable ZIP files, an Inno Setup installer and SHA-256 checksums.
+Release CI produces self-contained x64/ARM64 GUI and CLI artifacts, portable ZIPs, the Inno Setup installer and SHA-256 checksums. Optional Authenticode signing is applied only when signing secrets are configured.
