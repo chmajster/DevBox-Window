@@ -122,7 +122,7 @@ public sealed class RuntimePlatformService : IDisposable
             var source = string.IsNullOrWhiteSpace(package.ArchiveRootDirectory)
                 ? extractRoot
                 : Path.GetFullPath(Path.Combine(extractRoot, package.ArchiveRootDirectory));
-            EnsureUnder(source, extractRoot, "Runtime archive root escapes the extracted directory.");
+            EnsureUnderOrEqual(source, extractRoot, "Runtime archive root escapes the extracted directory.");
             if (!Directory.Exists(source))
                 throw new InvalidDataException($"Archive root '{package.ArchiveRootDirectory}' does not exist.");
 
@@ -322,6 +322,8 @@ public sealed class RuntimePlatformService : IDisposable
         {
             throw new InvalidDataException("Expected runtime archive SHA-256 is invalid.", ex);
         }
+        if (expectedBytes.Length != 32)
+            throw new InvalidDataException("Expected runtime archive SHA-256 must contain 64 hexadecimal characters.");
         using var stream = File.OpenRead(path);
         var actual = SHA256.HashData(stream);
         if (!CryptographicOperations.FixedTimeEquals(actual, expectedBytes))
@@ -333,6 +335,16 @@ public sealed class RuntimePlatformService : IDisposable
         var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         var fullCandidate = Path.GetFullPath(candidate);
         if (!fullCandidate.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException(message);
+    }
+
+    private static void EnsureUnderOrEqual(string candidate, string root, string message)
+    {
+        var normalizedRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedCandidate = Path.GetFullPath(candidate).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var childPrefix = normalizedRoot + Path.DirectorySeparatorChar;
+        if (!normalizedCandidate.Equals(normalizedRoot, StringComparison.OrdinalIgnoreCase) &&
+            !normalizedCandidate.StartsWith(childPrefix, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException(message);
     }
 
