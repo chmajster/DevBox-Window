@@ -26,6 +26,7 @@
                     <Button Content="Install pnpm" Command="{Binding InstallPnpmCommand}"/>
                     <Button Content="Install Mailpit" Click="InstallMailpit_Click"/>
                     <Button Content="Install Redis" Click="InstallRedis_Click"/>
+                    <Button Content="Install Xdebug DLL" Click="InstallXdebug_Click"/>
                 </WrapPanel>
             </Grid>
         </Border>
