@@ -38,6 +38,21 @@ public sealed record DevBoxProjectManifest(
     IReadOnlyList<string> Services)
 {
     public const int CurrentSchemaVersion = 1;
+
+    public DevBoxProjectManifest(
+        int schemaVersion,
+        string name,
+        string domain,
+        ProjectKind kind,
+        string? phpVersion,
+        string? nodeVersion,
+        string databaseEngine,
+        string? databaseName,
+        bool https,
+        IReadOnlyList<string> addons)
+        : this(schemaVersion, name, domain, kind, phpVersion, nodeVersion, databaseEngine, databaseName, https, addons, Array.Empty<string>())
+    {
+    }
 }
 
 public sealed record ProjectCreateRequest(
