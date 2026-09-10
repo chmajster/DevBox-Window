@@ -51,7 +51,7 @@ public sealed class ProjectTransferService
             ExportedAtUtc = DateTimeOffset.UtcNow,
             ProjectDirectory = "project",
             EnvironmentLockFile = File.Exists(Path.Combine(root, EnvironmentLockService.LockFileName)) ? EnvironmentLockService.LockFileName : null,
-            DatabaseBackups = dbFiles.Select(Path.GetFileName).ToArray()
+            DatabaseBackups = dbFiles.Select(path => Path.GetFileName(path)!).ToArray()
         };
 
         using (var stream = new FileStream(destination, FileMode.Create, FileAccess.ReadWrite, FileShare.None))
@@ -158,19 +158,31 @@ public sealed class ProjectTransferService
             ? Path.Combine(projectRoot, "public")
             : projectRoot;
         var manifest = ReadManifest(projectRoot);
-        var existing = _sites.GetSites().FirstOrDefault(item => item.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
-        var site = existing ?? _sites.Create(name, domain, documentRoot);
         var phpVersion = GetString(manifest, "PhpVersion");
-        if (!string.IsNullOrWhiteSpace(phpVersion))
-            site = _sites.SetPhpVersion(site.Name, phpVersion);
-        if (GetBool(manifest, "Https") == true)
+        var https = GetBool(manifest, "Https") == true;
+        var existing = _sites.GetSites().FirstOrDefault(item => item.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+        if (existing is not null && !existing.Domain.Equals(domain, StringComparison.OrdinalIgnoreCase))
+        {
+            try { new LocalCertificateManager(_rootPath).Delete(existing.Domain); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) { }
+        }
+
+        if (https)
         {
             if (OperatingSystem.IsWindows())
                 using (new LocalCertificateAuthorityService(_rootPath).IssueSiteCertificate(domain)) { }
             else
                 _ = new LocalCertificateManager(_rootPath).Ensure(domain);
-            _ = _sites.SetHttps(site.Name, true);
         }
+
+        if (existing is null)
+        {
+            _ = _sites.Create(name, domain, documentRoot);
+        }
+
+        var desired = new SiteDefinition(name, domain, documentRoot, "php", phpVersion, https);
+        _ = _sites.Update(desired);
     }
 
     private void MoveDatabaseBackups(string tempRoot, string projectName)
@@ -233,12 +245,12 @@ public sealed class ProjectTransferService
         {
             cancellationToken.ThrowIfCancellationRequested();
             var normalized = entry.FullName.Replace('\\', '/');
-            if (normalized.StartsWith('/', StringComparison.Ordinal) || normalized.Contains(':', StringComparison.Ordinal) || normalized.Split('/').Any(part => part == ".."))
+            if (normalized.StartsWith("/", StringComparison.Ordinal) || normalized.Contains(':', StringComparison.Ordinal) || normalized.Split('/').Any(part => part == ".."))
                 throw new InvalidDataException("Project archive contains an unsafe entry path.");
             total = checked(total + Math.Max(0, entry.Length));
             if (total > MaximumImportBytes)
                 throw new InvalidDataException("Project archive exceeds the maximum extracted size.");
-            if (normalized.EndsWith('/', StringComparison.Ordinal))
+            if (normalized.EndsWith("/", StringComparison.Ordinal))
                 continue;
             var target = Path.GetFullPath(Path.Combine(destination, normalized.Replace('/', Path.DirectorySeparatorChar)));
             if (!target.StartsWith(destinationRoot, StringComparison.OrdinalIgnoreCase))
