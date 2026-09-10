@@ -12,6 +12,7 @@ public interface IFeatureWindowService
     void ShowSetup(Window owner);
     void ShowTools(Window owner);
     void ShowProjects(Window owner);
+    void ShowEnvironmentCenter(Window owner);
     void ShowUpdates(Window owner);
     void ShowSettings(Window owner);
 }
@@ -30,6 +31,7 @@ public sealed class FeatureWindowService(IServiceProvider serviceProvider) : IFe
         window.Owner = owner;
         window.ShowDialog();
     }
+    public void ShowEnvironmentCenter(Window owner) => Show<EnvironmentCenterWindow>(owner);
     public void ShowUpdates(Window owner) => Show<UpdateWindow>(owner);
     public void ShowSettings(Window owner) => Show<SettingsWindow>(owner);
 
