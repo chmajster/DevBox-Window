@@ -8,7 +8,6 @@ namespace DevBox.App.ViewModels;
 public sealed class UpdateWindowViewModel : ObservableObject
 {
     private readonly ApplicationUpdateService _updates;
-    private readonly ApplicationSelfUpdateService _selfUpdater;
     private readonly IShellService _shell;
     private readonly IDialogService _dialogs;
     private string _currentVersion;
@@ -17,14 +16,9 @@ public sealed class UpdateWindowViewModel : ObservableObject
     private string? _releaseUrl;
     private bool _updateAvailable;
 
-    public UpdateWindowViewModel(
-        ApplicationUpdateService updates,
-        ApplicationSelfUpdateService selfUpdater,
-        IShellService shell,
-        IDialogService dialogs)
+    public UpdateWindowViewModel(ApplicationUpdateService updates, IShellService shell, IDialogService dialogs)
     {
         _updates = updates;
-        _selfUpdater = selfUpdater;
         _shell = shell;
         _dialogs = dialogs;
         _currentVersion = typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
@@ -84,7 +78,8 @@ public sealed class UpdateWindowViewModel : ObservableObject
         {
             Status = "Downloading and verifying update...";
             var current = Version.TryParse(CurrentVersion, out var parsed) ? parsed : new Version(0, 0, 0);
-            var package = await _selfUpdater.DownloadLatestInstallerAsync(current);
+            using var selfUpdater = new ApplicationSelfUpdateService(App.DevBoxRoot);
+            var package = await selfUpdater.DownloadLatestInstallerAsync(current);
             Status = $"Verified DevBox {package.Version.ToString(3)}. Starting installer...";
 
             var startInfo = new ProcessStartInfo(package.InstallerPath)
