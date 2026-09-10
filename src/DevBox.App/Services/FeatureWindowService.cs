@@ -11,6 +11,7 @@ public interface IFeatureWindowService
     void ShowSsl(Window owner);
     void ShowSetup(Window owner);
     void ShowTools(Window owner);
+    void ShowProjects(Window owner);
     void ShowUpdates(Window owner);
     void ShowSettings(Window owner);
 }
@@ -23,6 +24,12 @@ public sealed class FeatureWindowService(IServiceProvider serviceProvider) : IFe
     public void ShowSsl(Window owner) => Show<SslWindow>(owner);
     public void ShowSetup(Window owner) => Show<FirstRunWindow>(owner);
     public void ShowTools(Window owner) => Show<ToolsWindow>(owner);
+    public void ShowProjects(Window owner)
+    {
+        var window = ActivatorUtilities.CreateInstance<ProjectManagerWindow>(serviceProvider);
+        window.Owner = owner;
+        window.ShowDialog();
+    }
     public void ShowUpdates(Window owner) => Show<UpdateWindow>(owner);
     public void ShowSettings(Window owner) => Show<SettingsWindow>(owner);
 
