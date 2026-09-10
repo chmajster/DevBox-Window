@@ -25,8 +25,9 @@ internal sealed class TlsRollbackStateService
 
     public TlsRollbackState Capture(string domain)
     {
-        var certificatePath = CertificatePath(domain);
-        var privateKeyPath = PrivateKeyPath(domain);
+        var normalizedDomain = LocalCertificateManager.NormalizeDomain(domain);
+        var certificatePath = CertificatePath(normalizedDomain);
+        var privateKeyPath = PrivateKeyPath(normalizedDomain);
         var leafTrusted = false;
         var localCaExisted = false;
         var localCaTrusted = false;
@@ -37,7 +38,7 @@ internal sealed class TlsRollbackStateService
             {
                 try
                 {
-                    leafTrusted = _certificates.IsTrustedForCurrentUser(domain);
+                    leafTrusted = _certificates.IsTrustedForCurrentUser(normalizedDomain);
                 }
                 catch (CryptographicException)
                 {
@@ -52,7 +53,7 @@ internal sealed class TlsRollbackStateService
         }
 
         return new TlsRollbackState(
-            domain,
+            normalizedDomain,
             File.Exists(certificatePath) ? File.ReadAllBytes(certificatePath) : null,
             File.Exists(privateKeyPath) ? File.ReadAllBytes(privateKeyPath) : null,
             leafTrusted,
@@ -63,14 +64,15 @@ internal sealed class TlsRollbackStateService
     public void Restore(TlsRollbackState state)
     {
         ArgumentNullException.ThrowIfNull(state);
-        var certificatePath = CertificatePath(state.Domain);
-        var privateKeyPath = PrivateKeyPath(state.Domain);
+        var normalizedDomain = LocalCertificateManager.NormalizeDomain(state.Domain);
+        var certificatePath = CertificatePath(normalizedDomain);
+        var privateKeyPath = PrivateKeyPath(normalizedDomain);
 
         if (OperatingSystem.IsWindows() && File.Exists(certificatePath))
         {
             try
             {
-                _certificates.UntrustForCurrentUser(state.Domain);
+                _certificates.UntrustForCurrentUser(normalizedDomain);
             }
             catch (CryptographicException)
             {
@@ -86,7 +88,7 @@ internal sealed class TlsRollbackStateService
         if (state.Certificate is not null && state.LeafTrusted)
             TrustLeaf(certificatePath);
         else if (state.Certificate is not null)
-            _certificates.UntrustForCurrentUser(state.Domain);
+            _certificates.UntrustForCurrentUser(normalizedDomain);
 
         using var authority = new LocalCertificateAuthorityService(_rootPath);
         if (!state.LocalCaExisted)
