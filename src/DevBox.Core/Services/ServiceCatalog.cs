@@ -14,7 +14,11 @@ public sealed class ServiceCatalog
 
     public string RootPath { get; }
 
-    public IReadOnlyList<ServiceDefinition> GetDefaultServices()
+    // Kept for compatibility with existing callers. The catalog now returns all
+    // enabled DevBox services, including manifest-managed services such as Mailpit.
+    public IReadOnlyList<ServiceDefinition> GetDefaultServices() => GetServices();
+
+    public IReadOnlyList<ServiceDefinition> GetCoreServices()
     {
         var nginxExe = At("runtime", "nginx", "current", "nginx.exe");
         var phpExe = At("runtime", "php", "current", "php-cgi.exe");
@@ -51,7 +55,7 @@ public sealed class ServiceCatalog
 
     public IReadOnlyList<ServiceDefinition> GetServices()
     {
-        var services = GetDefaultServices().Concat(_managedServices.GetEnabledDefinitions()).ToArray();
+        var services = GetCoreServices().Concat(_managedServices.GetEnabledDefinitions()).ToArray();
         var duplicateKey = services.GroupBy(item => item.Key, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);
         if (duplicateKey is not null)
         {
