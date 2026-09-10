@@ -61,7 +61,7 @@ public sealed partial class SiteManager
 
         Directory.CreateDirectory(root);
         var indexPath = Path.Combine(root, "index.php");
-        if (!File.Exists(indexPath))
+        if (documentRoot is null && !File.Exists(indexPath))
         {
             File.WriteAllText(indexPath, "<?php\nphpinfo();\n");
         }
