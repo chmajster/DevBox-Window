@@ -7,36 +7,22 @@ using DevBox.Core.Services;
 
 namespace DevBox.App.ViewModels;
 
-public sealed class ProjectSiteRow
+public sealed class ProjectSiteRow(SiteDefinition site, string projectRoot, ProjectKind kind)
 {
-    public ProjectSiteRow(SiteDefinition site, string projectRoot, ProjectKind kind)
-    {
-        Site = site;
-        ProjectRoot = projectRoot;
-        Kind = kind;
-    }
-
-    public SiteDefinition Site { get; }
+    public SiteDefinition Site { get; } = site;
     public string Name => Site.Name;
     public string Domain => Site.Domain;
-    public string ProjectRoot { get; }
+    public string ProjectRoot { get; } = projectRoot;
     public string PhpVersion => Site.PhpVersion ?? "global";
     public string Https => Site.HttpsEnabled ? "HTTPS" : "HTTP";
-    public ProjectKind Kind { get; }
+    public ProjectKind Kind { get; } = kind;
 }
 
-public sealed class ManagedServiceRow
+public sealed class ManagedServiceRow(ManagedServiceManifest manifest, ServiceDefinition definition, ServiceSnapshot snapshot)
 {
-    public ManagedServiceRow(ManagedServiceManifest manifest, ServiceDefinition definition, ServiceSnapshot snapshot)
-    {
-        Manifest = manifest;
-        Definition = definition;
-        Snapshot = snapshot;
-    }
-
-    public ManagedServiceManifest Manifest { get; }
-    public ServiceDefinition Definition { get; }
-    public ServiceSnapshot Snapshot { get; }
+    public ManagedServiceManifest Manifest { get; } = manifest;
+    public ServiceDefinition Definition { get; } = definition;
+    public ServiceSnapshot Snapshot { get; } = snapshot;
     public string Key => Manifest.Key;
     public string Name => Manifest.DisplayName;
     public string State => Snapshot.State.ToString();
@@ -52,11 +38,13 @@ public sealed class ProjectManagerWindowViewModel : ObservableObject
     private readonly ProjectCommandService _commands;
     private readonly XdebugConfigurationService _xdebug;
     private readonly ManagedServiceCatalog _managedServices;
+    private readonly SiteManager _sites;
     private readonly IProcessManager _processManager;
     private readonly IHostMappingService _hosts;
     private readonly IFileDialogService _files;
     private readonly IDialogService _dialogs;
     private readonly IShellService _shell;
+
     private ProjectStackProfile? _selectedProfile;
     private ProjectSiteRow? _selectedProject;
     private ProjectCommandPreset? _selectedCommand;
@@ -83,6 +71,7 @@ public sealed class ProjectManagerWindowViewModel : ObservableObject
         ProjectCommandService commands,
         XdebugConfigurationService xdebug,
         ManagedServiceCatalog managedServices,
+        SiteManager sites,
         IProcessManager processManager,
         IHostMappingService hosts,
         IFileDialogService files,
@@ -95,6 +84,7 @@ public sealed class ProjectManagerWindowViewModel : ObservableObject
         _commands = commands;
         _xdebug = xdebug;
         _managedServices = managedServices;
+        _sites = sites;
         _processManager = processManager;
         _hosts = hosts;
         _files = files;
@@ -130,13 +120,7 @@ public sealed class ProjectManagerWindowViewModel : ObservableObject
     public ProjectStackProfile? SelectedProfile
     {
         get => _selectedProfile;
-        set
-        {
-            if (SetProperty(ref _selectedProfile, value))
-            {
-                CreateProjectCommand.RaiseCanExecuteChanged();
-            }
-        }
+        set { if (SetProperty(ref _selectedProfile, value)) CreateProjectCommand.RaiseCanExecuteChanged(); }
     }
 
     public ProjectSiteRow? SelectedProject
@@ -144,10 +128,7 @@ public sealed class ProjectManagerWindowViewModel : ObservableObject
         get => _selectedProject;
         set
         {
-            if (!SetProperty(ref _selectedProject, value))
-            {
-                return;
-            }
+            if (!SetProperty(ref _selectedProject, value)) return;
             LoadProjectCommands();
             CheckHealthCommand.RaiseCanExecuteChanged();
             RepairCommand.RaiseCanExecuteChanged();
@@ -160,13 +141,7 @@ public sealed class ProjectManagerWindowViewModel : ObservableObject
     public ProjectCommandPreset? SelectedCommand
     {
         get => _selectedCommand;
-        set
-        {
-            if (SetProperty(ref _selectedCommand, value))
-            {
-                RunCommand.RaiseCanExecuteChanged();
-            }
-        }
+        set { if (SetProperty(ref _selectedCommand, value)) RunCommand.RaiseCanExecuteChanged(); }
     }
 
     public ManagedServiceRow? SelectedManagedService
@@ -174,26 +149,18 @@ public sealed class ProjectManagerWindowViewModel : ObservableObject
         get => _selectedManagedService;
         set
         {
-            if (SetProperty(ref _selectedManagedService, value))
-            {
-                StartManagedServiceCommand.RaiseCanExecuteChanged();
-                StopManagedServiceCommand.RaiseCanExecuteChanged();
-                RestartManagedServiceCommand.RaiseCanExecuteChanged();
-                ToggleManagedServiceCommand.RaiseCanExecuteChanged();
-            }
+            if (!SetProperty(ref _selectedManagedService, value)) return;
+            StartManagedServiceCommand.RaiseCanExecuteChanged();
+            StopManagedServiceCommand.RaiseCanExecuteChanged();
+            RestartManagedServiceCommand.RaiseCanExecuteChanged();
+            ToggleManagedServiceCommand.RaiseCanExecuteChanged();
         }
     }
 
     public string ProjectName
     {
         get => _projectName;
-        set
-        {
-            if (SetProperty(ref _projectName, value))
-            {
-                CreateProjectCommand.RaiseCanExecuteChanged();
-            }
-        }
+        set { if (SetProperty(ref _projectName, value)) CreateProjectCommand.RaiseCanExecuteChanged(); }
     }
     public string ProjectDomain { get => _projectDomain; set => SetProperty(ref _projectDomain, value); }
     public string ImportPath
@@ -201,23 +168,15 @@ public sealed class ProjectManagerWindowViewModel : ObservableObject
         get => _importPath;
         set
         {
-            if (SetProperty(ref _importPath, value))
-            {
-                DetectImportCommand.RaiseCanExecuteChanged();
-                ImportProjectCommand.RaiseCanExecuteChanged();
-            }
+            if (!SetProperty(ref _importPath, value)) return;
+            DetectImportCommand.RaiseCanExecuteChanged();
+            ImportProjectCommand.RaiseCanExecuteChanged();
         }
     }
     public string ImportName
     {
         get => _importName;
-        set
-        {
-            if (SetProperty(ref _importName, value))
-            {
-                ImportProjectCommand.RaiseCanExecuteChanged();
-            }
-        }
+        set { if (SetProperty(ref _importName, value)) ImportProjectCommand.RaiseCanExecuteChanged(); }
     }
     public bool CopyImport { get => _copyImport; set => SetProperty(ref _copyImport, value); }
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
@@ -255,22 +214,18 @@ public sealed class ProjectManagerWindowViewModel : ObservableObject
         {
             Status = "Refreshing projects...";
             Profiles.Clear();
-            foreach (var profile in _profiles.GetProfiles())
-            {
-                Profiles.Add(profile);
-            }
+            foreach (var profile in _profiles.GetProfiles()) Profiles.Add(profile);
             SelectedProfile ??= Profiles.FirstOrDefault();
 
             var selectedName = SelectedProject?.Name;
             Projects.Clear();
-            foreach (var site in new SiteManager(App.DevBoxRoot).GetSites())
+            foreach (var site in _sites.GetSites())
             {
                 var projectRoot = _workspace.ResolveProjectRoot(site.DocumentRoot);
-                var detection = Directory.Exists(projectRoot) ? _workspace.Detect(projectRoot) : null;
-                Projects.Add(new ProjectSiteRow(site, projectRoot, detection?.Kind ?? ProjectKind.Unknown));
+                var kind = Directory.Exists(projectRoot) ? _workspace.Detect(projectRoot).Kind : ProjectKind.Unknown;
+                Projects.Add(new ProjectSiteRow(site, projectRoot, kind));
             }
-            SelectedProject = Projects.FirstOrDefault(project => project.Name.Equals(selectedName, StringComparison.OrdinalIgnoreCase))
-                ?? Projects.FirstOrDefault();
+            SelectedProject = Projects.FirstOrDefault(project => project.Name.Equals(selectedName, StringComparison.OrdinalIgnoreCase)) ?? Projects.FirstOrDefault();
             RefreshXdebug();
             RefreshManagedServices();
             Status = "Ready";
@@ -287,44 +242,25 @@ public sealed class ProjectManagerWindowViewModel : ObservableObject
     {
         try
         {
-            if (SelectedProfile is null)
-            {
-                return;
-            }
+            if (SelectedProfile is null) return;
             Status = "Creating project...";
-            var request = _profiles.CreateRequest(
-                SelectedProfile.Key,
-                ProjectName.Trim(),
-                string.IsNullOrWhiteSpace(ProjectDomain) ? null : ProjectDomain.Trim());
+            var request = _profiles.CreateRequest(SelectedProfile.Key, ProjectName.Trim(), string.IsNullOrWhiteSpace(ProjectDomain) ? null : ProjectDomain.Trim());
             var result = await _provisioning.ProvisionAsync(request);
             if (!await _hosts.EnsureAsync(result.Site.Domain))
-            {
                 _dialogs.Warning("Project created", $"Project was created, but the hosts mapping for {result.Site.Domain} could not be confirmed.");
-            }
             await RefreshAsync();
             SelectedProject = Projects.FirstOrDefault(project => project.Name.Equals(result.Site.Name, StringComparison.OrdinalIgnoreCase));
-            var details = string.Join(Environment.NewLine, result.Actions.Concat(result.Warnings.Select(value => "Warning: " + value)));
-            _dialogs.Info("Project created", details);
+            _dialogs.Info("Project created", string.Join(Environment.NewLine, result.Actions.Concat(result.Warnings.Select(value => "Warning: " + value))));
         }
-        catch (Exception ex) when (IsExpected(ex))
-        {
-            Status = "Create failed";
-            _dialogs.Error("Project creation failed", ex.Message);
-        }
+        catch (Exception ex) when (IsExpected(ex)) { Status = "Create failed"; _dialogs.Error("Project creation failed", ex.Message); }
     }
 
     private void BrowseImport()
     {
         var selected = _files.SelectFolder("Select an existing project directory", ImportPath);
-        if (selected is null)
-        {
-            return;
-        }
+        if (selected is null) return;
         ImportPath = selected;
-        if (string.IsNullOrWhiteSpace(ImportName))
-        {
-            ImportName = new DirectoryInfo(selected).Name.ToLowerInvariant().Replace(' ', '-');
-        }
+        if (string.IsNullOrWhiteSpace(ImportName)) ImportName = new DirectoryInfo(selected).Name.ToLowerInvariant().Replace(' ', '-');
         DetectImport();
     }
 
@@ -334,14 +270,9 @@ public sealed class ProjectManagerWindowViewModel : ObservableObject
         {
             var result = _workspace.Detect(ImportPath);
             DetectionSummary = $"{result.Kind} · {string.Join(" ", result.Evidence)}" +
-                               (result.RequiredPhpExtensions.Count == 0
-                                   ? string.Empty
-                                   : $" Required PHP extensions: {string.Join(", ", result.RequiredPhpExtensions)}.");
+                (result.RequiredPhpExtensions.Count == 0 ? string.Empty : $" Required PHP extensions: {string.Join(", ", result.RequiredPhpExtensions)}.");
         }
-        catch (Exception ex) when (IsExpected(ex))
-        {
-            DetectionSummary = ex.Message;
-        }
+        catch (Exception ex) when (IsExpected(ex)) { DetectionSummary = ex.Message; }
     }
 
     private async Task ImportProjectAsync()
@@ -349,58 +280,34 @@ public sealed class ProjectManagerWindowViewModel : ObservableObject
         try
         {
             Status = "Importing project...";
-            var site = _workspace.Import(new ProjectImportRequest(
-                ImportPath,
-                ImportName.Trim(),
-                CopyIntoDevBox: CopyImport));
+            var site = _workspace.Import(new ProjectImportRequest(ImportPath, ImportName.Trim(), CopyIntoDevBox: CopyImport));
             if (!await _hosts.EnsureAsync(site.Domain))
-            {
                 _dialogs.Warning("Project imported", $"Project was imported, but the hosts mapping for {site.Domain} could not be confirmed.");
-            }
             await RefreshAsync();
             SelectedProject = Projects.FirstOrDefault(project => project.Name.Equals(site.Name, StringComparison.OrdinalIgnoreCase));
             _dialogs.Info("Project imported", $"{site.Name} is registered as {site.Domain}.");
         }
-        catch (Exception ex) when (IsExpected(ex))
-        {
-            Status = "Import failed";
-            _dialogs.Error("Project import failed", ex.Message);
-        }
+        catch (Exception ex) when (IsExpected(ex)) { Status = "Import failed"; _dialogs.Error("Project import failed", ex.Message); }
     }
 
     private async Task CheckHealthAsync()
     {
-        if (SelectedProject is null)
-        {
-            return;
-        }
+        if (SelectedProject is null) return;
         try
         {
             Status = "Checking project health...";
             var report = await _workspace.CheckHealthAsync(SelectedProject.Site);
             HealthChecks.Clear();
-            foreach (var check in report.Checks)
-            {
-                HealthChecks.Add(check);
-            }
-            var errors = report.Checks.Count(check => check.State == ProjectHealthState.Error);
-            var warnings = report.Checks.Count(check => check.State == ProjectHealthState.Warning);
-            HealthSummary = $"{report.Kind}: {errors} error(s), {warnings} warning(s).";
+            foreach (var check in report.Checks) HealthChecks.Add(check);
+            HealthSummary = $"{report.Kind}: {report.Checks.Count(check => check.State == ProjectHealthState.Error)} error(s), {report.Checks.Count(check => check.State == ProjectHealthState.Warning)} warning(s).";
             Status = "Ready";
         }
-        catch (Exception ex) when (IsExpected(ex))
-        {
-            Status = "Health check failed";
-            _dialogs.Error("Project health check failed", ex.Message);
-        }
+        catch (Exception ex) when (IsExpected(ex)) { Status = "Health check failed"; _dialogs.Error("Project health check failed", ex.Message); }
     }
 
     private async Task RepairAsync()
     {
-        if (SelectedProject is null)
-        {
-            return;
-        }
+        if (SelectedProject is null) return;
         try
         {
             Status = "Repairing project...";
@@ -408,76 +315,40 @@ public sealed class ProjectManagerWindowViewModel : ObservableObject
             await CheckHealthAsync();
             var message = result.Repaired.Count == 0 ? "No automatic repairs were required." : string.Join(Environment.NewLine, result.Repaired);
             if (result.RemainingProblems.Count > 0)
-            {
                 message += Environment.NewLine + Environment.NewLine + "Remaining:" + Environment.NewLine + string.Join(Environment.NewLine, result.RemainingProblems);
-            }
             _dialogs.Info("Project repair", message);
         }
-        catch (Exception ex) when (IsExpected(ex))
-        {
-            Status = "Repair failed";
-            _dialogs.Error("Project repair failed", ex.Message);
-        }
+        catch (Exception ex) when (IsExpected(ex)) { Status = "Repair failed"; _dialogs.Error("Project repair failed", ex.Message); }
     }
 
     private void LoadProjectCommands()
     {
         ProjectCommands.Clear();
         SelectedCommand = null;
-        if (SelectedProject is null || !Directory.Exists(SelectedProject.ProjectRoot))
-        {
-            return;
-        }
+        if (SelectedProject is null || !Directory.Exists(SelectedProject.ProjectRoot)) return;
         try
         {
-            foreach (var preset in _commands.GetPresets(SelectedProject.ProjectRoot))
-            {
-                ProjectCommands.Add(preset);
-            }
+            foreach (var preset in _commands.GetPresets(SelectedProject.ProjectRoot)) ProjectCommands.Add(preset);
             SelectedCommand = ProjectCommands.FirstOrDefault();
         }
-        catch (Exception ex) when (IsExpected(ex))
-        {
-            CommandOutput = ex.Message;
-        }
+        catch (Exception ex) when (IsExpected(ex)) { CommandOutput = ex.Message; }
     }
 
     private async Task RunProjectCommandAsync()
     {
-        if (SelectedProject is null || SelectedCommand is null)
-        {
-            return;
-        }
+        if (SelectedProject is null || SelectedCommand is null) return;
         try
         {
             Status = $"Running {SelectedCommand.DisplayName}...";
             var result = await _commands.RunAsync(SelectedProject.ProjectRoot, SelectedCommand.Key);
-            CommandOutput = string.Join(Environment.NewLine,
-                new[] { result.StandardOutput, result.StandardError }.Where(value => !string.IsNullOrWhiteSpace(value)));
+            CommandOutput = string.Join(Environment.NewLine, new[] { result.StandardOutput, result.StandardError }.Where(value => !string.IsNullOrWhiteSpace(value)));
             Status = result.Success ? $"Completed in {result.Duration.TotalSeconds:F1}s" : $"Command exited with code {result.ExitCode}";
         }
-        catch (Exception ex) when (IsExpected(ex))
-        {
-            Status = "Command failed";
-            CommandOutput = ex.Message;
-        }
+        catch (Exception ex) when (IsExpected(ex)) { Status = "Command failed"; CommandOutput = ex.Message; }
     }
 
-    private void OpenProject()
-    {
-        if (SelectedProject is not null)
-        {
-            _shell.Open(SelectedProject.ProjectRoot);
-        }
-    }
-
-    private void OpenSite()
-    {
-        if (SelectedProject is not null)
-        {
-            _shell.Open($"{(SelectedProject.Site.HttpsEnabled ? "https" : "http")}://{SelectedProject.Domain}");
-        }
-    }
+    private void OpenProject() { if (SelectedProject is not null) _shell.Open(SelectedProject.ProjectRoot); }
+    private void OpenSite() { if (SelectedProject is not null) _shell.Open($"{(SelectedProject.Site.HttpsEnabled ? "https" : "http")}://{SelectedProject.Domain}"); }
 
     private void RefreshXdebug()
     {
@@ -488,49 +359,33 @@ public sealed class ProjectManagerWindowViewModel : ObservableObject
             XdebugMode = status.Mode;
             XdebugPort = status.ClientPort.ToString(System.Globalization.CultureInfo.InvariantCulture);
             XdebugStartWithRequest = status.StartWithRequest;
-            XdebugStatus = status.BinaryAvailable
-                ? status.Enabled ? "Xdebug is enabled" : "Xdebug binary available, disabled"
-                : "php_xdebug.dll is not installed in the active PHP runtime";
+            XdebugStatus = status.BinaryAvailable ? status.Enabled ? "Xdebug is enabled" : "Xdebug binary available, disabled" : "php_xdebug.dll is not installed in the active PHP runtime";
         }
-        catch (Exception ex) when (IsExpected(ex))
-        {
-            XdebugStatus = ex.Message;
-        }
+        catch (Exception ex) when (IsExpected(ex)) { XdebugStatus = ex.Message; }
     }
 
     private void ApplyXdebug()
     {
         try
         {
-            if (!int.TryParse(XdebugPort, out var port))
-            {
-                throw new ArgumentException("Xdebug port must be a number.");
-            }
+            if (!int.TryParse(XdebugPort, out var port)) throw new ArgumentException("Xdebug port must be a number.");
             var status = _xdebug.Configure(new XdebugConfiguration(XdebugEnabled, XdebugMode, port, XdebugStartWithRequest));
-            XdebugStatus = status.Enabled ? "Xdebug configuration applied and enabled." : "Xdebug configuration applied and disabled.";
+            XdebugStatus = status.Enabled ? "Xdebug configuration applied and enabled. Restart PHP to reload it." : "Xdebug configuration applied and disabled. Restart PHP to reload it.";
         }
-        catch (Exception ex) when (IsExpected(ex))
-        {
-            _dialogs.Error("Xdebug configuration failed", ex.Message);
-        }
+        catch (Exception ex) when (IsExpected(ex)) { _dialogs.Error("Xdebug configuration failed", ex.Message); }
     }
 
     private void AddManagedService(ManagedServiceManifest template)
     {
         try
         {
-            var executable = Path.Combine(App.DevBoxRoot, template.ExecutableRelativePath.Replace('/', Path.DirectorySeparatorChar));
-            _managedServices.Upsert(template with { Enabled = File.Exists(executable) });
+            var definition = _managedServices.GetDefinition(template);
+            _managedServices.Upsert(template with { Enabled = File.Exists(definition.ExecutablePath) });
             RefreshManagedServices();
-            if (!File.Exists(executable))
-            {
-                _dialogs.Warning("Managed service", $"{template.DisplayName} was registered disabled because its executable is not installed at {executable}.");
-            }
+            if (!File.Exists(definition.ExecutablePath))
+                _dialogs.Warning("Managed service", $"{template.DisplayName} was registered disabled because its runtime is not installed. Install it from Tools first.");
         }
-        catch (Exception ex) when (IsExpected(ex))
-        {
-            _dialogs.Error("Managed service", ex.Message);
-        }
+        catch (Exception ex) when (IsExpected(ex)) { _dialogs.Error("Managed service", ex.Message); }
     }
 
     private void RefreshManagedServices()
@@ -539,118 +394,45 @@ public sealed class ProjectManagerWindowViewModel : ObservableObject
         ManagedServices.Clear();
         foreach (var manifest in _managedServices.GetManifests())
         {
-            var single = new ManagedServiceCatalog(App.DevBoxRoot);
-            ServiceDefinition? definition = null;
-            if (manifest.Enabled)
-            {
-                definition = single.GetEnabledDefinitions().FirstOrDefault(item => item.Key.Equals(manifest.Key, StringComparison.OrdinalIgnoreCase));
-            }
-            if (definition is null)
-            {
-                var enabledManifest = manifest with { Enabled = true };
-                var tempCatalog = new ManagedServiceCatalog(App.DevBoxRoot);
-                var all = tempCatalog.GetManifests().ToList();
-                var current = all.FindIndex(item => item.Key.Equals(manifest.Key, StringComparison.OrdinalIgnoreCase));
-                if (current >= 0)
-                {
-                    all[current] = enabledManifest;
-                    try
-                    {
-                        tempCatalog.Save(all);
-                        definition = tempCatalog.GetEnabledDefinitions().First(item => item.Key.Equals(manifest.Key, StringComparison.OrdinalIgnoreCase));
-                    }
-                    finally
-                    {
-                        all[current] = manifest;
-                        tempCatalog.Save(all);
-                    }
-                }
-            }
-            if (definition is null)
-            {
-                continue;
-            }
+            var definition = _managedServices.GetDefinition(manifest);
             ManagedServices.Add(new ManagedServiceRow(manifest, definition, _processManager.GetStatus(definition)));
         }
-        SelectedManagedService = ManagedServices.FirstOrDefault(item => item.Key.Equals(selectedKey, StringComparison.OrdinalIgnoreCase))
-            ?? ManagedServices.FirstOrDefault();
+        SelectedManagedService = ManagedServices.FirstOrDefault(item => item.Key.Equals(selectedKey, StringComparison.OrdinalIgnoreCase)) ?? ManagedServices.FirstOrDefault();
     }
 
     private async Task StartManagedServiceAsync()
     {
-        if (SelectedManagedService is null)
-        {
-            return;
-        }
-        try
-        {
-            await _processManager.StartAsync(SelectedManagedService.Definition);
-            RefreshManagedServices();
-        }
-        catch (Exception ex) when (IsExpected(ex))
-        {
-            _dialogs.Error("Start service failed", ex.Message);
-        }
+        if (SelectedManagedService is null) return;
+        try { await _processManager.StartAsync(SelectedManagedService.Definition); RefreshManagedServices(); }
+        catch (Exception ex) when (IsExpected(ex)) { _dialogs.Error("Start service failed", ex.Message); }
     }
 
     private async Task StopManagedServiceAsync()
     {
-        if (SelectedManagedService is null)
-        {
-            return;
-        }
-        try
-        {
-            await _processManager.StopAsync(SelectedManagedService.Definition);
-            RefreshManagedServices();
-        }
-        catch (Exception ex) when (IsExpected(ex))
-        {
-            _dialogs.Error("Stop service failed", ex.Message);
-        }
+        if (SelectedManagedService is null) return;
+        try { await _processManager.StopAsync(SelectedManagedService.Definition); RefreshManagedServices(); }
+        catch (Exception ex) when (IsExpected(ex)) { _dialogs.Error("Stop service failed", ex.Message); }
     }
 
     private async Task RestartManagedServiceAsync()
     {
-        if (SelectedManagedService is null)
-        {
-            return;
-        }
-        try
-        {
-            await _processManager.RestartAsync(SelectedManagedService.Definition);
-            RefreshManagedServices();
-        }
-        catch (Exception ex) when (IsExpected(ex))
-        {
-            _dialogs.Error("Restart service failed", ex.Message);
-        }
+        if (SelectedManagedService is null) return;
+        try { await _processManager.RestartAsync(SelectedManagedService.Definition); RefreshManagedServices(); }
+        catch (Exception ex) when (IsExpected(ex)) { _dialogs.Error("Restart service failed", ex.Message); }
     }
 
     private void ToggleManagedService()
     {
-        if (SelectedManagedService is null)
-        {
-            return;
-        }
+        if (SelectedManagedService is null) return;
         try
         {
             var manifest = SelectedManagedService.Manifest;
-            if (!manifest.Enabled)
-            {
-                var executable = Path.Combine(App.DevBoxRoot, manifest.ExecutableRelativePath.Replace('/', Path.DirectorySeparatorChar));
-                if (!File.Exists(executable))
-                {
-                    throw new FileNotFoundException("The service runtime must be installed before it can be enabled.", executable);
-                }
-            }
+            if (!manifest.Enabled && !File.Exists(SelectedManagedService.Definition.ExecutablePath))
+                throw new FileNotFoundException("The service runtime must be installed before it can be enabled.", SelectedManagedService.Definition.ExecutablePath);
             _managedServices.Upsert(manifest with { Enabled = !manifest.Enabled });
             RefreshManagedServices();
         }
-        catch (Exception ex) when (IsExpected(ex))
-        {
-            _dialogs.Error("Managed service", ex.Message);
-        }
+        catch (Exception ex) when (IsExpected(ex)) { _dialogs.Error("Managed service", ex.Message); }
     }
 
     private static bool IsExpected(Exception ex) =>
