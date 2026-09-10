@@ -120,7 +120,7 @@ internal sealed class TlsRollbackStateService
 
     private static void TrustLeaf(string certificatePath)
     {
-        using var certificate = X509Certificate2.CreateFromPemFile(certificatePath);
+        using var certificate = LocalCertificateManager.LoadPublicCertificate(certificatePath);
         using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
         store.Open(OpenFlags.ReadWrite);
         if (store.Certificates.Find(X509FindType.FindByThumbprint, certificate.Thumbprint, validOnly: false).Count == 0)
