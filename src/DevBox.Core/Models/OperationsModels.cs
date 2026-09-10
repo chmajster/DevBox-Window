@@ -20,13 +20,6 @@ public sealed record PlatformTaskSnapshot(
     DateTimeOffset? FinishedAtUtc,
     string? Error);
 
-public enum DiagnosticSeverity
-{
-    Information,
-    Warning,
-    Error
-}
-
 public sealed record AdvancedDiagnosticFinding(
     string Key,
     string Area,
