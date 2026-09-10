@@ -7,6 +7,7 @@ namespace DevBox.Core.Services;
 public sealed class EnvironmentLockService : IDisposable
 {
     public const string LockFileName = "devbox.lock.json";
+
     private readonly string _rootPath;
     private readonly string _wwwRoot;
     private readonly EnvironmentProfileService _profiles;
@@ -15,6 +16,8 @@ public sealed class EnvironmentLockService : IDisposable
     private readonly SiteManager _sites;
     private readonly ProjectWorkspaceService _workspace;
     private readonly ProjectActionService _actions;
+    private readonly AddonCatalog _addons;
+    private readonly ManagedServiceCatalog _managedServices;
     private bool _disposed;
 
     public EnvironmentLockService(string rootPath, HttpClient? httpClient = null)
@@ -28,6 +31,8 @@ public sealed class EnvironmentLockService : IDisposable
         _sites = new SiteManager(_rootPath);
         _workspace = new ProjectWorkspaceService(_rootPath, _sites, new PhpExtensionInspector(_rootPath), new LocalCertificateManager(_rootPath));
         _actions = new ProjectActionService(_rootPath, _workspace);
+        _addons = new AddonCatalog(_rootPath);
+        _managedServices = new ManagedServiceCatalog(_rootPath);
     }
 
     public EnvironmentLockFile Generate(string projectPath, string? profileKey = null)
@@ -36,19 +41,18 @@ public sealed class EnvironmentLockService : IDisposable
         var root = EnsureProjectRoot(projectPath);
         var manifest = ReadManifestObject(root);
         var profile = string.IsNullOrWhiteSpace(profileKey) ? null : _profiles.GetProfile(profileKey);
-
         var projectName = GetString(manifest, "Name") ?? Path.GetFileName(root);
         var domain = GetString(manifest, "Domain") ?? $"{projectName}.test";
-        var runtimePins = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var runtimes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (profile is not null)
         {
             foreach (var pair in profile.Runtimes)
-                runtimePins[pair.Key] = pair.Value;
+                runtimes[pair.Key] = pair.Value;
         }
-
-        AddIfNotEmpty(runtimePins, "php", GetString(manifest, "PhpVersion") ?? ReadActiveVersion("php"));
-        AddIfNotEmpty(runtimePins, "node", GetString(manifest, "NodeVersion") ?? ReadEnvironmentRuntime(manifest, "node"));
-        AddIfNotEmpty(runtimePins, "nginx", ReadEnvironmentRuntime(manifest, "nginx") ?? ReadActiveVersion("nginx"));
+        AddIfNotEmpty(runtimes, "php", GetString(manifest, "PhpVersion") ?? ReadActiveVersion("php"));
+        AddIfNotEmpty(runtimes, "node", GetString(manifest, "NodeVersion") ?? ReadEnvironmentRuntime(manifest, "node"));
+        AddIfNotEmpty(runtimes, "nginx", ReadEnvironmentRuntime(manifest, "nginx") ?? ReadActiveVersion("nginx"));
 
         var databaseEngine = (GetString(manifest, "DatabaseEngine") ?? profile?.Database.Engine ?? "none").Trim().ToLowerInvariant();
         var databaseVersion = ReadEnvironmentDatabaseVersion(manifest)
@@ -57,23 +61,22 @@ public sealed class EnvironmentLockService : IDisposable
         var databaseName = GetString(manifest, "DatabaseName") ?? profile?.Database.DatabaseName;
         var databasePort = ReadEnvironmentDatabasePort(manifest) ?? profile?.Database.Port;
 
-        var lockFile = new EnvironmentLockFile
+        var result = new EnvironmentLockFile
         {
             ProjectName = projectName,
             Domain = domain,
             GeneratedAtUtc = DateTimeOffset.UtcNow,
-            Runtimes = runtimePins,
+            Runtimes = runtimes,
             Database = new EnvironmentDatabasePin(databaseEngine, databaseVersion, databaseName, databasePort),
             Https = GetBool(manifest, "Https") ?? profile?.Https ?? false,
-            Addons = GetStringArray(manifest, "Addons").Concat(profile?.Addons ?? Array.Empty<string>()).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray(),
-            Services = GetStringArray(manifest, "Services").Concat(profile?.Services ?? Array.Empty<string>()).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray(),
-            Actions = _actions.GetActions(root),
+            Addons = MergeKeys(GetStringArray(manifest, "Addons"), profile?.Addons),
+            Services = MergeKeys(GetStringArray(manifest, "Services"), profile?.Services),
+            Actions = profile?.Actions.Count > 0 ? profile.Actions : _actions.GetActions(root),
             SourceProfile = profile?.Key
         };
-
-        ValidateLock(lockFile);
-        AtomicWrite(Path.Combine(root, LockFileName), JsonSerializer.Serialize(lockFile, JsonOptions));
-        return lockFile;
+        ValidateLock(result);
+        AtomicWrite(Path.Combine(root, LockFileName), JsonSerializer.Serialize(result, JsonOptions));
+        return result;
     }
 
     public EnvironmentLockFile Load(string projectPath)
@@ -102,184 +105,54 @@ public sealed class EnvironmentLockService : IDisposable
         var root = EnsureProjectRoot(projectPath);
         var profile = _profiles.GetProfile(profileKey);
         var manifest = ReadManifestObject(root);
-        var applied = new List<string>();
-        var warnings = new List<string>();
-
-        foreach (var pin in profile.Runtimes)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                var status = _runtimes.GetStatuses(pin.Key).FirstOrDefault(item => item.Package.Version.Equals(pin.Value, StringComparison.OrdinalIgnoreCase));
-                if (status is null || !status.Installed || !status.Valid)
-                {
-                    await _runtimes.InstallAsync(pin.Key, pin.Value, cancellationToken).ConfigureAwait(false);
-                    applied.Add($"Installed {pin.Key} {pin.Value}.");
-                }
-                else
-                {
-                    applied.Add($"Verified {pin.Key} {pin.Value}.");
-                }
-
-                if (pin.Key.Equals("nginx", StringComparison.OrdinalIgnoreCase))
-                {
-                    await _runtimes.ActivateAsync(pin.Key, pin.Value, cancellationToken).ConfigureAwait(false);
-                    applied.Add($"Activated Nginx {pin.Value}.");
-                }
-            }
-            catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or HttpRequestException or KeyNotFoundException or PlatformNotSupportedException)
-            {
-                warnings.Add($"Runtime {pin.Key} {pin.Value}: {ex.Message}");
-            }
-        }
-
-        var phpVersion = profile.Runtimes.TryGetValue("php", out var php) ? php : GetString(manifest, "PhpVersion");
-        var nodeVersion = profile.Runtimes.TryGetValue("node", out var node) ? node : GetString(manifest, "NodeVersion");
-        var databaseName = GetString(manifest, "DatabaseName") ?? profile.Database.DatabaseName ?? SafeDatabaseName(GetString(manifest, "Name") ?? Path.GetFileName(root));
-        UpdateLegacyManifest(manifest, profile, phpVersion, nodeVersion, databaseName);
-        AtomicWrite(Path.Combine(root, ProjectWorkspaceService.ManifestFileName), manifest.ToJsonString(JsonOptions));
-        applied.Add("Updated devbox.json environment metadata without breaking schema v1 compatibility.");
-
         var projectName = GetString(manifest, "Name") ?? Path.GetFileName(root);
-        var site = _sites.GetSites().FirstOrDefault(item => item.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase));
-        if (site is not null && !string.IsNullOrWhiteSpace(phpVersion))
-        {
-            try
-            {
-                _ = _sites.SetPhpVersion(site.Name, phpVersion);
-                applied.Add($"Pinned Site to PHP {phpVersion}.");
-            }
-            catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException)
-            {
-                warnings.Add($"PHP Site pin: {ex.Message}");
-            }
-        }
+        var domain = GetString(manifest, "Domain") ?? $"{projectName}.test";
+        var databaseName = profile.Database.Engine.Equals("none", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : GetString(manifest, "DatabaseName") ?? profile.Database.DatabaseName ?? SafeDatabaseName(projectName);
 
-        if (!profile.Database.Engine.Equals("none", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(profile.Database.Version))
+        var desired = new EnvironmentLockFile
         {
-            try
-            {
-                var database = await _databaseRuntimes.EnsureInitializedAsync(profile.Database.Engine, profile.Database.Version, profile.Database.Port, cancellationToken).ConfigureAwait(false);
-                applied.Add($"Prepared {profile.Database.Engine} {profile.Database.Version} on port {database.Port}.");
-            }
-            catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or FileNotFoundException or ArgumentException)
-            {
-                warnings.Add($"Database runtime {profile.Database.Engine} {profile.Database.Version}: {ex.Message}");
-            }
-        }
-
-        foreach (var addonKey in profile.Addons)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                var catalog = new AddonCatalog(_rootPath);
-                var addon = catalog.GetAddons().FirstOrDefault(item => item.Key.Equals(addonKey, StringComparison.OrdinalIgnoreCase));
-                if (addon is null)
-                {
-                    warnings.Add($"ADDON '{addonKey}' is not present in the local catalog.");
-                    continue;
-                }
-                using var installer = new AddonInstaller(_rootPath);
-                await installer.InstallAsync(addon, cancellationToken).ConfigureAwait(false);
-                applied.Add($"Ensured ADDON {addon.DisplayName} {addon.Version}.");
-            }
-            catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or HttpRequestException)
-            {
-                warnings.Add($"ADDON {addonKey}: {ex.Message}");
-            }
-        }
-
-        if (profile.Actions.Count > 0)
-        {
-            _actions.SetActions(root, profile.Actions);
-            applied.Add($"Configured {profile.Actions.Count} project action(s).");
-        }
-
-        if (profile.Https)
-        {
-            var domain = GetString(manifest, "Domain");
-            if (!string.IsNullOrWhiteSpace(domain))
-            {
-                try
-                {
-                    if (OperatingSystem.IsWindows())
-                    {
-                        using var certificate = new LocalCertificateAuthorityService(_rootPath).IssueSiteCertificate(domain);
-                        applied.Add($"Issued {domain} from the DevBox local CA.");
-                    }
-                }
-                catch (Exception ex) when (ex is InvalidOperationException or InvalidDataException or System.Security.Cryptography.CryptographicException or PlatformNotSupportedException)
-                {
-                    warnings.Add($"Local CA certificate: {ex.Message}");
-                }
-            }
-        }
-
-        var lockFile = Generate(root, profile.Key);
-        return new EnvironmentApplyResult(lockFile, applied, warnings);
+            ProjectName = projectName,
+            Domain = domain,
+            GeneratedAtUtc = DateTimeOffset.UtcNow,
+            Runtimes = new Dictionary<string, string>(profile.Runtimes, StringComparer.OrdinalIgnoreCase),
+            Database = profile.Database with { DatabaseName = databaseName },
+            Https = profile.Https,
+            Addons = profile.Addons.ToArray(),
+            Services = profile.Services.ToArray(),
+            Actions = profile.Actions.ToArray(),
+            SourceProfile = profile.Key
+        };
+        ValidateLock(desired);
+        var result = await ApplyDesiredStateAsync(root, desired, cancellationToken).ConfigureAwait(false);
+        AtomicWrite(Path.Combine(root, LockFileName), JsonSerializer.Serialize(desired, JsonOptions));
+        return result;
     }
 
     public async Task<EnvironmentApplyResult> ApplyLockAsync(string projectPath, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         var root = EnsureProjectRoot(projectPath);
-        var lockFile = Load(root);
-        var applied = new List<string>();
-        var warnings = new List<string>();
-
-        foreach (var pin in lockFile.Runtimes)
-        {
-            try
-            {
-                var packageStatus = _runtimes.GetStatuses(pin.Key).FirstOrDefault(item => item.Package.Version.Equals(pin.Value, StringComparison.OrdinalIgnoreCase));
-                if (packageStatus is null || !packageStatus.Installed || !packageStatus.Valid)
-                {
-                    await _runtimes.InstallAsync(pin.Key, pin.Value, cancellationToken).ConfigureAwait(false);
-                    applied.Add($"Installed {pin.Key} {pin.Value} from lock.");
-                }
-                if (pin.Key.Equals("nginx", StringComparison.OrdinalIgnoreCase))
-                    await _runtimes.ActivateAsync(pin.Key, pin.Value, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or HttpRequestException or KeyNotFoundException or PlatformNotSupportedException)
-            {
-                warnings.Add($"Runtime {pin.Key} {pin.Value}: {ex.Message}");
-            }
-        }
-
-        if (!lockFile.Database.Engine.Equals("none", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(lockFile.Database.Version))
-        {
-            try
-            {
-                var database = await _databaseRuntimes.EnsureInitializedAsync(lockFile.Database.Engine, lockFile.Database.Version, lockFile.Database.Port, cancellationToken).ConfigureAwait(false);
-                applied.Add($"Prepared locked database runtime {lockFile.Database.Engine} {lockFile.Database.Version} on port {database.Port}.");
-            }
-            catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or FileNotFoundException or ArgumentException)
-            {
-                warnings.Add($"Database runtime: {ex.Message}");
-            }
-        }
-
-        if (lockFile.Actions.Count > 0)
-            _actions.SetActions(root, lockFile.Actions);
-
-        return new EnvironmentApplyResult(lockFile, applied, warnings);
+        var desired = Load(root);
+        return await ApplyDesiredStateAsync(root, desired, cancellationToken).ConfigureAwait(false);
     }
 
     public IReadOnlyList<string> GetDrift(string projectPath)
     {
         ThrowIfDisposed();
         var root = EnsureProjectRoot(projectPath);
-        var lockFile = Load(root);
+        var desired = Load(root);
         var drift = new List<string>();
-        foreach (var pin in lockFile.Runtimes)
+
+        foreach (var pin in desired.Runtimes)
         {
             RuntimeVersionStatus? status;
             try
             {
                 status = _runtimes.GetStatuses(pin.Key).FirstOrDefault(item => item.Package.Version.Equals(pin.Value, StringComparison.OrdinalIgnoreCase));
             }
-            catch (Exception ex) when (ex is InvalidDataException or IOException)
+            catch (Exception ex) when (ex is InvalidDataException or IOException or PlatformNotSupportedException)
             {
                 drift.Add($"{pin.Key} {pin.Value}: unable to inspect runtime: {ex.Message}");
                 continue;
@@ -290,35 +163,60 @@ public sealed class EnvironmentLockService : IDisposable
                 drift.Add($"Invalid runtime: {pin.Key} {pin.Value}.");
         }
 
-        if (!lockFile.Database.Engine.Equals("none", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(lockFile.Database.Version))
+        if (!desired.Database.Engine.Equals("none", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(desired.Database.Version))
         {
-            var database = _databaseRuntimes.GetInstances(lockFile.Database.Engine)
-                .FirstOrDefault(item => item.Version.Equals(lockFile.Database.Version, StringComparison.OrdinalIgnoreCase));
+            var database = _databaseRuntimes.GetInstances(desired.Database.Engine)
+                .FirstOrDefault(item => item.Version.Equals(desired.Database.Version, StringComparison.OrdinalIgnoreCase));
             if (database is null)
-                drift.Add($"Database runtime is not registered: {lockFile.Database.Engine} {lockFile.Database.Version}.");
-            else if (lockFile.Database.Port is not null && database.Port != lockFile.Database.Port)
-                drift.Add($"Database port drift: locked {lockFile.Database.Port}, registered {database.Port}.");
+                drift.Add($"Database runtime is not registered: {desired.Database.Engine} {desired.Database.Version}.");
+            else if (desired.Database.Port is not null && database.Port != desired.Database.Port)
+                drift.Add($"Database port drift: locked {desired.Database.Port}, registered {database.Port}.");
         }
 
-        foreach (var addonKey in lockFile.Addons)
+        JsonObject manifest;
+        try
         {
-            var addon = new AddonCatalog(_rootPath).GetAddons().FirstOrDefault(item => item.Key.Equals(addonKey, StringComparison.OrdinalIgnoreCase));
+            manifest = ReadManifestObject(root);
+            CompareManifest(desired, manifest, drift);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        {
+            drift.Add($"Manifest could not be checked: {ex.Message}");
+        }
+
+        var site = _sites.GetSites().FirstOrDefault(item => item.Name.Equals(desired.ProjectName, StringComparison.OrdinalIgnoreCase));
+        if (site is null)
+            drift.Add($"Site is missing: {desired.ProjectName}.");
+        else
+        {
+            var lockedPhp = desired.Runtimes.TryGetValue("php", out var php) ? php : null;
+            if (!string.Equals(site.PhpVersion, lockedPhp, StringComparison.OrdinalIgnoreCase))
+                drift.Add($"Site PHP drift: locked {lockedPhp ?? "global"}, current {site.PhpVersion ?? "global"}.");
+            if (!site.Domain.Equals(desired.Domain, StringComparison.OrdinalIgnoreCase))
+                drift.Add($"Site domain drift: locked {desired.Domain}, current {site.Domain}.");
+            if (site.HttpsEnabled != desired.Https)
+                drift.Add($"Site HTTPS drift: locked {desired.Https}, current {site.HttpsEnabled}.");
+        }
+
+        foreach (var addonKey in desired.Addons)
+        {
+            var addon = _addons.GetAddons().FirstOrDefault(item => item.Key.Equals(addonKey, StringComparison.OrdinalIgnoreCase));
             if (addon is null)
-            {
                 drift.Add($"ADDON catalog entry is missing: {addonKey}.");
-                continue;
-            }
-            var installPath = Path.GetFullPath(Path.Combine(_rootPath, addon.InstallPath.Replace('/', Path.DirectorySeparatorChar)));
-            if (!Directory.Exists(installPath) && !File.Exists(installPath))
+            else if (!_addons.IsInstalled(addon))
                 drift.Add($"ADDON is not installed: {addonKey}.");
         }
 
-        if (lockFile.Https)
+        var currentActions = _actions.GetActions(root);
+        if (!ActionsEqual(currentActions, desired.Actions))
+            drift.Add("Project actions differ from devbox.lock.json.");
+
+        if (desired.Https)
         {
-            var certificate = Path.Combine(_rootPath, "config", "ssl", "sites", $"{lockFile.Domain}.crt.pem");
-            var key = Path.Combine(_rootPath, "config", "ssl", "sites", $"{lockFile.Domain}.key.pem");
+            var certificate = Path.Combine(_rootPath, "config", "ssl", "sites", $"{desired.Domain}.crt.pem");
+            var key = Path.Combine(_rootPath, "config", "ssl", "sites", $"{desired.Domain}.key.pem");
             if (!File.Exists(certificate) || !File.Exists(key))
-                drift.Add($"HTTPS certificate files are missing for {lockFile.Domain}.");
+                drift.Add($"HTTPS certificate files are missing for {desired.Domain}.");
         }
 
         return drift;
@@ -333,22 +231,202 @@ public sealed class EnvironmentLockService : IDisposable
         _databaseRuntimes.Dispose();
     }
 
-    private void UpdateLegacyManifest(JsonObject manifest, EnvironmentProfile profile, string? phpVersion, string? nodeVersion, string databaseName)
+    private async Task<EnvironmentApplyResult> ApplyDesiredStateAsync(string root, EnvironmentLockFile desired, CancellationToken cancellationToken)
     {
+        var applied = new List<string>();
+        var warnings = new List<string>();
+
+        foreach (var pin in desired.Runtimes)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var status = _runtimes.GetStatuses(pin.Key).FirstOrDefault(item => item.Package.Version.Equals(pin.Value, StringComparison.OrdinalIgnoreCase));
+                if (status is null || !status.Installed || !status.Valid)
+                {
+                    await _runtimes.InstallAsync(pin.Key, pin.Value, cancellationToken).ConfigureAwait(false);
+                    applied.Add($"Installed {pin.Key} {pin.Value}.");
+                }
+                else
+                {
+                    applied.Add($"Verified {pin.Key} {pin.Value}.");
+                }
+                if (pin.Key.Equals("nginx", StringComparison.OrdinalIgnoreCase))
+                {
+                    await _runtimes.ActivateAsync(pin.Key, pin.Value, cancellationToken).ConfigureAwait(false);
+                    applied.Add($"Activated Nginx {pin.Value}.");
+                }
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or HttpRequestException or KeyNotFoundException or PlatformNotSupportedException)
+            {
+                warnings.Add($"Runtime {pin.Key} {pin.Value}: {ex.Message}");
+            }
+        }
+
+        if (!desired.Database.Engine.Equals("none", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(desired.Database.Version))
+        {
+            try
+            {
+                var database = await _databaseRuntimes.EnsureInitializedAsync(desired.Database.Engine, desired.Database.Version, desired.Database.Port, cancellationToken).ConfigureAwait(false);
+                applied.Add($"Prepared {desired.Database.Engine} {desired.Database.Version} on port {database.Port}.");
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or FileNotFoundException or ArgumentException)
+            {
+                warnings.Add($"Database runtime {desired.Database.Engine} {desired.Database.Version}: {ex.Message}");
+            }
+        }
+
+        foreach (var addonKey in desired.Addons)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var addon = _addons.GetAddons().FirstOrDefault(item => item.Key.Equals(addonKey, StringComparison.OrdinalIgnoreCase));
+                if (addon is null)
+                {
+                    warnings.Add($"ADDON '{addonKey}' is not present in the local catalog.");
+                    continue;
+                }
+                if (!_addons.IsInstalled(addon))
+                {
+                    using var installer = new AddonInstaller(_rootPath);
+                    await installer.InstallAsync(addon, cancellationToken).ConfigureAwait(false);
+                    applied.Add($"Installed ADDON {addon.DisplayName} {addon.Version}.");
+                }
+                else
+                {
+                    applied.Add($"Verified ADDON {addon.DisplayName} {addon.Version}.");
+                }
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or HttpRequestException)
+            {
+                warnings.Add($"ADDON {addonKey}: {ex.Message}");
+            }
+        }
+
+        foreach (var serviceKey in desired.Services)
+        {
+            try
+            {
+                var template = serviceKey.ToLowerInvariant() switch
+                {
+                    "mailpit" => ManagedServiceCatalog.MailpitTemplate(),
+                    "redis" => ManagedServiceCatalog.RedisTemplate(),
+                    _ => null
+                };
+                if (template is null)
+                {
+                    if (!_managedServices.GetManifests().Any(item => item.Key.Equals(serviceKey, StringComparison.OrdinalIgnoreCase)))
+                        warnings.Add($"Managed service '{serviceKey}' has no known template or existing definition.");
+                    continue;
+                }
+                var executable = Path.GetFullPath(Path.Combine(_rootPath, template.ExecutableRelativePath.Replace('/', Path.DirectorySeparatorChar)));
+                _managedServices.Upsert(template with { Enabled = File.Exists(executable) });
+                applied.Add($"Synchronized managed service {serviceKey}.");
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException)
+            {
+                warnings.Add($"Managed service {serviceKey}: {ex.Message}");
+            }
+        }
+
+        var manifest = ReadManifestObject(root);
+        UpdateManifestFromLock(manifest, desired);
+        AtomicWrite(Path.Combine(root, ProjectWorkspaceService.ManifestFileName), manifest.ToJsonString(JsonOptions));
+        applied.Add("Synchronized devbox.json with devbox.lock.json.");
+
+        _actions.SetActions(root, desired.Actions);
+        applied.Add($"Synchronized {desired.Actions.Count} project action(s).");
+
+        try
+        {
+            SynchronizeSite(root, desired);
+            applied.Add($"Synchronized Site {desired.Domain}.");
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or ArgumentException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException or PlatformNotSupportedException)
+        {
+            warnings.Add($"Site/TLS: {ex.Message}");
+        }
+
+        return new EnvironmentApplyResult(desired, applied, warnings);
+    }
+
+    private void SynchronizeSite(string root, EnvironmentLockFile desired)
+    {
+        var detection = _workspace.Detect(root);
+        var documentRoot = detection.Kind is ProjectKind.Laravel or ProjectKind.Symfony && Directory.Exists(Path.Combine(root, "public"))
+            ? Path.Combine(root, "public")
+            : root;
+        var phpVersion = desired.Runtimes.TryGetValue("php", out var php) ? php : null;
+        var existing = _sites.GetSites().FirstOrDefault(item => item.Name.Equals(desired.ProjectName, StringComparison.OrdinalIgnoreCase));
+        if (existing is null)
+            _ = _sites.Create(desired.ProjectName, desired.Domain, documentRoot);
+
+        if (desired.Https)
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                using var certificate = new LocalCertificateAuthorityService(_rootPath).IssueSiteCertificate(desired.Domain);
+            }
+            else
+            {
+                _ = new LocalCertificateManager(_rootPath).Ensure(desired.Domain);
+            }
+        }
+        else
+        {
+            try { new LocalCertificateManager(_rootPath).Delete(desired.Domain); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) { }
+        }
+
+        var updated = new SiteDefinition(desired.ProjectName, desired.Domain, documentRoot, "php", phpVersion, desired.Https);
+        _ = _sites.Update(updated);
+    }
+
+    private static void UpdateManifestFromLock(JsonObject manifest, EnvironmentLockFile desired)
+    {
+        var phpVersion = desired.Runtimes.TryGetValue("php", out var php) ? php : null;
+        var nodeVersion = desired.Runtimes.TryGetValue("node", out var node) ? node : null;
+        SetProperty(manifest, "Name", desired.ProjectName);
+        SetProperty(manifest, "Domain", desired.Domain);
         SetProperty(manifest, "PhpVersion", phpVersion);
         SetProperty(manifest, "NodeVersion", nodeVersion);
-        SetProperty(manifest, "DatabaseEngine", profile.Database.Engine.ToLowerInvariant());
-        SetProperty(manifest, "DatabaseName", profile.Database.Engine.Equals("none", StringComparison.OrdinalIgnoreCase) ? null : databaseName);
-        SetProperty(manifest, "Https", profile.Https);
-        SetProperty(manifest, "Addons", JsonSerializer.SerializeToNode(profile.Addons, JsonOptions));
-        SetProperty(manifest, "Services", JsonSerializer.SerializeToNode(profile.Services, JsonOptions));
+        SetProperty(manifest, "DatabaseEngine", desired.Database.Engine.ToLowerInvariant());
+        SetProperty(manifest, "DatabaseName", desired.Database.Engine.Equals("none", StringComparison.OrdinalIgnoreCase) ? null : desired.Database.DatabaseName);
+        SetProperty(manifest, "Https", desired.Https);
+        SetProperty(manifest, "Addons", JsonSerializer.SerializeToNode(desired.Addons, JsonOptions));
+        SetProperty(manifest, "Services", JsonSerializer.SerializeToNode(desired.Services, JsonOptions));
         manifest["Environment"] = new JsonObject
         {
-            ["Profile"] = profile.Key,
-            ["Runtimes"] = JsonSerializer.SerializeToNode(profile.Runtimes, JsonOptions),
-            ["DatabaseVersion"] = profile.Database.Version,
-            ["DatabasePort"] = profile.Database.Port
+            ["Profile"] = desired.SourceProfile,
+            ["Runtimes"] = JsonSerializer.SerializeToNode(desired.Runtimes, JsonOptions),
+            ["DatabaseVersion"] = desired.Database.Version,
+            ["DatabasePort"] = desired.Database.Port
         };
+    }
+
+    private static void CompareManifest(EnvironmentLockFile desired, JsonObject manifest, List<string> drift)
+    {
+        var php = desired.Runtimes.TryGetValue("php", out var phpVersion) ? phpVersion : null;
+        var node = desired.Runtimes.TryGetValue("node", out var nodeVersion) ? nodeVersion : null;
+        if (!string.Equals(GetString(manifest, "Name"), desired.ProjectName, StringComparison.OrdinalIgnoreCase))
+            drift.Add("Project name differs from devbox.lock.json.");
+        if (!string.Equals(GetString(manifest, "Domain"), desired.Domain, StringComparison.OrdinalIgnoreCase))
+            drift.Add("Project domain differs from devbox.lock.json.");
+        if (!string.Equals(GetString(manifest, "PhpVersion"), php, StringComparison.OrdinalIgnoreCase))
+            drift.Add("Manifest PHP pin differs from devbox.lock.json.");
+        if (!string.Equals(GetString(manifest, "NodeVersion"), node, StringComparison.OrdinalIgnoreCase))
+            drift.Add("Manifest Node.js pin differs from devbox.lock.json.");
+        if (!string.Equals(GetString(manifest, "DatabaseEngine") ?? "none", desired.Database.Engine, StringComparison.OrdinalIgnoreCase))
+            drift.Add("Manifest database engine differs from devbox.lock.json.");
+        if (!string.Equals(GetString(manifest, "DatabaseName"), desired.Database.DatabaseName, StringComparison.OrdinalIgnoreCase))
+            drift.Add("Manifest database name differs from devbox.lock.json.");
+        if ((GetBool(manifest, "Https") ?? false) != desired.Https)
+            drift.Add("Manifest HTTPS state differs from devbox.lock.json.");
+        if (!SetEqual(GetStringArray(manifest, "Addons"), desired.Addons))
+            drift.Add("Manifest ADDONS differ from devbox.lock.json.");
+        if (!SetEqual(GetStringArray(manifest, "Services"), desired.Services))
+            drift.Add("Manifest services differ from devbox.lock.json.");
     }
 
     private JsonObject ReadManifestObject(string projectRoot)
@@ -373,9 +451,9 @@ public sealed class EnvironmentLockService : IDisposable
         var root = Path.GetFullPath(projectPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         if (!Directory.Exists(root))
             throw new DirectoryNotFoundException($"Project directory was not found: {root}");
-        var www = Path.GetFullPath(_wwwRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!root.StartsWith(www, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Environment operations are restricted to projects inside the DevBox www directory.");
+        var www = Path.GetFullPath(_wwwRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!root.Equals(www, StringComparison.OrdinalIgnoreCase) && !root.StartsWith(www + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Environment operations are restricted to the DevBox www directory.");
         return root;
     }
 
@@ -385,25 +463,25 @@ public sealed class EnvironmentLockService : IDisposable
         return File.Exists(marker) ? File.ReadAllText(marker).Trim() : null;
     }
 
-    private static string? ReadEnvironmentRuntime(JsonObject manifest, string runtimeKey)
+    private static string? ReadEnvironmentRuntime(JsonObject manifest, string key)
     {
-        var environment = FindObject(manifest, "Environment");
-        var runtimes = environment is null ? null : FindObject(environment, "Runtimes");
-        return runtimes is null ? null : GetString(runtimes, runtimeKey);
+        var environment = FindProperty(manifest, "Environment") as JsonObject;
+        var runtimes = environment is null ? null : FindProperty(environment, "Runtimes") as JsonObject;
+        return runtimes is null ? null : GetString(runtimes, key);
     }
 
-    private static string? ReadEnvironmentDatabaseVersion(JsonObject manifest) => FindObject(manifest, "Environment") is { } environment ? GetString(environment, "DatabaseVersion") : null;
+    private static string? ReadEnvironmentDatabaseVersion(JsonObject manifest)
+    {
+        var environment = FindProperty(manifest, "Environment") as JsonObject;
+        return environment is null ? null : GetString(environment, "DatabaseVersion");
+    }
 
     private static int? ReadEnvironmentDatabasePort(JsonObject manifest)
     {
-        var environment = FindObject(manifest, "Environment");
-        if (environment is null)
-            return null;
-        var node = FindProperty(environment, "DatabasePort");
-        return node is JsonValue value && value.TryGetValue<int>(out var port) ? port : null;
+        var environment = FindProperty(manifest, "Environment") as JsonObject;
+        var value = environment is null ? null : FindProperty(environment, "DatabasePort") as JsonValue;
+        return value is not null && value.TryGetValue<int>(out var port) ? port : null;
     }
-
-    private static JsonObject? FindObject(JsonObject value, string name) => FindProperty(value, name) as JsonObject;
 
     private static JsonNode? FindProperty(JsonObject value, string name)
     {
@@ -413,32 +491,43 @@ public sealed class EnvironmentLockService : IDisposable
         return null;
     }
 
-    private static string? GetString(JsonObject value, string name)
-    {
-        var node = FindProperty(value, name);
-        return node is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var text) ? text : null;
-    }
+    private static string? GetString(JsonObject value, string name) =>
+        FindProperty(value, name) is JsonValue node && node.TryGetValue<string>(out var text) ? text : null;
 
-    private static bool? GetBool(JsonObject value, string name)
-    {
-        var node = FindProperty(value, name);
-        return node is JsonValue jsonValue && jsonValue.TryGetValue<bool>(out var flag) ? flag : null;
-    }
+    private static bool? GetBool(JsonObject value, string name) =>
+        FindProperty(value, name) is JsonValue node && node.TryGetValue<bool>(out var flag) ? flag : null;
 
     private static IReadOnlyList<string> GetStringArray(JsonObject value, string name)
     {
         var node = FindProperty(value, name);
-        if (node is not JsonArray array)
+        if (node is null)
             return Array.Empty<string>();
-        return array.Select(item => item?.GetValue<string>()).Where(item => !string.IsNullOrWhiteSpace(item)).Select(item => item!).ToArray();
+        try
+        {
+            return node.Deserialize<string[]>(JsonOptions) ?? Array.Empty<string>();
+        }
+        catch (JsonException)
+        {
+            return Array.Empty<string>();
+        }
     }
 
-    private static void SetProperty(JsonObject value, string name, object? propertyValue)
+    private static void SetProperty(JsonObject value, string name, JsonNode? propertyValue)
     {
         var existing = value.FirstOrDefault(pair => pair.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Key;
-        var key = string.IsNullOrEmpty(existing) ? name : existing;
-        value[key] = propertyValue is JsonNode node ? node : JsonValue.Create(propertyValue);
+        value[string.IsNullOrEmpty(existing) ? name : existing] = propertyValue?.DeepClone();
     }
+
+    private static void SetProperty(JsonObject value, string name, string? propertyValue) => SetProperty(value, name, JsonValue.Create(propertyValue));
+    private static void SetProperty(JsonObject value, string name, bool propertyValue) => SetProperty(value, name, JsonValue.Create(propertyValue));
+
+    private static IReadOnlyList<string> MergeKeys(IReadOnlyList<string> first, IReadOnlyList<string>? second) =>
+        first.Concat(second ?? Array.Empty<string>())
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim().ToLowerInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
     private static void AddIfNotEmpty(IDictionary<string, string> values, string key, string? value)
     {
@@ -446,10 +535,25 @@ public sealed class EnvironmentLockService : IDisposable
             values[key] = value.Trim();
     }
 
+    private static bool SetEqual(IReadOnlyList<string> first, IReadOnlyList<string> second) =>
+        new HashSet<string>(first, StringComparer.OrdinalIgnoreCase).SetEquals(second);
+
+    private static bool ActionsEqual(IReadOnlyList<ProjectActionDefinition> first, IReadOnlyList<ProjectActionDefinition> second)
+    {
+        if (first.Count != second.Count)
+            return false;
+        for (var i = 0; i < first.Count; i++)
+        {
+            if (!string.Equals(JsonSerializer.Serialize(first[i], JsonOptions), JsonSerializer.Serialize(second[i], JsonOptions), StringComparison.Ordinal))
+                return false;
+        }
+        return true;
+    }
+
     private static string SafeDatabaseName(string value)
     {
-        var normalized = new string(value.Select(ch => char.IsLetterOrDigit(ch) || ch == '_' ? ch : '_').ToArray()).Trim('_');
-        return string.IsNullOrWhiteSpace(normalized) ? "devbox" : normalized.Length <= 64 ? normalized : normalized[..64];
+        var result = new string(value.Select(ch => char.IsLetterOrDigit(ch) || ch == '_' ? ch : '_').ToArray());
+        return string.IsNullOrWhiteSpace(result) ? "devbox" : result;
     }
 
     private static void ValidateLock(EnvironmentLockFile value)
@@ -457,21 +561,18 @@ public sealed class EnvironmentLockService : IDisposable
         if (value.SchemaVersion != EnvironmentLockFile.CurrentSchemaVersion)
             throw new InvalidDataException($"Unsupported devbox.lock.json schema version: {value.SchemaVersion}.");
         if (string.IsNullOrWhiteSpace(value.ProjectName) || string.IsNullOrWhiteSpace(value.Domain) || !value.Domain.EndsWith(".test", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("Environment lock project name or .test domain is invalid.");
-        foreach (var pair in value.Runtimes)
-        {
-            if (string.IsNullOrWhiteSpace(pair.Key) || string.IsNullOrWhiteSpace(pair.Value) || pair.Key.Contains("..", StringComparison.Ordinal) || pair.Value.Contains("..", StringComparison.Ordinal))
-                throw new InvalidDataException("Environment lock contains an invalid runtime pin.");
-        }
-        var engine = value.Database.Engine.ToLowerInvariant();
-        if (engine is not ("mysql" or "mariadb" or "postgresql" or "none"))
-            throw new InvalidDataException("Environment lock contains an unsupported database engine.");
+            throw new InvalidDataException("Environment lock project identity is invalid.");
+        if (value.Runtimes.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || string.IsNullOrWhiteSpace(pair.Value)))
+            throw new InvalidDataException("Environment lock contains an invalid runtime pin.");
+        if (value.Database.Engine is not ("mysql" or "mariadb" or "postgresql" or "none"))
+            throw new InvalidDataException("Environment lock database engine is invalid.");
         if (value.Database.Port is < 1 or > 65535)
             throw new InvalidDataException("Environment lock database port is invalid.");
     }
 
     private static void AtomicWrite(string path, string content)
     {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = path + $".{Guid.NewGuid():N}.tmp";
         try
         {
@@ -490,5 +591,9 @@ public sealed class EnvironmentLockService : IDisposable
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
 
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true
+    };
 }
