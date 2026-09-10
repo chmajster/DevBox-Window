@@ -81,7 +81,7 @@ public sealed partial class LocalCertificateManager
             return false;
         }
 
-        using var certificate = X509Certificate2.CreateFromPemFile(certificatePath);
+        using var certificate = LoadPublicCertificate(certificatePath);
         using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
         store.Open(OpenFlags.ReadOnly);
         return store.Certificates.Find(X509FindType.FindByThumbprint, certificate.Thumbprint, validOnly: false).Count > 0;
@@ -90,7 +90,7 @@ public sealed partial class LocalCertificateManager
     public void TrustForCurrentUser(string domain)
     {
         var certificate = Ensure(domain);
-        using var publicCertificate = X509Certificate2.CreateFromPemFile(certificate.CertificatePath);
+        using var publicCertificate = LoadPublicCertificate(certificate.CertificatePath);
         using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
         store.Open(OpenFlags.ReadWrite);
         if (store.Certificates.Find(X509FindType.FindByThumbprint, publicCertificate.Thumbprint, validOnly: false).Count == 0)
@@ -107,7 +107,7 @@ public sealed partial class LocalCertificateManager
             return;
         }
 
-        using var certificate = X509Certificate2.CreateFromPemFile(certificatePath);
+        using var certificate = LoadPublicCertificate(certificatePath);
         RemoveTrustedThumbprint(certificate.Thumbprint);
     }
 
@@ -140,6 +140,12 @@ public sealed partial class LocalCertificateManager
             certificate.Thumbprint,
             certificate.NotBefore.ToUniversalTime(),
             certificate.NotAfter.ToUniversalTime());
+
+    internal static X509Certificate2 LoadPublicCertificate(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        return X509Certificate2.CreateFromPem(File.ReadAllText(path));
+    }
 
     internal static string NormalizeDomain(string domain)
     {
