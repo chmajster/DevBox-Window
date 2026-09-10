@@ -4,6 +4,7 @@ public interface IFileDialogService
 {
     string? OpenSqlFile();
     string? SaveSqlFile(string suggestedFileName);
+    string? SelectFolder(string description, string? initialPath = null);
 }
 
 public sealed class FileDialogService : IFileDialogService
@@ -32,5 +33,19 @@ public sealed class FileDialogService : IFileDialogService
             OverwritePrompt = true
         };
         return dialog.ShowDialog() == true ? dialog.FileName : null;
+    }
+
+    public string? SelectFolder(string description, string? initialPath = null)
+    {
+        using var dialog = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = description,
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = true,
+            SelectedPath = !string.IsNullOrWhiteSpace(initialPath) && Directory.Exists(initialPath)
+                ? initialPath
+                : string.Empty
+        };
+        return dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK ? dialog.SelectedPath : null;
     }
 }
