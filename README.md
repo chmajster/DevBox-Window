@@ -12,8 +12,9 @@ Current application version: `0.2.2`.
 - Start All / Stop All / Restart All.
 - PID, TCP port and uptime reporting.
 - Port-conflict detection before startup.
-- Direct process invocation with `ProcessStartInfo.ArgumentList`; no `cmd.exe /c` composition.
+- Direct process invocation with `ProcessStartInfo.ArgumentList`; no arbitrary shell-command composition.
 - Managed-process termination only; DevBox does not kill unrelated processes occupying a port.
+- Manifest-driven optional managed services in `config/services.json`.
 - Service logs under `logs/`.
 - System-tray controls for Open, Start All, Restart All, Stop All and Exit.
 - Optional start with Windows, minimize-to-tray and automatic service startup.
@@ -28,6 +29,7 @@ Current application version: `0.2.2`.
 - MySQL remote installation remains disabled when its bundled payload is missing because DevBox does not accept an unpinned remote package.
 - Runtime Install / Activate / Remove lifecycle.
 - Release packaging records upstream URLs and calculated SHA-256 values in `runtime/bundled-runtimes.json`; PHP and Nginx archives are additionally verified against pinned source checksums before packaging.
+- Optional Mailpit and Garnet runtimes use architecture-specific Windows packages with pinned SHA-256 values and the same verified runtime lifecycle.
 
 ### Sites
 
@@ -37,7 +39,20 @@ Current application version: `0.2.2`.
 - Narrow UAC elevation only when a `.test` entry must be added to or removed from the Windows hosts file.
 - Project files are retained by default when a site registration is deleted.
 
-### PHP
+### Project Manager
+
+- WPF Project Manager available from Developer Tools.
+- Stack detection for Laravel, Symfony, WordPress, Composer PHP and Node projects.
+- Composer `ext-*` requirement discovery.
+- Create projects from built-in stack profiles or import existing source trees.
+- Built-in Laravel, Symfony, WordPress and plain-PHP profiles plus persistent custom profiles in `config/project-profiles.json`.
+- Versioned per-project `devbox.json` manifest for domain, project kind, PHP/Node versions, database, HTTPS, addons and services.
+- Project Health checks for document roots, generated vhosts, PHP runtime/extensions, manifest and TLS files.
+- Repair workflow for generated vhosts, TLS state, missing project manifest and available Composer-required PHP extensions.
+- Safe predefined command presets for Composer, npm, Laravel Artisan and Symfony Console workflows; arbitrary command text is not accepted by the project command runner.
+- Project provisioning combines Site registration, project manifest, MySQL database creation when available and optional managed-service registration.
+
+### PHP and Xdebug
 
 - Active PHP version reporting.
 - `php.ini` access.
@@ -47,6 +62,8 @@ Current application version: `0.2.2`.
 - Dedicated FastCGI process and stable local port for each pinned PHP version.
 - Nginx automatically routes each site to its selected PHP version; sites without a pin use the global PHP FastCGI service on port `9084`.
 - Configured per-site PHP pools are restored when DevBox starts.
+- Xdebug status and configuration for `mode`, client port and `start_with_request`.
+- Local Xdebug DLL installation validates the Windows PE structure, optionally verifies a supplied SHA-256, copies atomically and records the installed binary checksum. DevBox intentionally does not auto-download an Xdebug DLL without a trusted pinned checksum.
 
 ### SSL
 
@@ -60,6 +77,8 @@ Current application version: `0.2.2`.
 ### Databases
 
 - MySQL database listing and creation.
+- Database size, charset and collation metadata.
+- Drop, clone and rename operations with system-database protection.
 - Backup through `mysqldump`.
 - Restore through the native MySQL client.
 - Connection passwords are not passed on the process command line. DevBox uses a short-lived client defaults file and removes it after the operation.
@@ -87,6 +106,9 @@ SHA-256: 2d2e13c735366d318425c78e4ee2cc8fc648d77faba3ddea2cd516e43885733f
 - Composer installer downloaded from the official Composer endpoint and checked against the published SHA-384 installer signature before execution.
 - Node.js LTS installation through the exact winget package ID `OpenJS.NodeJS.LTS`.
 - pnpm installation through npm after Node.js is available.
+- Mailpit `1.31.1` installation for Windows x64/ARM64 through pinned SHA-256 release packages; local web UI uses port `8025` and SMTP uses `1025`.
+- Microsoft Garnet `2.1.7` provides the native Redis-compatible Windows service on `127.0.0.1:6379`, using pinned SHA-256 Windows ReadyToRun packages.
+- Local Xdebug DLL selection and verified/recorded installation into the active PHP extension directory.
 
 ### Diagnostics, logs and updates
 
@@ -97,13 +119,15 @@ SHA-256: 2d2e13c735366d318425c78e4ee2cc8fc648d77faba3ddea2cd516e43885733f
 
 ## Runtime layout
 
-Third-party runtime binaries are not committed to Git. Release builds download selected upstream archives into the CI workspace, validate the expected executable layout, verify pinned checksums where available and copy the extracted runtimes into each packaged application.
+Third-party runtime binaries are not committed to Git. Release builds download selected upstream archives into the CI workspace, validate the expected executable layout, verify pinned checksums where available and copy the extracted runtimes into each packaged application. Optional runtimes are downloaded only through definitions carrying a pinned SHA-256.
 
 ```text
 DevBox/
   config/
     addons.json
     appsettings.json
+    project-profiles.json
+    services.json
     sites.json
     nginx/
       nginx.conf
@@ -132,7 +156,15 @@ DevBox/
     mysql/
       current/
       8.4.11/
+    mailpit/
+      current/
+      <version>/
+    redis/
+      current/
+      <version>/
   www/
+    <project>/
+      devbox.json
 ```
 
 `DEVBOX_ROOT` can point to a different root while developing or running a portable layout.
@@ -191,7 +223,7 @@ The installer is not currently code-signed. Release SHA-256 checksums provide in
 ## Architecture
 
 - `DevBox.App` — WPF views, ViewModels, desktop dialogs, system tray and current-user desktop integration.
-- `DevBox.Core` — runtime/process/site/PHP/database/SSL/addon/update business logic.
+- `DevBox.Core` — runtime/process/site/project/PHP/database/SSL/addon/managed-service/update business logic.
 - `DevBox.Tests` — non-destructive tests using temporary directories and mocked HTTP where applicable.
 
 See `ARCHITECTURE.md` and `SECURITY.md` for the detailed boundaries and threat controls.

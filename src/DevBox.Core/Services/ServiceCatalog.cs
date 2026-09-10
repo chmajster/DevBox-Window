@@ -4,14 +4,21 @@ namespace DevBox.Core.Services;
 
 public sealed class ServiceCatalog
 {
+    private readonly ManagedServiceCatalog _managedServices;
+
     public ServiceCatalog(string rootPath)
     {
         RootPath = Path.GetFullPath(rootPath);
+        _managedServices = new ManagedServiceCatalog(RootPath);
     }
 
     public string RootPath { get; }
 
-    public IReadOnlyList<ServiceDefinition> GetDefaultServices()
+    // Kept for compatibility with existing callers. The catalog now returns all
+    // enabled DevBox services, including manifest-managed services such as Mailpit.
+    public IReadOnlyList<ServiceDefinition> GetDefaultServices() => GetServices();
+
+    public IReadOnlyList<ServiceDefinition> GetCoreServices()
     {
         var nginxExe = At("runtime", "nginx", "current", "nginx.exe");
         var phpExe = At("runtime", "php", "current", "php-cgi.exe");
@@ -44,6 +51,22 @@ public sealed class ServiceCatalog
                 TimeSpan.FromSeconds(6),
                 At("logs", "mysql-process.log"))
         };
+    }
+
+    public IReadOnlyList<ServiceDefinition> GetServices()
+    {
+        var services = GetCoreServices().Concat(_managedServices.GetEnabledDefinitions()).ToArray();
+        var duplicateKey = services.GroupBy(item => item.Key, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);
+        if (duplicateKey is not null)
+        {
+            throw new InvalidDataException($"Duplicate service key: {duplicateKey.Key}.");
+        }
+        var duplicatePort = services.GroupBy(item => item.Port).FirstOrDefault(group => group.Count() > 1);
+        if (duplicatePort is not null)
+        {
+            throw new InvalidDataException($"Multiple DevBox services use TCP port {duplicatePort.Key}.");
+        }
+        return services;
     }
 
     private string At(params string[] parts) => Path.Combine(new[] { RootPath }.Concat(parts).ToArray());

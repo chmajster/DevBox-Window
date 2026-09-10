@@ -25,6 +25,22 @@ public sealed class DatabaseManagerTests
         Assert.Throws<ArgumentException>(() => DatabaseManager.ValidateDatabaseName(value));
     }
 
+    [Theory]
+    [InlineData("mysql")]
+    [InlineData("information_schema")]
+    [InlineData("performance_schema")]
+    [InlineData("sys")]
+    public void ValidateMutableDatabaseName_ProtectsSystemDatabases(string value)
+    {
+        Assert.Throws<InvalidOperationException>(() => DatabaseManager.ValidateMutableDatabaseName(value));
+    }
+
+    [Fact]
+    public void ValidateMutableDatabaseName_AllowsApplicationDatabase()
+    {
+        Assert.Equal("devbox_app", DatabaseManager.ValidateMutableDatabaseName("devbox_app"));
+    }
+
     [Fact]
     public void ConnectionOptions_RejectInvalidPort()
     {

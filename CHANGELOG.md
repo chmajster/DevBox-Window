@@ -6,6 +6,17 @@ All notable changes to DevBox Windows are documented here.
 
 ### Added
 
+- Project Manager WPF workflow for creating, importing, diagnosing, repairing and operating local projects.
+- Automatic stack detection for Laravel, Symfony, WordPress, Composer PHP and Node projects, including Composer `ext-*` requirement discovery.
+- Versioned per-project `devbox.json` manifests and persistent built-in/custom stack profiles.
+- Project Health and Repair checks for document roots, Nginx vhosts, PHP runtimes/extensions, manifests and local TLS files.
+- Safe predefined project command presets for Composer, npm, Laravel Artisan and Symfony Console workflows.
+- Project provisioning that combines Site registration, project metadata, MySQL database creation when available and optional managed-service declarations.
+- MySQL database size/charset/collation metadata plus protected drop, clone and rename operations.
+- Manifest-driven optional services in `config/services.json` and integration with the existing DevBox process lifecycle.
+- Verified Mailpit `1.31.1` installer for Windows x64/ARM64 using pinned GitHub release SHA-256 values; web UI listens on `8025` and SMTP on `1025`.
+- Verified Microsoft Garnet `2.1.7` installer as the native Redis-compatible Windows service on `127.0.0.1:6379`, using pinned x64/ARM64 ReadyToRun package SHA-256 values.
+- Xdebug configuration UI and safe local DLL installation with PE validation, optional SHA-256 verification, atomic replacement and recorded provenance checksum.
 - Official DevBox 0.2.2 release packages now bundle Nginx `1.31.5`, PHP FastCGI `8.5.10` NTS and MySQL `8.4.11` LTS under versioned `runtime/` directories.
 - First Run can activate a bundled runtime locally without making an HTTP request; PHP and Nginx retain their verified remote fallback when the bundle is absent.
 - Release packaging records upstream source URLs and calculated SHA-256 values in `runtime/bundled-runtimes.json`; PHP and Nginx archives are additionally verified against pinned SHA-256 values before extraction.
@@ -20,6 +31,9 @@ All notable changes to DevBox Windows are documented here.
 
 ### Fixed
 
+- Managed-service discovery in Project Manager is side-effect free and no longer rewrites `services.json` while displaying disabled services.
+- Redis project profiles now map to the Windows-native Garnet executable instead of an unavailable `redis-server.exe` assumption.
+- Xdebug tests comply with the xUnit single-item analyzer and no longer stop Release builds before tests execute.
 - DevBox now stops managed Nginx, PHP and MySQL processes during application exit and can re-adopt processes recorded by a previous DevBox session.
 - Fresh MySQL data directories are initialized automatically before first startup, while partial/non-empty initialization states fail safely.
 - First Run is shown whenever any required environment component is incomplete, including manual-action items.

@@ -6,5 +6,6 @@ public sealed record PhpExtensionCheckResult(
     IReadOnlyList<string> MissingExtensions,
     string? Error)
 {
+    public IReadOnlyList<string> Missing => MissingExtensions;
     public bool Success => RuntimeAvailable && MissingExtensions.Count == 0 && string.IsNullOrWhiteSpace(Error);
 }
