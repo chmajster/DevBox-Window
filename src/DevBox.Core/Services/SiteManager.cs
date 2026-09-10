@@ -209,7 +209,7 @@ public sealed partial class SiteManager
     public string GetNginxConfigPath(string domain) =>
         Path.Combine(_rootPath, "config", "nginx", "sites-enabled", $"{NormalizeDomain(domain)}.conf");
 
-    private SiteDefinition PersistNewSite(SiteDefinition site, ICollection<SiteDefinition> sites)
+    private SiteDefinition PersistNewSite(SiteDefinition site, List<SiteDefinition> sites)
     {
         try
         {
