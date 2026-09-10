@@ -1,0 +1,122 @@
+<Window x:Class="DevBox.App.EnvironmentCenterWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DevBox · Environment Center" Height="820" Width="1260" MinHeight="650" MinWidth="980"
+        Background="#F4F6F9" WindowStartupLocation="CenterOwner">
+    <Window.Resources>
+        <Style TargetType="Button"><Setter Property="Padding" Value="12,7"/><Setter Property="Margin" Value="4"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Background" Value="#E8ECF2"/></Style>
+        <Style x:Key="Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Setter Property="Background" Value="#2563EB"/><Setter Property="Foreground" Value="White"/></Style>
+        <Style TargetType="TextBox"><Setter Property="Padding" Value="7"/><Setter Property="Margin" Value="4"/></Style>
+        <Style TargetType="ComboBox"><Setter Property="Padding" Value="6"/><Setter Property="Margin" Value="4"/></Style>
+        <Style TargetType="PasswordBox"><Setter Property="Padding" Value="7"/><Setter Property="Margin" Value="4"/></Style>
+    </Window.Resources>
+    <Grid Margin="22">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <Grid Grid.Row="0" Margin="0,0,0,14">
+            <StackPanel>
+                <TextBlock Text="Environment Center" FontSize="27" FontWeight="SemiBold"/>
+                <TextBlock Text="Reproducible environments, runtimes, databases, projects, diagnostics and security." Foreground="#6B7280" Margin="0,4,0,0"/>
+            </StackPanel>
+            <Button HorizontalAlignment="Right" VerticalAlignment="Center" Content="Refresh" Style="{StaticResource Primary}" Command="{Binding RefreshCommand}"/>
+        </Grid>
+        <Border Grid.Row="1" Background="#EFF6FF" BorderBrush="#BFDBFE" BorderThickness="1" CornerRadius="7" Padding="11" Margin="0,0,0,14">
+            <TextBlock Text="{Binding Status}" Foreground="#1E40AF" TextWrapping="Wrap"/>
+        </Border>
+        <TabControl Grid.Row="2">
+            <TabItem Header="Environment">
+                <Grid Margin="12">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <WrapPanel>
+                        <TextBlock Text="Project" VerticalAlignment="Center"/><TextBox Width="210" Text="{Binding ProjectName, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Text="Profile" VerticalAlignment="Center"/>
+                        <ComboBox Width="220" ItemsSource="{Binding Profiles}" DisplayMemberPath="DisplayName" SelectedValuePath="Key" SelectedValue="{Binding SelectedProfileKey}"/>
+                        <Button Content="Apply profile" Style="{StaticResource Primary}" Command="{Binding ApplyProfileCommand}"/>
+                        <Button Content="Generate lock" Command="{Binding GenerateLockCommand}"/>
+                        <Button Content="Apply lock" Command="{Binding ApplyLockCommand}"/>
+                    </WrapPanel>
+                    <DataGrid Grid.Row="1" ItemsSource="{Binding Profiles}" AutoGenerateColumns="True" IsReadOnly="True" Margin="0,10,0,0"/>
+                </Grid>
+            </TabItem>
+            <TabItem Header="Runtimes">
+                <Grid Margin="12">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <WrapPanel>
+                        <TextBlock Text="Runtime" VerticalAlignment="Center"/><TextBox Width="120" Text="{Binding RuntimeKey}"/>
+                        <TextBlock Text="Version" VerticalAlignment="Center"/><TextBox Width="140" Text="{Binding RuntimeVersion}"/>
+                        <Button Content="Install" Style="{StaticResource Primary}" Command="{Binding RuntimeInstallCommand}"/>
+                        <Button Content="Activate" Command="{Binding RuntimeActivateCommand}"/>
+                        <Button Content="Remove" Command="{Binding RuntimeRemoveCommand}"/>
+                    </WrapPanel>
+                    <DataGrid Grid.Row="1" ItemsSource="{Binding Runtimes}" AutoGenerateColumns="True" IsReadOnly="True" Margin="0,10,0,0"/>
+                </Grid>
+            </TabItem>
+            <TabItem Header="Databases">
+                <Grid Margin="12">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <WrapPanel>
+                        <TextBlock Text="Engine" VerticalAlignment="Center"/><TextBox Width="110" Text="{Binding DatabaseEngine}"/>
+                        <TextBlock Text="Version" VerticalAlignment="Center"/><TextBox Width="120" Text="{Binding DatabaseVersion}"/>
+                        <TextBlock Text="Port" VerticalAlignment="Center"/><TextBox Width="80" Text="{Binding DatabasePort}"/>
+                        <Button Content="Register" Command="{Binding DatabaseRegisterCommand}"/>
+                        <Button Content="Start" Style="{StaticResource Primary}" Command="{Binding DatabaseStartCommand}"/>
+                        <Button Content="Stop" Command="{Binding DatabaseStopCommand}"/>
+                    </WrapPanel>
+                    <WrapPanel Grid.Row="1">
+                        <TextBlock Text="Database" VerticalAlignment="Center"/><TextBox Width="180" Text="{Binding DatabaseName}"/>
+                        <TextBlock Text="Backup path" VerticalAlignment="Center"/><TextBox Width="360" Text="{Binding BackupPath}"/>
+                        <Button Content="Backup" Command="{Binding DatabaseBackupCommand}"/>
+                        <Button Content="Restore" Command="{Binding DatabaseRestoreCommand}"/>
+                    </WrapPanel>
+                    <DataGrid Grid.Row="2" ItemsSource="{Binding DatabaseRuntimes}" AutoGenerateColumns="True" IsReadOnly="True" Margin="0,10,0,0"/>
+                </Grid>
+            </TabItem>
+            <TabItem Header="Projects">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="12">
+                    <TextBlock Text="Snapshot / restore" FontSize="17" FontWeight="SemiBold"/>
+                    <WrapPanel><TextBlock Text="Project" VerticalAlignment="Center"/><TextBox Width="180" Text="{Binding ProjectName}"/><TextBlock Text="Snapshot" VerticalAlignment="Center"/><TextBox Width="430" Text="{Binding SnapshotPath}"/><Button Content="Create snapshot" Command="{Binding SnapshotCreateCommand}"/><Button Content="Restore" Command="{Binding SnapshotRestoreCommand}"/></WrapPanel>
+                    <Separator Margin="0,12"/>
+                    <TextBlock Text="Portable project transfer" FontSize="17" FontWeight="SemiBold"/>
+                    <WrapPanel><TextBlock Text="Archive" VerticalAlignment="Center"/><TextBox Width="520" Text="{Binding TransferPath}"/><Button Content="Export" Command="{Binding TransferExportCommand}"/><Button Content="Import" Command="{Binding TransferImportCommand}"/></WrapPanel>
+                    <Separator Margin="0,12"/>
+                    <TextBlock Text="Git bootstrap" FontSize="17" FontWeight="SemiBold"/>
+                    <WrapPanel><TextBlock Text="HTTPS repository" VerticalAlignment="Center"/><TextBox Width="460" Text="{Binding GitUrl}"/><TextBlock Text="Project" VerticalAlignment="Center"/><TextBox Width="160" Text="{Binding GitProjectName}"/><Button Content="Clone &amp; bootstrap" Style="{StaticResource Primary}" Command="{Binding GitBootstrapCommand}"/></WrapPanel>
+                </StackPanel></ScrollViewer>
+            </TabItem>
+            <TabItem Header="Task Center">
+                <DataGrid Margin="12" ItemsSource="{Binding Tasks}" AutoGenerateColumns="True" IsReadOnly="True"/>
+            </TabItem>
+            <TabItem Header="Diagnostics">
+                <Grid Margin="12"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><Button Content="Run diagnostics" HorizontalAlignment="Left" Style="{StaticResource Primary}" Command="{Binding DiagnosticsCommand}"/><DataGrid Grid.Row="1" ItemsSource="{Binding DiagnosticFindings}" AutoGenerateColumns="True" IsReadOnly="True" Margin="0,10,0,0"/></Grid>
+            </TabItem>
+            <TabItem Header="Configuration">
+                <Grid Margin="12"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><WrapPanel><TextBlock Text="Configuration" VerticalAlignment="Center"/><ComboBox Width="140" SelectedValue="{Binding ConfigurationKey}"><ComboBoxItem Content="nginx"/><ComboBoxItem Content="php"/><ComboBoxItem Content="mysql"/></ComboBox><Button Content="Load" Command="{Binding ConfigurationLoadCommand}"/><Button Content="Validate &amp; save" Style="{StaticResource Primary}" Command="{Binding ConfigurationSaveCommand}"/></WrapPanel><TextBox Grid.Row="1" Text="{Binding ConfigurationText, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" AcceptsTab="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" Margin="0,10,0,0"/></Grid>
+            </TabItem>
+            <TabItem Header="Security">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="12">
+                    <TextBlock Text="DPAPI Secrets" FontSize="17" FontWeight="SemiBold"/>
+                    <WrapPanel><TextBlock Text="Key" VerticalAlignment="Center"/><TextBox Width="260" Text="{Binding SecretKey}"/><TextBlock Text="Value" VerticalAlignment="Center"/><PasswordBox Width="300" PasswordChanged="SecretPassword_Changed"/><Button Content="Store" Style="{StaticResource Primary}" Command="{Binding SecretSetCommand}"/><Button Content="Delete" Command="{Binding SecretDeleteCommand}"/></WrapPanel>
+                    <ListBox ItemsSource="{Binding SecretKeys}" Height="130" Margin="4"/>
+                    <Separator Margin="0,12"/>
+                    <TextBlock Text="Local CA" FontSize="17" FontWeight="SemiBold"/><Button HorizontalAlignment="Left" Content="Create / trust DevBox Local CA" Command="{Binding LocalCaTrustCommand}"/>
+                </StackPanel></ScrollViewer>
+            </TabItem>
+            <TabItem Header="Marketplace">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="12">
+                    <TextBlock Text="Signed ADDONS Marketplace" FontSize="17" FontWeight="SemiBold"/>
+                    <TextBlock Text="Catalog URL"/><TextBox Text="{Binding MarketplaceCatalogUrl}"/>
+                    <TextBlock Text="Detached signature URL"/><TextBox Text="{Binding MarketplaceSignatureUrl}"/>
+                    <TextBlock Text="RSA public key PEM"/><TextBox Height="150" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Text="{Binding MarketplacePublicKey}"/>
+                    <WrapPanel><Button Content="Configure" Command="{Binding MarketplaceConfigureCommand}"/><Button Content="Verify &amp; sync" Style="{StaticResource Primary}" Command="{Binding MarketplaceSyncCommand}"/></WrapPanel>
+                </StackPanel></ScrollViewer>
+            </TabItem>
+            <TabItem Header="WordPress">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="12">
+                    <TextBlock Text="WordPress Toolkit" FontSize="17" FontWeight="SemiBold"/>
+                    <WrapPanel><TextBlock Text="Project" VerticalAlignment="Center"/><TextBox Width="180" Text="{Binding WordPressName}"/><TextBlock Text="Title" VerticalAlignment="Center"/><TextBox Width="240" Text="{Binding WordPressTitle}"/></WrapPanel>
+                    <WrapPanel><TextBlock Text="Admin user" VerticalAlignment="Center"/><TextBox Width="180" Text="{Binding WordPressAdminUser}"/><TextBlock Text="Admin email" VerticalAlignment="Center"/><TextBox Width="260" Text="{Binding WordPressAdminEmail}"/><TextBlock Text="Admin password" VerticalAlignment="Center"/><PasswordBox Width="220" PasswordChanged="WordPressPassword_Changed"/></WrapPanel>
+                    <WrapPanel><Button Content="Create WordPress" Style="{StaticResource Primary}" Command="{Binding WordPressCreateCommand}"/><Button Content="Check selected project status" Command="{Binding WordPressStatusCommand}"/></WrapPanel>
+                </StackPanel></ScrollViewer>
+            </TabItem>
+        </TabControl>
+    </Grid>
+</Window>

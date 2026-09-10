@@ -1,4 +1,5 @@
 using System.Windows;
+using DevBox.App.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace DevBox.App.Services;
@@ -12,6 +13,7 @@ public interface IFeatureWindowService
     void ShowSetup(Window owner);
     void ShowTools(Window owner);
     void ShowProjects(Window owner);
+    void ShowEnvironmentCenter(Window owner);
     void ShowUpdates(Window owner);
     void ShowSettings(Window owner);
 }
@@ -28,6 +30,11 @@ public sealed class FeatureWindowService(IServiceProvider serviceProvider) : IFe
     {
         var window = ActivatorUtilities.CreateInstance<ProjectManagerWindow>(serviceProvider);
         window.Owner = owner;
+        window.ShowDialog();
+    }
+    public void ShowEnvironmentCenter(Window owner)
+    {
+        var window = new EnvironmentCenterWindow(new EnvironmentCenterViewModel()) { Owner = owner };
         window.ShowDialog();
     }
     public void ShowUpdates(Window owner) => Show<UpdateWindow>(owner);
