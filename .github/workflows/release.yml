@@ -1,73 +1,145 @@
-name: Release
+name: Manual Release
 
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version to package without creating a GitHub Release'
+      bump:
+        description: 'Version increment'
         required: true
-        default: '0.2.2'
-        type: string
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 permissions:
   contents: write
 
+concurrency:
+  group: devbox-manual-release
+  cancel-in-progress: false
+
 jobs:
+  guard:
+    name: Validate release branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require main branch
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "Manual releases must be started from the main branch."
+            exit 1
+          fi
+
+  tests:
+    name: Run release validation
+    needs: guard
+    uses: ./.github/workflows/ci.yml
+
   release:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.ref_type == 'tag' ||
-      (github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release: v'))
+    name: Bump version and publish
+    needs: tests
     runs-on: windows-2025
     steps:
-      - name: Checkout
+      - name: Checkout main
         uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 8.0.x
+          cache: true
+          cache-dependency-path: '**/*.csproj'
 
-      - name: Resolve version
+      - name: Resolve next version
         shell: pwsh
         env:
-          MANUAL_VERSION: ${{ inputs.version }}
-          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          VERSION_BUMP: ${{ inputs.bump }}
         run: |
-          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
-            $version = $env:MANUAL_VERSION
-          } elseif ($env:GITHUB_REF_TYPE -eq 'tag') {
-            $version = $env:GITHUB_REF_NAME.TrimStart('v')
-          } else {
-            if ($env:HEAD_COMMIT_MESSAGE -notmatch '^release:\s+v(?<version>\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?)') {
-              throw "Main-branch release commits must use: release: vX.Y.Z"
+          $projectPath = 'src/DevBox.App/DevBox.App.csproj'
+          $projectText = Get-Content $projectPath -Raw
+          $match = [regex]::Match($projectText, '<Version>(?<version>\d+\.\d+\.\d+)</Version>')
+          if (-not $match.Success) {
+            throw "Could not read the current semantic version from $projectPath"
+          }
+
+          $currentText = $match.Groups['version'].Value
+          $parts = $currentText.Split('.')
+          $major = [int]$parts[0]
+          $minor = [int]$parts[1]
+          $patch = [int]$parts[2]
+
+          switch ($env:VERSION_BUMP) {
+            'major' {
+              $major++
+              $minor = 0
+              $patch = 0
             }
-            $version = $Matches.version
+            'minor' {
+              $minor++
+              $patch = 0
+            }
+            'patch' {
+              $patch++
+            }
+            default {
+              throw "Unsupported version increment: $env:VERSION_BUMP"
+            }
           }
 
-          if ($version -notmatch '^\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') {
-            throw "Invalid release version: $version"
+          $nextVersion = "$major.$minor.$patch"
+          $releaseTag = "v$nextVersion"
+
+          git fetch origin --tags --force
+          $existingTag = git tag --list $releaseTag
+          if (-not [string]::IsNullOrWhiteSpace($existingTag)) {
+            throw "Tag $releaseTag already exists."
           }
 
-          "DEVBOX_VERSION=$version" >> $env:GITHUB_ENV
-          "DEVBOX_RELEASE_TAG=v$version" >> $env:GITHUB_ENV
+          "DEVBOX_CURRENT_VERSION=$currentText" >> $env:GITHUB_ENV
+          "DEVBOX_VERSION=$nextVersion" >> $env:GITHUB_ENV
+          "DEVBOX_RELEASE_TAG=$releaseTag" >> $env:GITHUB_ENV
 
-      - name: Restore
-        run: dotnet restore DevBox.sln
+          "### Manual release" >> $env:GITHUB_STEP_SUMMARY
+          "- Current version: ``$currentText``" >> $env:GITHUB_STEP_SUMMARY
+          "- Increment: ``$env:VERSION_BUMP``" >> $env:GITHUB_STEP_SUMMARY
+          "- New version: ``$nextVersion``" >> $env:GITHUB_STEP_SUMMARY
 
-      - name: NuGet vulnerability audit
-        run: dotnet list DevBox.sln package --vulnerable --include-transitive
+      - name: Update version metadata
+        shell: pwsh
+        run: |
+          $projectPath = 'src/DevBox.App/DevBox.App.csproj'
+          $project = Get-Content $projectPath -Raw
+          $project = [regex]::Replace($project, '<Version>\d+\.\d+\.\d+</Version>', "<Version>$env:DEVBOX_VERSION</Version>")
+          $project = [regex]::Replace($project, '<AssemblyVersion>\d+\.\d+\.\d+\.\d+</AssemblyVersion>', "<AssemblyVersion>$env:DEVBOX_VERSION.0</AssemblyVersion>")
+          $project = [regex]::Replace($project, '<FileVersion>\d+\.\d+\.\d+\.\d+</FileVersion>', "<FileVersion>$env:DEVBOX_VERSION.0</FileVersion>")
+          Set-Content $projectPath $project -Encoding utf8 -NoNewline
 
-      - name: Build
-        run: dotnet build DevBox.sln --configuration Release --no-restore /p:Version=${{ env.DEVBOX_VERSION }}
+          $installerPath = 'installer/DevBox.iss'
+          $installer = Get-Content $installerPath -Raw
+          $installer = [regex]::Replace(
+            $installer,
+            '#define MyAppVersion "\d+\.\d+\.\d+"',
+            "#define MyAppVersion `"$env:DEVBOX_VERSION`"",
+            1)
+          Set-Content $installerPath $installer -Encoding utf8 -NoNewline
 
-      - name: Test
-        run: dotnet test DevBox.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
+          $readmePath = 'README.md'
+          $readme = Get-Content $readmePath -Raw
+          $readme = [regex]::Replace(
+            $readme,
+            'Current application version: `\d+\.\d+\.\d+`\.',
+            ('Current application version: `' + $env:DEVBOX_VERSION + '`.'),
+            1)
+          Set-Content $readmePath $readme -Encoding utf8 -NoNewline
+
+          git diff --check
+          git diff -- src/DevBox.App/DevBox.App.csproj installer/DevBox.iss README.md
 
       - name: Publish GUI win-x64
         run: dotnet publish src/DevBox.App/DevBox.App.csproj --configuration Release --runtime win-x64 --self-contained true --output publish/win-x64 /p:Version=${{ env.DEVBOX_VERSION }}
@@ -126,7 +198,7 @@ jobs:
           SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_BASE64)) {
-            Write-Host "Authenticode certificate is not configured; release artifacts will remain unsigned."
+            Write-Host 'Authenticode certificate is not configured; release artifacts will remain unsigned.'
             "enabled=false" >> $env:GITHUB_OUTPUT
             exit 0
           }
@@ -135,7 +207,7 @@ jobs:
           try {
             [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE_BASE64))
           } catch {
-            throw "WINDOWS_SIGNING_CERTIFICATE_BASE64 is not valid base64."
+            throw 'WINDOWS_SIGNING_CERTIFICATE_BASE64 is not valid base64.'
           }
           "enabled=true" >> $env:GITHUB_OUTPUT
           "certificate=$certificatePath" >> $env:GITHUB_OUTPUT
@@ -231,6 +303,23 @@ jobs:
             "$hash  $($_.Name)"
           } | Set-Content artifacts/SHA256SUMS.txt -Encoding ascii
 
+      - name: Commit version bump and create tag
+        shell: pwsh
+        run: |
+          git fetch origin main --tags
+          $remoteMain = (git rev-parse origin/main).Trim()
+          $localBase = (git rev-parse HEAD).Trim()
+          if ($remoteMain -ne $localBase) {
+            throw 'main changed while the release was being built. Run Manual Release again from the latest main.'
+          }
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/DevBox.App/DevBox.App.csproj installer/DevBox.iss README.md
+          git commit -m "release: $env:DEVBOX_RELEASE_TAG"
+          git tag -a $env:DEVBOX_RELEASE_TAG -m "DevBox $env:DEVBOX_VERSION"
+          git push --atomic origin HEAD:refs/heads/main "refs/tags/$env:DEVBOX_RELEASE_TAG:refs/tags/$env:DEVBOX_RELEASE_TAG"
+
       - name: Upload release build artifact
         uses: actions/upload-artifact@v7
         with:
@@ -240,25 +329,11 @@ jobs:
           retention-days: 30
 
       - name: Create GitHub Release
-        if: github.event_name != 'workflow_dispatch'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = $env:DEVBOX_RELEASE_TAG
-
-          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "Release $tag already exists; leaving it unchanged."
-            exit 0
-          }
-
-          if ($env:GITHUB_REF_TYPE -eq 'tag') {
-            gh release create $tag artifacts/* --repo $env:GITHUB_REPOSITORY --verify-tag --generate-notes --title "DevBox $env:DEVBOX_VERSION"
-          } else {
-            gh release create $tag artifacts/* --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --generate-notes --title "DevBox $env:DEVBOX_VERSION"
-          }
-
+          gh release create $env:DEVBOX_RELEASE_TAG artifacts/* --repo $env:GITHUB_REPOSITORY --verify-tag --generate-notes --title "DevBox $env:DEVBOX_VERSION"
           if ($LASTEXITCODE -ne 0) {
             throw "GitHub Release creation failed with exit code $LASTEXITCODE"
           }
