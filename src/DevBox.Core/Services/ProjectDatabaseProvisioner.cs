@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using DevBox.Core.Models;
 
 namespace DevBox.Core.Services;
 
