@@ -41,7 +41,7 @@ public sealed class ProjectActionService
             var actions = actionsNode.Deserialize<List<ProjectActionDefinition>>(JsonOptions) ?? new List<ProjectActionDefinition>();
             foreach (var action in actions)
                 ValidateAction(action);
-            return actions.Where(item => item.Enabled).OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase).ToArray();
+            return actions.Where(item => item.Enabled).ToArray();
         }
         catch (JsonException ex)
         {
@@ -184,9 +184,10 @@ public sealed class ProjectActionService
 
     private static void EnsureUnder(string candidate, string root, string message)
     {
-        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        var fullCandidate = Path.GetFullPath(candidate).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (!fullCandidate.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase) && !fullCandidate.Equals(fullRoot.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+        var normalizedRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedCandidate = Path.GetFullPath(candidate).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!normalizedCandidate.Equals(normalizedRoot, StringComparison.OrdinalIgnoreCase) &&
+            !normalizedCandidate.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(message);
     }
 
