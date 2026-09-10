@@ -6,7 +6,7 @@ public sealed class ProjectProvisioningService
 {
     private readonly string _rootPath;
     private readonly ProjectWorkspaceService _workspace;
-    private readonly DatabaseManager _databases;
+    private readonly ProjectDatabaseProvisioner _projectDatabases;
     private readonly ManagedServiceCatalog _managedServices;
 
     public ProjectProvisioningService(
@@ -18,7 +18,8 @@ public sealed class ProjectProvisioningService
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         _rootPath = Path.GetFullPath(rootPath);
         _workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
-        _databases = databases ?? throw new ArgumentNullException(nameof(databases));
+        ArgumentNullException.ThrowIfNull(databases);
+        _projectDatabases = new ProjectDatabaseProvisioner(_rootPath, databases);
         _managedServices = managedServices ?? throw new ArgumentNullException(nameof(managedServices));
     }
 
@@ -55,27 +56,22 @@ public sealed class ProjectProvisioningService
                 warnings.Add($"Node.js {manifest.NodeVersion} is pinned by the profile but is not installed. Install the portable Node LTS runtime from Developer Tools before running npm presets.");
         }
 
-        if (manifest.DatabaseEngine.Equals("mysql", StringComparison.OrdinalIgnoreCase) &&
+        if (!manifest.DatabaseEngine.Equals("none", StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(manifest.DatabaseName))
         {
-            var mysql = Path.Combine(_rootPath, "runtime", "mysql", "current", "bin", "mysql.exe");
-            if (File.Exists(mysql))
+            if (_projectDatabases.IsAvailable(manifest.DatabaseEngine))
             {
-                await _databases.CreateDatabaseAsync(
+                await _projectDatabases.EnsureDatabaseAsync(
+                    manifest.DatabaseEngine,
                     manifest.DatabaseName,
-                    databaseOptions ?? new DatabaseConnectionOptions(),
+                    databaseOptions,
                     cancellationToken).ConfigureAwait(false);
-                actions.Add($"Ensured MySQL database {manifest.DatabaseName}.");
+                actions.Add($"Ensured {DisplayEngine(manifest.DatabaseEngine)} database {manifest.DatabaseName}.");
             }
             else
             {
-                warnings.Add("MySQL database was declared but the active MySQL client runtime is not available yet.");
+                warnings.Add($"{DisplayEngine(manifest.DatabaseEngine)} database was declared but its native client runtime is not available yet.");
             }
-        }
-        else if (!manifest.DatabaseEngine.Equals("none", StringComparison.OrdinalIgnoreCase) &&
-                 !manifest.DatabaseEngine.Equals("mysql", StringComparison.OrdinalIgnoreCase))
-        {
-            warnings.Add($"Database engine '{manifest.DatabaseEngine}' is declared in devbox.json but its native provisioning provider is not installed yet.");
         }
 
         foreach (var serviceKey in manifest.Services)
@@ -98,6 +94,14 @@ public sealed class ProjectProvisioningService
 
         return new ProjectProvisioningResult(site, manifest, actions, warnings);
     }
+
+    private static string DisplayEngine(string engine) => engine.ToLowerInvariant() switch
+    {
+        "mysql" => "MySQL",
+        "mariadb" => "MariaDB",
+        "postgresql" => "PostgreSQL",
+        _ => engine
+    };
 
     private static ManagedServiceManifest? ResolveManagedServiceTemplate(string key) =>
         key.ToLowerInvariant() switch
