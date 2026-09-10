@@ -77,9 +77,7 @@ public sealed partial class LocalCertificateManager
     {
         var certificatePath = CertificatePath(NormalizeDomain(domain));
         if (!File.Exists(certificatePath))
-        {
             return false;
-        }
 
         using var certificate = LoadPublicCertificate(certificatePath);
         using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
@@ -94,18 +92,14 @@ public sealed partial class LocalCertificateManager
         using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
         store.Open(OpenFlags.ReadWrite);
         if (store.Certificates.Find(X509FindType.FindByThumbprint, publicCertificate.Thumbprint, validOnly: false).Count == 0)
-        {
             store.Add(publicCertificate);
-        }
     }
 
     public void UntrustForCurrentUser(string domain)
     {
         var certificatePath = CertificatePath(NormalizeDomain(domain));
         if (!File.Exists(certificatePath))
-        {
             return;
-        }
 
         using var certificate = LoadPublicCertificate(certificatePath);
         RemoveTrustedThumbprint(certificate.Thumbprint);
@@ -114,9 +108,30 @@ public sealed partial class LocalCertificateManager
     public void Delete(string domain)
     {
         var normalizedDomain = NormalizeDomain(domain);
-        UntrustForCurrentUser(normalizedDomain);
-        DeleteIfExists(CertificatePath(normalizedDomain));
-        DeleteIfExists(PrivateKeyPath(normalizedDomain));
+        var certificatePath = CertificatePath(normalizedDomain);
+        var privateKeyPath = PrivateKeyPath(normalizedDomain);
+        string? thumbprint = null;
+
+        if (File.Exists(certificatePath))
+        {
+            try
+            {
+                using var certificate = LoadPublicCertificate(certificatePath);
+                thumbprint = certificate.Thumbprint;
+            }
+            catch (CryptographicException)
+            {
+                // Corrupt PEM: there is no reliable thumbprint to remove. It is safe to
+                // discard the unusable local material, but trust-store failures below are
+                // deliberately not swallowed because the PEM is needed for later cleanup.
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(thumbprint))
+            RemoveTrustedThumbprint(thumbprint);
+
+        DeleteIfExists(certificatePath);
+        DeleteIfExists(privateKeyPath);
     }
 
     private static void RemoveTrustedThumbprint(string thumbprint)
@@ -124,9 +139,7 @@ public sealed partial class LocalCertificateManager
         using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
         store.Open(OpenFlags.ReadWrite);
         foreach (var match in store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, validOnly: false))
-        {
             store.Remove(match);
-        }
     }
 
     private string CertificatePath(string domain) => Path.Combine(_certificateRoot, $"{domain}.crt.pem");
@@ -152,9 +165,7 @@ public sealed partial class LocalCertificateManager
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
         var normalized = domain.Trim().TrimEnd('.').ToLowerInvariant();
         if (!normalized.EndsWith(".test", StringComparison.OrdinalIgnoreCase) || !DomainRegex().IsMatch(normalized))
-        {
             throw new ArgumentException("Local certificate domains must be valid .test names.", nameof(domain));
-        }
         return normalized;
     }
 
@@ -165,13 +176,9 @@ public sealed partial class LocalCertificateManager
         {
             File.WriteAllText(tempPath, content);
             if (File.Exists(path))
-            {
                 File.Replace(tempPath, path, null);
-            }
             else
-            {
                 File.Move(tempPath, path);
-            }
         }
         finally
         {
@@ -182,9 +189,7 @@ public sealed partial class LocalCertificateManager
     private static void DeleteIfExists(string path)
     {
         if (File.Exists(path))
-        {
             File.Delete(path);
-        }
     }
 
     [GeneratedRegex("^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+test$", RegexOptions.CultureInvariant)]
