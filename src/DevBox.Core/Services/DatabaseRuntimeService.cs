@@ -24,11 +24,10 @@ public sealed class DatabaseRuntimeService : IDisposable
     public IReadOnlyList<DatabaseRuntimeInstance> GetInstances(string? engine = null)
     {
         ThrowIfDisposed();
-        var registrations = LoadRegistrations();
         var result = new List<DatabaseRuntimeInstance>();
-        foreach (var registration in registrations)
+        foreach (var registration in LoadRegistrations())
         {
-            if (!string.IsNullOrWhiteSpace(engine) && !registration.Engine.Equals(engine, StringComparison.OrdinalIgnoreCase))
+            if (!string.IsNullOrWhiteSpace(engine) && !registration.Engine.Equals(NormalizeEngine(ParseEngine(engine)), StringComparison.OrdinalIgnoreCase))
                 continue;
             var kind = ParseEngine(registration.Engine);
             var definition = BuildServiceDefinition(kind, registration.Version, registration.Port);
@@ -44,10 +43,7 @@ public sealed class DatabaseRuntimeService : IDisposable
                 snapshot.State,
                 snapshot.ProcessId));
         }
-        return result
-            .OrderBy(item => item.Engine)
-            .ThenByDescending(item => ParseVersion(item.Version))
-            .ToArray();
+        return result.OrderBy(item => item.Engine).ThenByDescending(item => ParseVersion(item.Version)).ToArray();
     }
 
     public DatabaseRuntimeInstance Register(string engine, string version, int? port = null)
@@ -55,13 +51,13 @@ public sealed class DatabaseRuntimeService : IDisposable
         ThrowIfDisposed();
         var kind = ParseEngine(engine);
         ValidateVersion(version);
-        var runtime = RuntimePath(NormalizeEngine(kind), version);
+        var normalizedEngine = NormalizeEngine(kind);
+        var runtime = RuntimePath(normalizedEngine, version);
         var executable = ServerExecutable(kind, runtime);
         if (!File.Exists(executable))
             throw new FileNotFoundException($"{DisplayEngine(kind)} server executable was not found for version {version}.", executable);
 
         var registrations = LoadRegistrations().ToList();
-        var normalizedEngine = NormalizeEngine(kind);
         var selectedPort = port ?? ChooseAvailablePort(kind, registrations);
         if (selectedPort is < 1 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(port), "Database port must be between 1 and 65535.");
@@ -91,49 +87,38 @@ public sealed class DatabaseRuntimeService : IDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var kind = instance.Engine;
-            if (IsInitialized(kind, version))
+            if (IsInitialized(instance.Engine, version))
                 return ToCurrentInstance(instance);
 
             var dataPath = instance.DataPath;
             if (Directory.Exists(dataPath) && Directory.EnumerateFileSystemEntries(dataPath).Any())
                 throw new InvalidOperationException($"Database data directory is non-empty but not recognized as initialized: {dataPath}");
             Directory.CreateDirectory(dataPath);
-
             var runtime = instance.RuntimePath;
             ProcessResult result;
-            if (kind == DatabaseEngineKind.PostgreSql)
+
+            if (instance.Engine == DatabaseEngineKind.PostgreSql)
             {
                 var initDb = Path.Combine(runtime, "bin", "initdb.exe");
-                if (!File.Exists(initDb))
-                    throw new FileNotFoundException("PostgreSQL initdb.exe was not found.", initDb);
+                EnsureExecutable(initDb);
                 result = await RunProcessAsync(initDb, ["-D", dataPath, "-U", "postgres", "--auth=trust", "--encoding=UTF8"], runtime, null, null, cancellationToken).ConfigureAwait(false);
             }
-            else if (kind == DatabaseEngineKind.MariaDb)
+            else if (instance.Engine == DatabaseEngineKind.MariaDb)
             {
-                var installer = FirstExisting(
-                    Path.Combine(runtime, "bin", "mariadb-install-db.exe"),
-                    Path.Combine(runtime, "bin", "mysql_install_db.exe"));
-                if (installer is not null)
-                {
-                    result = await RunProcessAsync(installer, [$"--basedir={runtime}", $"--datadir={dataPath}"], runtime, null, null, cancellationToken).ConfigureAwait(false);
-                }
-                else
-                {
-                    var server = ServerExecutable(kind, runtime);
-                    result = await RunProcessAsync(server, ["--no-defaults", "--initialize-insecure", $"--basedir={runtime}", $"--datadir={dataPath}"], runtime, null, null, cancellationToken).ConfigureAwait(false);
-                }
+                var installer = FirstExisting(Path.Combine(runtime, "bin", "mariadb-install-db.exe"), Path.Combine(runtime, "bin", "mysql_install_db.exe"));
+                result = installer is not null
+                    ? await RunProcessAsync(installer, [$"--basedir={runtime}", $"--datadir={dataPath}"], runtime, null, null, cancellationToken).ConfigureAwait(false)
+                    : await RunProcessAsync(ServerExecutable(instance.Engine, runtime), ["--no-defaults", "--initialize-insecure", $"--basedir={runtime}", $"--datadir={dataPath}"], runtime, null, null, cancellationToken).ConfigureAwait(false);
             }
             else
             {
-                var server = ServerExecutable(kind, runtime);
-                result = await RunProcessAsync(server, ["--no-defaults", "--initialize-insecure", $"--basedir={runtime}", $"--datadir={dataPath}"], runtime, null, null, cancellationToken).ConfigureAwait(false);
+                result = await RunProcessAsync(ServerExecutable(instance.Engine, runtime), ["--no-defaults", "--initialize-insecure", $"--basedir={runtime}", $"--datadir={dataPath}"], runtime, null, null, cancellationToken).ConfigureAwait(false);
             }
 
             if (result.ExitCode != 0)
-                throw new InvalidOperationException($"{DisplayEngine(kind)} initialization failed: {result.StandardError.Trim()}");
-            if (!IsInitialized(kind, version))
-                throw new InvalidDataException($"{DisplayEngine(kind)} initialization finished without producing the expected data directory structure.");
+                throw new InvalidOperationException($"{DisplayEngine(instance.Engine)} initialization failed: {SanitizeOutput(result.StandardError)}");
+            if (!IsInitialized(instance.Engine, version))
+                throw new InvalidDataException($"{DisplayEngine(instance.Engine)} initialization finished without producing the expected data directory structure.");
             return ToCurrentInstance(instance with { Initialized = true });
         }
         catch
@@ -152,8 +137,7 @@ public sealed class DatabaseRuntimeService : IDisposable
     {
         ThrowIfDisposed();
         var instance = await EnsureInitializedAsync(engine, version, port, cancellationToken).ConfigureAwait(false);
-        var definition = BuildServiceDefinition(instance.Engine, instance.Version, instance.Port);
-        return await _processes.StartAsync(definition, cancellationToken).ConfigureAwait(false);
+        return await _processes.StartAsync(BuildServiceDefinition(instance.Engine, instance.Version, instance.Port), cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<ServiceSnapshot> StopAsync(string engine, string version, DatabaseConnectionOptions? credentials = null, CancellationToken cancellationToken = default)
@@ -162,10 +146,8 @@ public sealed class DatabaseRuntimeService : IDisposable
         var registration = GetRegistration(engine, version);
         var kind = ParseEngine(registration.Engine);
         var definition = BuildServiceDefinition(kind, registration.Version, registration.Port);
-
         if (credentials is not null && kind is DatabaseEngineKind.MySql or DatabaseEngineKind.MariaDb)
-            await TryCredentialAwareMySqlShutdownAsync(kind, registration, credentials, cancellationToken).ConfigureAwait(false);
-
+            await TryCredentialAwareMySqlShutdownAsync(registration, credentials, cancellationToken).ConfigureAwait(false);
         return await _processes.StopAsync(definition, cancellationToken).ConfigureAwait(false);
     }
 
@@ -187,7 +169,7 @@ public sealed class DatabaseRuntimeService : IDisposable
         ValidateDatabaseName(databaseName);
         var registration = GetRegistration(engine, version);
         var kind = ParseEngine(registration.Engine);
-        options ??= DefaultOptions(kind, registration.Port);
+        options = NormalizeOptions(options ?? DefaultOptions(kind, registration.Port), registration.Port);
         var backupRoot = Path.Combine(_rootPath, "backups", "databases", registration.Engine);
         Directory.CreateDirectory(backupRoot);
         var extension = kind == DatabaseEngineKind.PostgreSql ? ".dump" : ".sql";
@@ -200,11 +182,14 @@ public sealed class DatabaseRuntimeService : IDisposable
         {
             var executable = Path.Combine(RuntimePath(registration.Engine, version), "bin", "pg_dump.exe");
             EnsureExecutable(executable);
-            var env = PasswordEnvironment(options, kind);
-            var args = new List<string> { "-h", options.Host, "-p", options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), "-U", options.User, "-Fc", "-f", destination, databaseName };
-            var result = await RunProcessAsync(executable, args, _rootPath, env, null, cancellationToken).ConfigureAwait(false);
-            if (result.ExitCode != 0)
-                throw new InvalidOperationException($"PostgreSQL backup failed: {result.StandardError.Trim()}");
+            var result = await RunProcessAsync(
+                executable,
+                ["-h", options.Host, "-p", options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), "-U", options.User, "-Fc", "-f", destination, databaseName],
+                _rootPath,
+                PasswordEnvironment(options, kind),
+                null,
+                cancellationToken).ConfigureAwait(false);
+            EnsureSuccess(result, "PostgreSQL backup");
         }
         else
         {
@@ -214,10 +199,14 @@ public sealed class DatabaseRuntimeService : IDisposable
             var defaults = CreateMySqlDefaultsFile(options);
             try
             {
-                var args = new[] { $"--defaults-extra-file={defaults}", "--single-transaction", "--routines", "--events", "--databases", databaseName };
-                var result = await RunProcessAsync(executable, args, runtime, null, destination, cancellationToken).ConfigureAwait(false);
-                if (result.ExitCode != 0)
-                    throw new InvalidOperationException($"{DisplayEngine(kind)} backup failed: {result.StandardError.Trim()}");
+                var result = await RunProcessAsync(
+                    executable,
+                    [$"--defaults-extra-file={defaults}", "--single-transaction", "--routines", "--events", "--triggers", databaseName],
+                    runtime,
+                    null,
+                    destination,
+                    cancellationToken).ConfigureAwait(false);
+                EnsureSuccess(result, $"{DisplayEngine(kind)} backup");
             }
             finally
             {
@@ -226,7 +215,9 @@ public sealed class DatabaseRuntimeService : IDisposable
         }
 
         var info = new FileInfo(destination);
-        return new DatabaseBackupResult(registration.Engine, databaseName, destination, info.Exists ? info.Length : 0, DateTimeOffset.UtcNow);
+        if (!info.Exists)
+            throw new InvalidDataException("Database backup command completed without creating the backup file.");
+        return new DatabaseBackupResult(registration.Engine, databaseName, destination, info.Length, DateTimeOffset.UtcNow);
     }
 
     public async Task RestoreAsync(
@@ -244,29 +235,36 @@ public sealed class DatabaseRuntimeService : IDisposable
             throw new FileNotFoundException("Database backup was not found.", source);
         var registration = GetRegistration(engine, version);
         var kind = ParseEngine(registration.Engine);
-        options ??= DefaultOptions(kind, registration.Port);
+        options = NormalizeOptions(options ?? DefaultOptions(kind, registration.Port), registration.Port);
 
         if (kind == DatabaseEngineKind.PostgreSql)
         {
-            var executable = Path.Combine(RuntimePath(registration.Engine, version), "bin", "pg_restore.exe");
+            var runtime = RuntimePath(registration.Engine, version);
+            var executable = Path.Combine(runtime, "bin", "pg_restore.exe");
             EnsureExecutable(executable);
-            var env = PasswordEnvironment(options, kind);
-            var args = new[] { "-h", options.Host, "-p", options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), "-U", options.User, "--clean", "--if-exists", "--no-owner", "-d", databaseName, source };
-            var result = await RunProcessAsync(executable, args, _rootPath, env, null, cancellationToken).ConfigureAwait(false);
-            if (result.ExitCode != 0)
-                throw new InvalidOperationException($"PostgreSQL restore failed: {result.StandardError.Trim()}");
+            var result = await RunProcessAsync(
+                executable,
+                ["-h", options.Host, "-p", options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), "-U", options.User, "--clean", "--if-exists", "--no-owner", "-d", databaseName, source],
+                runtime,
+                PasswordEnvironment(options, kind),
+                null,
+                cancellationToken).ConfigureAwait(false);
+            EnsureSuccess(result, "PostgreSQL restore");
             return;
         }
 
-        var runtime = RuntimePath(registration.Engine, version);
-        var executableMySql = FirstExisting(Path.Combine(runtime, "bin", "mysql.exe"), Path.Combine(runtime, "bin", "mariadb.exe"))
+        var mysqlRuntime = RuntimePath(registration.Engine, version);
+        var client = FirstExisting(Path.Combine(mysqlRuntime, "bin", "mysql.exe"), Path.Combine(mysqlRuntime, "bin", "mariadb.exe"))
             ?? throw new FileNotFoundException($"{DisplayEngine(kind)} command client was not found.");
         var defaultsFile = CreateMySqlDefaultsFile(options);
         try
         {
-            var result = await RunProcessAsync(executableMySql, [$"--defaults-extra-file={defaultsFile}"], runtime, null, null, cancellationToken, source).ConfigureAwait(false);
-            if (result.ExitCode != 0)
-                throw new InvalidOperationException($"{DisplayEngine(kind)} restore failed: {result.StandardError.Trim()}");
+            var createSql = $"CREATE DATABASE IF NOT EXISTS `{databaseName}`";
+            var createResult = await RunProcessAsync(client, [$"--defaults-extra-file={defaultsFile}", $"--execute={createSql}"], mysqlRuntime, null, null, cancellationToken).ConfigureAwait(false);
+            EnsureSuccess(createResult, $"{DisplayEngine(kind)} target database creation");
+
+            var restoreResult = await RunProcessAsync(client, [$"--defaults-extra-file={defaultsFile}", databaseName], mysqlRuntime, null, null, cancellationToken, source).ConfigureAwait(false);
+            EnsureSuccess(restoreResult, $"{DisplayEngine(kind)} restore");
         }
         finally
         {
@@ -306,7 +304,6 @@ public sealed class DatabaseRuntimeService : IDisposable
         }
 
         var server = ServerExecutable(kind, runtime);
-        var admin = FirstExisting(Path.Combine(runtime, "bin", "mysqladmin.exe"), Path.Combine(runtime, "bin", "mariadb-admin.exe"));
         return new ServiceDefinition(
             $"db-{engine}-{SafeServiceSegment(version)}",
             $"{DisplayEngine(kind)} {version}",
@@ -315,19 +312,19 @@ public sealed class DatabaseRuntimeService : IDisposable
             _rootPath,
             port,
             version,
-            admin,
-            admin is null ? null : ["--protocol=tcp", "--host=127.0.0.1", $"--port={port}", "--user=root", "shutdown"],
-            TimeSpan.FromSeconds(12),
-            log);
+            StopExecutablePath: null,
+            StopArguments: null,
+            ShutdownTimeout: TimeSpan.FromSeconds(12),
+            LogPath: log);
     }
 
-    private async Task TryCredentialAwareMySqlShutdownAsync(DatabaseEngineKind kind, DatabaseRuntimeRegistration registration, DatabaseConnectionOptions options, CancellationToken cancellationToken)
+    private async Task TryCredentialAwareMySqlShutdownAsync(DatabaseRuntimeRegistration registration, DatabaseConnectionOptions options, CancellationToken cancellationToken)
     {
         var runtime = RuntimePath(registration.Engine, registration.Version);
         var admin = FirstExisting(Path.Combine(runtime, "bin", "mysqladmin.exe"), Path.Combine(runtime, "bin", "mariadb-admin.exe"));
         if (admin is null)
             return;
-        var effective = options with { Port = registration.Port };
+        var effective = NormalizeOptions(options, registration.Port);
         var defaults = CreateMySqlDefaultsFile(effective);
         try
         {
@@ -353,8 +350,7 @@ public sealed class DatabaseRuntimeService : IDisposable
             return DiscoverRegistrations();
         try
         {
-            var values = JsonSerializer.Deserialize<List<DatabaseRuntimeRegistration>>(File.ReadAllText(_registrationsPath), JsonOptions)
-                ?? new List<DatabaseRuntimeRegistration>();
+            var values = JsonSerializer.Deserialize<List<DatabaseRuntimeRegistration>>(File.ReadAllText(_registrationsPath), JsonOptions) ?? [];
             foreach (var item in values)
             {
                 _ = ParseEngine(item.Engine);
@@ -362,6 +358,9 @@ public sealed class DatabaseRuntimeService : IDisposable
                 if (item.Port is < 1 or > 65535)
                     throw new InvalidDataException("Database runtime registration contains an invalid port.");
             }
+            var duplicatePort = values.GroupBy(item => item.Port).FirstOrDefault(group => group.Count() > 1);
+            if (duplicatePort is not null)
+                throw new InvalidDataException($"Database runtime registrations contain duplicate port {duplicatePort.Key}.");
             return values;
         }
         catch (JsonException ex)
@@ -429,8 +428,7 @@ public sealed class DatabaseRuntimeService : IDisposable
 
     private DatabaseRuntimeInstance ToCurrentInstance(DatabaseRuntimeInstance instance)
     {
-        var definition = BuildServiceDefinition(instance.Engine, instance.Version, instance.Port);
-        var snapshot = _processes.GetStatus(definition);
+        var snapshot = _processes.GetStatus(BuildServiceDefinition(instance.Engine, instance.Version, instance.Port));
         return instance with { State = snapshot.State, ProcessId = snapshot.ProcessId, Initialized = IsInitialized(instance.Engine, instance.Version) };
     }
 
@@ -470,6 +468,12 @@ public sealed class DatabaseRuntimeService : IDisposable
     private static DatabaseConnectionOptions DefaultOptions(DatabaseEngineKind kind, int port) => kind == DatabaseEngineKind.PostgreSql
         ? new DatabaseConnectionOptions(Host: "127.0.0.1", Port: port, User: "postgres", Password: string.Empty)
         : new DatabaseConnectionOptions(Host: "127.0.0.1", Port: port, User: "root", Password: string.Empty);
+
+    private static DatabaseConnectionOptions NormalizeOptions(DatabaseConnectionOptions options, int registeredPort)
+    {
+        options.Validate();
+        return options with { Port = registeredPort };
+    }
 
     private static Dictionary<string, string?>? PasswordEnvironment(DatabaseConnectionOptions options, DatabaseEngineKind kind)
     {
@@ -583,6 +587,18 @@ public sealed class DatabaseRuntimeService : IDisposable
         }
     }
 
+    private static void EnsureSuccess(ProcessResult result, string operation)
+    {
+        if (result.ExitCode != 0)
+            throw new InvalidOperationException($"{operation} failed: {SanitizeOutput(result.StandardError)}");
+    }
+
+    private static string SanitizeOutput(string value)
+    {
+        var text = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return text.Length <= 2000 ? text : text[..2000];
+    }
+
     private static void EnsureExecutable(string path)
     {
         if (!File.Exists(path))
@@ -606,7 +622,6 @@ public sealed class DatabaseRuntimeService : IDisposable
     }
 
     private static string SafeServiceSegment(string value) => new(value.Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '-').ToArray());
-
     private static Version ParseVersion(string value) => Version.TryParse(value, out var parsed) ? parsed : new Version(0, 0);
 
     private static void AtomicWrite(string path, string content)
@@ -629,22 +644,14 @@ public sealed class DatabaseRuntimeService : IDisposable
 
     private static void TryDeleteDirectory(string path)
     {
-        try
-        {
-            if (Directory.Exists(path))
-                Directory.Delete(path, recursive: true);
-        }
+        try { if (Directory.Exists(path)) Directory.Delete(path, recursive: true); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
     }
 
     private static void TryDeleteFile(string path)
     {
-        try
-        {
-            if (File.Exists(path))
-                File.Delete(path);
-        }
+        try { if (File.Exists(path)) File.Delete(path); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
     }
@@ -653,6 +660,5 @@ public sealed class DatabaseRuntimeService : IDisposable
 
     private sealed record DatabaseRuntimeRegistration(string Engine, string Version, int Port);
     private sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
-
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
 }
