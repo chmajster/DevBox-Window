@@ -150,7 +150,11 @@ public sealed class AdvancedDiagnosticsService
         var duplicateDomains = sites.GroupBy(item => item.Domain, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1);
         foreach (var duplicate in duplicateDomains)
             findings.Add(Error($"site-domain-{duplicate.Key}", "Sites", "Duplicate Site domain.", duplicate.Key, "Assign a unique .test domain to every Site."));
-        var duplicatePhpPorts = sites.Where(item => item.PhpPort is not null).GroupBy(item => item.PhpPort!.Value).Where(group => group.Count() > 1);
+
+        var duplicatePhpPorts = sites
+            .Where(item => !string.IsNullOrWhiteSpace(item.PhpVersion))
+            .GroupBy(item => item.PhpPort)
+            .Where(group => group.Count() > 1);
         foreach (var duplicate in duplicatePhpPorts)
             findings.Add(Error($"site-php-port-{duplicate.Key}", "Sites", "Duplicate per-Site PHP FastCGI port.", $"Port {duplicate.Key}: {string.Join(", ", duplicate.Select(item => item.Name))}.", "Repair Sites metadata to allocate unique PHP ports."));
 
@@ -246,7 +250,7 @@ public sealed class AdvancedDiagnosticsService
             findings.Add(Warning("stale-transaction-artifacts", "Filesystem", "Stale transaction directories were found.", string.Join(" | ", stale.Take(10)), "Remove them after confirming no DevBox operation is running."));
     }
 
-    private static AdvancedDiagnosticFinding Info(string key, string area, string summary, string details) => new(key, area, DiagnosticSeverity.Information, summary, details);
+    private static AdvancedDiagnosticFinding Info(string key, string area, string summary, string details) => new(key, area, DiagnosticSeverity.Info, summary, details);
     private static AdvancedDiagnosticFinding Warning(string key, string area, string summary, string details, string? action = null) => new(key, area, DiagnosticSeverity.Warning, summary, details, action);
     private static AdvancedDiagnosticFinding Error(string key, string area, string summary, string details, string? action = null) => new(key, area, DiagnosticSeverity.Error, summary, details, action);
 }
