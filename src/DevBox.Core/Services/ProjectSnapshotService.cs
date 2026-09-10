@@ -93,6 +93,8 @@ public sealed class ProjectSnapshotService
         var staging = Path.Combine(tempRoot, "project");
         var databaseStaging = Path.Combine(tempRoot, "database");
         Directory.CreateDirectory(staging);
+        var sites = new SiteManager(_rootPath);
+        var previousSite = sites.GetSites().FirstOrDefault(item => item.Name.Equals(safeName, StringComparison.OrdinalIgnoreCase));
         string? previous = null;
         string? databaseDestination = null;
         try
@@ -115,6 +117,7 @@ public sealed class ProjectSnapshotService
             try
             {
                 Directory.Move(staging, destination);
+                SynchronizeSite(destination, safeName, sites);
                 if (Directory.Exists(databaseStaging) && Directory.EnumerateFiles(databaseStaging).Any())
                 {
                     var snapshotKey = SafeFileName(Path.GetFileNameWithoutExtension(source));
@@ -134,6 +137,7 @@ public sealed class ProjectSnapshotService
                 TryDeleteDirectory(destination);
                 if (previous is not null && Directory.Exists(previous) && !Directory.Exists(destination))
                     Directory.Move(previous, destination);
+                RestoreSite(sites, safeName, previousSite);
                 if (databaseDestination is not null)
                     TryDeleteDirectory(databaseDestination);
                 throw;
@@ -190,6 +194,64 @@ public sealed class ProjectSnapshotService
         {
             throw new InvalidDataException("Snapshot devbox.lock.json contains invalid JSON.", ex);
         }
+    }
+
+    private void SynchronizeSite(string projectRoot, string name, SiteManager sites)
+    {
+        JsonObject manifest;
+        try
+        {
+            manifest = JsonNode.Parse(File.ReadAllText(Path.Combine(projectRoot, ProjectWorkspaceService.ManifestFileName))) as JsonObject
+                ?? throw new InvalidDataException("Restored devbox.json must contain a JSON object.");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException("Restored devbox.json contains invalid JSON.", ex);
+        }
+
+        var domain = GetString(manifest, "Domain") ?? BuildDomain(name);
+        var phpVersion = GetString(manifest, "PhpVersion");
+        var https = GetBool(manifest, "Https") ?? false;
+        var workspace = new ProjectWorkspaceService(_rootPath, sites, new PhpExtensionInspector(_rootPath), new LocalCertificateManager(_rootPath));
+        var detection = workspace.Detect(projectRoot);
+        var documentRoot = detection.Kind is ProjectKind.Laravel or ProjectKind.Symfony && Directory.Exists(Path.Combine(projectRoot, "public"))
+            ? Path.Combine(projectRoot, "public")
+            : projectRoot;
+
+        if (https)
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                using var certificate = new LocalCertificateAuthorityService(_rootPath).IssueSiteCertificate(domain);
+            }
+            else
+            {
+                _ = new LocalCertificateManager(_rootPath).Ensure(domain);
+            }
+        }
+
+        var desired = new SiteDefinition(name, domain, documentRoot, "php", phpVersion, https);
+        var existing = sites.GetSites().FirstOrDefault(item => item.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (existing is null)
+        {
+            _ = sites.Create(name, domain, documentRoot);
+        }
+        _ = sites.Update(desired);
+    }
+
+    private static void RestoreSite(SiteManager sites, string name, SiteDefinition? previous)
+    {
+        var current = sites.GetSites().FirstOrDefault(item => item.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (previous is null)
+        {
+            if (current is not null)
+                sites.Delete(name, deleteDocumentRoot: false);
+            return;
+        }
+
+        if (current is null)
+            _ = sites.Create(previous.Name, previous.Domain, previous.DocumentRoot);
+        _ = sites.Update(previous);
     }
 
     private IEnumerable<string> EnumerateProjectFiles(string root, ProjectSnapshotOptions options)
@@ -281,6 +343,16 @@ public sealed class ProjectSnapshotService
         {
             if (pair.Key.Equals(name, StringComparison.OrdinalIgnoreCase) && pair.Value is JsonValue node && node.TryGetValue<string>(out var text))
                 return text;
+        }
+        return null;
+    }
+
+    private static bool? GetBool(JsonObject value, string name)
+    {
+        foreach (var pair in value)
+        {
+            if (pair.Key.Equals(name, StringComparison.OrdinalIgnoreCase) && pair.Value is JsonValue node && node.TryGetValue<bool>(out var flag))
+                return flag;
         }
         return null;
     }
