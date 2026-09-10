@@ -61,16 +61,24 @@ public sealed partial class SiteManager
 
         Directory.CreateDirectory(root);
         var indexPath = Path.Combine(root, "index.php");
+        var scaffoldedIndex = false;
         if (documentRoot is null && !File.Exists(indexPath))
         {
             File.WriteAllText(indexPath, "<?php\nphpinfo();\n");
+            scaffoldedIndex = true;
         }
 
         var site = new SiteDefinition(normalizedName, normalizedDomain, root);
-        WriteNginxConfig(site);
-        sites.Add(site);
-        SaveSites(sites);
-        return site;
+        try
+        {
+            return PersistNewSite(site, sites);
+        }
+        catch
+        {
+            if (scaffoldedIndex)
+                TryDeleteFile(indexPath);
+            throw;
+        }
     }
 
     public SiteDefinition RegisterExisting(string name, string domain, string documentRoot)
@@ -85,10 +93,7 @@ public sealed partial class SiteManager
         ValidateNewSite(sites, normalizedName, normalizedDomain);
 
         var site = new SiteDefinition(normalizedName, normalizedDomain, root);
-        WriteNginxConfig(site);
-        sites.Add(site);
-        SaveSites(sites);
-        return site;
+        return PersistNewSite(site, sites);
     }
 
     public SiteDefinition Update(SiteDefinition site)
@@ -204,6 +209,22 @@ public sealed partial class SiteManager
     public string GetNginxConfigPath(string domain) =>
         Path.Combine(_rootPath, "config", "nginx", "sites-enabled", $"{NormalizeDomain(domain)}.conf");
 
+    private SiteDefinition PersistNewSite(SiteDefinition site, ICollection<SiteDefinition> sites)
+    {
+        try
+        {
+            WriteNginxConfig(site);
+            sites.Add(site);
+            SaveSites(sites);
+            return site;
+        }
+        catch
+        {
+            TryDeleteNginxConfig(site.Domain);
+            throw;
+        }
+    }
+
     private static void ValidateNewSite(IReadOnlyCollection<SiteDefinition> sites, string normalizedName, string normalizedDomain)
     {
         if (sites.Any(site => site.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase)))
@@ -279,6 +300,20 @@ server {
         }
     }
 
+    private void TryDeleteNginxConfig(string domain)
+    {
+        try
+        {
+            DeleteNginxConfig(domain);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
     private void SaveSites(IReadOnlyCollection<SiteDefinition> sites)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_sitesMetadataPath)!);
@@ -327,6 +362,21 @@ server {
             {
                 File.Delete(tempPath);
             }
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 
