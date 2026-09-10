@@ -81,11 +81,43 @@ jobs:
       - name: Publish CLI win-arm64
         run: dotnet publish src/DevBox.Cli/DevBox.Cli.csproj --configuration Release --runtime win-arm64 --self-contained true --output publish/cli-win-arm64 /p:Version=${{ env.DEVBOX_VERSION }} /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true
 
-      - name: Add CLI to application layouts
+      - name: Add CLI to application layouts without replacing GUI
         shell: pwsh
         run: |
-          Copy-Item publish/cli-win-x64/devbox.exe publish/win-x64/devbox.exe -Force
-          Copy-Item publish/cli-win-arm64/devbox.exe publish/win-arm64/devbox.exe -Force
+          $layouts = @(
+            @{
+              Gui = 'publish/win-x64/DevBox.exe'
+              CliSource = 'publish/cli-win-x64/devbox.exe'
+              CliDirectory = 'publish/win-x64/cli'
+            },
+            @{
+              Gui = 'publish/win-arm64/DevBox.exe'
+              CliSource = 'publish/cli-win-arm64/devbox.exe'
+              CliDirectory = 'publish/win-arm64/cli'
+            }
+          )
+
+          foreach ($layout in $layouts) {
+            if (-not (Test-Path $layout.Gui)) {
+              throw "GUI publish did not produce $($layout.Gui)"
+            }
+            if (-not (Test-Path $layout.CliSource)) {
+              throw "CLI publish did not produce $($layout.CliSource)"
+            }
+
+            $guiHashBefore = (Get-FileHash $layout.Gui -Algorithm SHA256).Hash
+            New-Item -ItemType Directory -Force $layout.CliDirectory | Out-Null
+            $cliTarget = Join-Path $layout.CliDirectory 'devbox.exe'
+            Copy-Item $layout.CliSource $cliTarget -Force
+            $guiHashAfter = (Get-FileHash $layout.Gui -Algorithm SHA256).Hash
+
+            if ($guiHashBefore -ne $guiHashAfter) {
+              throw "GUI executable changed while adding CLI to $($layout.CliDirectory)"
+            }
+            if (-not (Test-Path $cliTarget)) {
+              throw "CLI was not added to $($layout.CliDirectory)"
+            }
+          }
 
       - name: Prepare Authenticode certificate
         id: signing
@@ -123,11 +155,11 @@ jobs:
             'publish/win-x64/DevBox.exe',
             'publish/win-x64/DevBox.dll',
             'publish/win-x64/DevBox.Core.dll',
-            'publish/win-x64/devbox.exe',
+            'publish/win-x64/cli/devbox.exe',
             'publish/win-arm64/DevBox.exe',
             'publish/win-arm64/DevBox.dll',
             'publish/win-arm64/DevBox.Core.dll',
-            'publish/win-arm64/devbox.exe'
+            'publish/win-arm64/cli/devbox.exe'
           )
           foreach ($target in $targets) {
             if (-not (Test-Path $target)) { throw "Signing target not found: $target" }
