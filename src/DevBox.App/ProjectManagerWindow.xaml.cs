@@ -33,7 +33,7 @@ public partial class ProjectManagerWindow : Window
             workspace,
             provisioning,
             new ProjectStackProfileService(root),
-            new ProjectCommandService(root),
+            new ProjectCommandService(root, workspace),
             new XdebugConfigurationService(root),
             managedServices,
             sites,
