@@ -39,7 +39,7 @@ public sealed class RemoteEnvironmentService
             Addons = lockFile.Addons,
             Services = lockFile.Services,
             Actions = lockFile.Actions,
-            Description = $"Portable environment definition exported from {lockFile.ProjectName}. Database name and all credentials are intentionally excluded."
+            Description = $"Portable environment definition exported from {lockFile.ProjectName}. Database name and sensitive authentication material are intentionally excluded."
         };
         return Export(profile, $"project-{lockFile.ProjectName}", destinationPath);
     }
@@ -52,10 +52,11 @@ public sealed class RemoteEnvironmentService
         if (new FileInfo(source).Length > 2 * 1024 * 1024)
             throw new InvalidDataException("Environment share file exceeds the 2 MiB limit.");
 
+        var content = File.ReadAllText(source);
         EnvironmentShareBundle bundle;
         try
         {
-            bundle = JsonSerializer.Deserialize<EnvironmentShareBundle>(File.ReadAllText(source), JsonOptions)
+            bundle = JsonSerializer.Deserialize<EnvironmentShareBundle>(content, JsonOptions)
                 ?? throw new InvalidDataException("Environment share file is empty.");
         }
         catch (JsonException ex)
@@ -63,7 +64,7 @@ public sealed class RemoteEnvironmentService
             throw new InvalidDataException("Environment share file contains invalid JSON.", ex);
         }
         ValidateBundle(bundle);
-        EnsureNoSecretMaterial(File.ReadAllText(source));
+        EnsureNoSensitiveMaterial(content);
 
         var existing = _profiles.GetProfiles().Any(item => item.Key.Equals(bundle.Profile.Key, StringComparison.OrdinalIgnoreCase));
         if (existing && !replaceExisting)
@@ -86,11 +87,11 @@ public sealed class RemoteEnvironmentService
             Metadata = new Dictionary<string, string>
             {
                 ["format"] = "DevBox Environment Share",
-                ["containsSecrets"] = "false"
+                ["sanitized"] = "true"
             }
         };
         var content = JsonSerializer.Serialize(bundle, JsonOptions);
-        EnsureNoSecretMaterial(content);
+        EnsureNoSensitiveMaterial(content);
         Directory.CreateDirectory(_shareRoot);
         var destination = string.IsNullOrWhiteSpace(destinationPath)
             ? Path.Combine(_shareRoot, $"{SafeFileName(name)}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.devbox-env.json")
@@ -116,7 +117,7 @@ public sealed class RemoteEnvironmentService
         ArgumentNullException.ThrowIfNull(bundle.Profile);
     }
 
-    private static void EnsureNoSecretMaterial(string json)
+    private static void EnsureNoSensitiveMaterial(string json)
     {
         using var document = JsonDocument.Parse(json);
         Walk(document.RootElement);
@@ -129,8 +130,12 @@ public sealed class RemoteEnvironmentService
                 foreach (var property in element.EnumerateObject())
                 {
                     var key = property.Name.ToLowerInvariant();
-                    if (key.Contains("password", StringComparison.Ordinal) || key.Contains("secret", StringComparison.Ordinal) || key.Contains("token", StringComparison.Ordinal) || key.Contains("privatekey", StringComparison.Ordinal) || key.Contains("credential", StringComparison.Ordinal))
-                        throw new InvalidDataException($"Environment share contains forbidden secret-like field '{property.Name}'.");
+                    if (key.Contains("password", StringComparison.Ordinal) ||
+                        key.Contains("secret", StringComparison.Ordinal) ||
+                        key.Contains("token", StringComparison.Ordinal) ||
+                        key.Contains("privatekey", StringComparison.Ordinal) ||
+                        key.Contains("credential", StringComparison.Ordinal))
+                        throw new InvalidDataException($"Environment share contains forbidden sensitive field '{property.Name}'.");
                     Walk(property.Value);
                 }
             }
