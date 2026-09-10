@@ -34,7 +34,8 @@ public sealed record DevBoxProjectManifest(
     string DatabaseEngine,
     string? DatabaseName,
     bool Https,
-    IReadOnlyList<string> Addons)
+    IReadOnlyList<string> Addons,
+    IReadOnlyList<string> Services)
 {
     public const int CurrentSchemaVersion = 1;
 }
@@ -48,7 +49,8 @@ public sealed record ProjectCreateRequest(
     string DatabaseEngine = "mysql",
     string? DatabaseName = null,
     string? NodeVersion = null,
-    IReadOnlyList<string>? Addons = null);
+    IReadOnlyList<string>? Addons = null,
+    IReadOnlyList<string>? Services = null);
 
 public sealed record ProjectImportRequest(
     string SourcePath,
