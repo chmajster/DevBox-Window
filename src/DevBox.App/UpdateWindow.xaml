@@ -1,7 +1,7 @@
 <Window x:Class="DevBox.App.UpdateWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="DevBox · Updates" Height="390" Width="680" MinHeight="340" MinWidth="580"
+        Title="DevBox · Updates" Height="410" Width="700" MinHeight="350" MinWidth="600"
         Background="#F4F6F9" WindowStartupLocation="CenterOwner">
     <Window.Resources>
         <Style TargetType="Button"><Setter Property="Padding" Value="12,7"/><Setter Property="Margin" Value="4"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Background" Value="#E8ECF2"/></Style>
@@ -9,7 +9,7 @@
     </Window.Resources>
     <Grid Margin="26">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-        <StackPanel Grid.Row="0" Margin="0,0,0,18"><TextBlock Text="Application Updates" FontSize="27" FontWeight="SemiBold"/><TextBlock Text="Checks stable releases from the DevBox GitHub repository." Foreground="#6B7280" Margin="0,4,0,0"/></StackPanel>
+        <StackPanel Grid.Row="0" Margin="0,0,0,18"><TextBlock Text="Application Updates" FontSize="27" FontWeight="SemiBold"/><TextBlock Text="Checks stable releases and verifies the installer against SHA256SUMS.txt before execution." Foreground="#6B7280" Margin="0,4,0,0" TextWrapping="Wrap"/></StackPanel>
         <Border Grid.Row="1" Background="White" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="20">
             <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                 <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="1*"/><ColumnDefinition Width="1*"/></Grid.ColumnDefinitions>
@@ -20,6 +20,10 @@
                 <TextBlock Grid.Row="2" Text="{Binding ReleaseUrl}" Foreground="#2563EB" TextWrapping="Wrap"/>
             </Grid>
         </Border>
-        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0"><Button Content="Open release" Command="{Binding OpenReleaseCommand}"/><Button Content="Check for updates" Style="{StaticResource Primary}" Command="{Binding CheckCommand}"/></StackPanel>
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+            <Button Content="Open release" Command="{Binding OpenReleaseCommand}"/>
+            <Button Content="Check for updates" Command="{Binding CheckCommand}"/>
+            <Button Content="Install update" Style="{StaticResource Primary}" Command="{Binding InstallUpdateCommand}"/>
+        </StackPanel>
     </Grid>
 </Window>
