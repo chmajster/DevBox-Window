@@ -90,6 +90,7 @@ public sealed class UpdateWindowViewModel : ObservableObject
             startInfo.ArgumentList.Add("/SUPPRESSMSGBOXES");
             startInfo.ArgumentList.Add("/NORESTART");
             startInfo.ArgumentList.Add("/CLOSEAPPLICATIONS");
+            startInfo.ArgumentList.Add("/TASKS=launchafterinstall");
 
             if (Process.Start(startInfo) is null)
                 throw new InvalidOperationException("Windows refused to start the verified DevBox installer.");
