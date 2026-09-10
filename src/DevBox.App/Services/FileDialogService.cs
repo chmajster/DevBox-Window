@@ -4,6 +4,7 @@ public interface IFileDialogService
 {
     string? OpenSqlFile();
     string? SaveSqlFile(string suggestedFileName);
+    string? OpenXdebugDll();
     string? SelectFolder(string description, string? initialPath = null);
 }
 
@@ -31,6 +32,18 @@ public sealed class FileDialogService : IFileDialogService
             AddExtension = true,
             DefaultExt = ".sql",
             OverwritePrompt = true
+        };
+        return dialog.ShowDialog() == true ? dialog.FileName : null;
+    }
+
+    public string? OpenXdebugDll()
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Select Xdebug PHP extension",
+            Filter = "Xdebug DLL (php_xdebug*.dll)|php_xdebug*.dll|DLL files (*.dll)|*.dll",
+            CheckFileExists = true,
+            Multiselect = false
         };
         return dialog.ShowDialog() == true ? dialog.FileName : null;
     }
