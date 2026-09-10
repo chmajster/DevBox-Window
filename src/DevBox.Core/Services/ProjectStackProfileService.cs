@@ -45,7 +45,8 @@ public sealed partial class ProjectStackProfileService
             profile.DatabaseEngine,
             null,
             profile.NodeVersion,
-            profile.Addons);
+            profile.Addons,
+            profile.Services);
     }
 
     public void SaveCustomProfile(ProjectStackProfile profile)
@@ -128,6 +129,10 @@ public sealed partial class ProjectStackProfileService
         {
             throw new InvalidDataException("Profile contains an invalid addon key.");
         }
+        if (profile.Services.Any(service => !SafeKeyRegex().IsMatch(service)))
+        {
+            throw new InvalidDataException("Profile contains an invalid managed-service key.");
+        }
     }
 
     private static void AtomicWrite(string path, string content)
@@ -156,11 +161,11 @@ public sealed partial class ProjectStackProfileService
 
     private static readonly IReadOnlyList<ProjectStackProfile> BuiltInProfiles =
     [
-        new("laravel", "Laravel", ProjectKind.Laravel, null, "22", "mysql", true, ["mailpit", "redis"], "Laravel stack with MySQL, Node.js, Redis and Mailpit."),
-        new("symfony", "Symfony", ProjectKind.Symfony, null, "22", "mysql", true, ["mailpit", "redis"], "Symfony stack with MySQL, Node.js, Redis and Mailpit."),
-        new("wordpress", "WordPress", ProjectKind.WordPress, null, null, "mysql", true, ["mailpit"], "WordPress stack with MySQL and local mail capture."),
-        new("php", "Plain PHP", ProjectKind.EmptyPhp, null, null, "mysql", true, Array.Empty<string>(), "Minimal PHP site with MySQL and HTTPS."),
-        new("php-minimal", "Plain PHP - minimal", ProjectKind.EmptyPhp, null, null, "none", false, Array.Empty<string>(), "Minimal PHP site without database or HTTPS.")
+        new("laravel", "Laravel", ProjectKind.Laravel, null, "22", "mysql", true, Array.Empty<string>(), ["mailpit", "redis"], "Laravel stack with MySQL, Node.js, Redis and Mailpit."),
+        new("symfony", "Symfony", ProjectKind.Symfony, null, "22", "mysql", true, Array.Empty<string>(), ["mailpit", "redis"], "Symfony stack with MySQL, Node.js, Redis and Mailpit."),
+        new("wordpress", "WordPress", ProjectKind.WordPress, null, null, "mysql", true, Array.Empty<string>(), ["mailpit"], "WordPress stack with MySQL and local mail capture."),
+        new("php", "Plain PHP", ProjectKind.EmptyPhp, null, null, "mysql", true, Array.Empty<string>(), Array.Empty<string>(), "Minimal PHP site with MySQL and HTTPS."),
+        new("php-minimal", "Plain PHP - minimal", ProjectKind.EmptyPhp, null, null, "none", false, Array.Empty<string>(), Array.Empty<string>(), "Minimal PHP site without database or HTTPS.")
     ];
 
     private static readonly JsonSerializerOptions JsonOptions = new()
