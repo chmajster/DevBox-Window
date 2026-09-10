@@ -47,6 +47,30 @@ public sealed class EnvironmentPlatformRegressionTests
     }
 
     [Fact]
+    public void DatabaseRuntime_ReregisterWithoutPortPreservesExistingPort()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var executable = Path.Combine(root, "runtime", "mysql", "8.4.11", "bin", "mysqld.exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+            File.WriteAllText(executable, "fixture");
+
+            using var service = new DatabaseRuntimeService(root);
+            var first = service.Register("mysql", "8.4.11", 3406);
+            var second = service.Register("mysql", "8.4.11");
+
+            Assert.Equal(3406, first.Port);
+            Assert.Equal(3406, second.Port);
+            Assert.Equal(3406, service.GetInstances("mysql").Single().Port);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public void ProjectActions_PreserveManifestDeclarationOrder()
     {
         var root = TemporaryRoot();
@@ -101,21 +125,42 @@ public sealed class EnvironmentPlatformRegressionTests
     }
 
     [Fact]
-    public void RemoteEnvironment_ExportsAndImportsItsOwnSecretMetadataSafely()
+    public void RemoteEnvironment_OmitsActionsAndSensitiveArgumentValues()
     {
         var root = TemporaryRoot();
         try
         {
+            var profiles = new EnvironmentProfileService(root);
+            profiles.SaveCustomProfile(new EnvironmentProfile
+            {
+                Key = "portable-sensitive-fixture",
+                DisplayName = "Portable sensitive fixture",
+                Kind = ProjectKind.EmptyPhp,
+                Database = new EnvironmentDatabasePin("none", null, null),
+                Actions =
+                [
+                    new ProjectActionDefinition(
+                        "registry",
+                        "Registry",
+                        "npm",
+                        ["config", "set", "//registry.example.test/:_authToken=supersecretfixture"])
+                ]
+            });
+
             var path = Path.Combine(root, "portable.devbox-env.json");
             var service = new RemoteEnvironmentService(root);
-            var exported = service.ExportProfile("php-minimal", path);
+            var exported = service.ExportProfile("portable-sensitive-fixture", path);
 
             Assert.Equal(path, exported);
-            using var document = JsonDocument.Parse(File.ReadAllText(path));
-            Assert.Equal("false", document.RootElement.GetProperty("metadata").GetProperty("containsSecrets").GetString());
+            var json = File.ReadAllText(path);
+            Assert.DoesNotContain("supersecretfixture", json, StringComparison.Ordinal);
+            using var document = JsonDocument.Parse(json);
+            Assert.Equal("true", document.RootElement.GetProperty("Metadata").GetProperty("sanitized").GetString());
+            Assert.Equal("true", document.RootElement.GetProperty("Metadata").GetProperty("actionsOmitted").GetString());
+            Assert.Empty(document.RootElement.GetProperty("Profile").GetProperty("Actions").EnumerateArray());
 
             var imported = service.Import(path, replaceExisting: true);
-            Assert.Equal("php-minimal", imported.ProfileKey);
+            Assert.Equal("portable-sensitive-fixture", imported.ProfileKey);
             Assert.True(imported.ReplacedExisting);
         }
         finally
@@ -125,7 +170,7 @@ public sealed class EnvironmentPlatformRegressionTests
     }
 
     [Fact]
-    public async Task SnapshotRestore_RewritesIdentityAndRestoresDatabasePayload()
+    public async Task SnapshotRestore_RewritesIdentityRestoresDatabasePayloadAndRegistersSite()
     {
         var root = TemporaryRoot();
         try
@@ -160,6 +205,11 @@ public sealed class EnvironmentPlatformRegressionTests
             var restoredLock = JsonSerializer.Deserialize<EnvironmentLockFile>(File.ReadAllText(Path.Combine(restored, EnvironmentLockService.LockFileName)))!;
             Assert.Equal("copy", restoredLock.ProjectName);
             Assert.Equal("copy.test", restoredLock.Domain);
+
+            var site = new SiteManager(root).GetSites().Single(value => value.Name == "copy");
+            Assert.Equal("copy.test", site.Domain);
+            Assert.Equal(restored, site.DocumentRoot);
+            Assert.False(site.HttpsEnabled);
 
             var backupRoot = Path.Combine(root, "backups", "snapshot-restores", "copy");
             Assert.Single(Directory.GetFiles(backupRoot, "source.sql", SearchOption.AllDirectories));
@@ -266,6 +316,51 @@ public sealed class EnvironmentPlatformRegressionTests
             handler.Catalog = "[]"u8.ToArray();
             var second = await marketplace.SyncAsync();
             Assert.DoesNotContain(second, addon => addon.Key == "remote-fixture");
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task TransferOverwrite_RollsBackSiteWhenDatabaseBackupMoveFails()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var existing = CreateProject(root, "same", "old.test");
+            var sites = new SiteManager(root);
+            _ = sites.Create("same", "old.test", existing);
+            _ = sites.SetPhpVersion("same", "8.0.0");
+
+            var source = CreateProject(root, "source-transfer", "source-transfer.test");
+            File.WriteAllText(Path.Combine(source, ProjectWorkspaceService.ManifestFileName), """
+            {
+              "Name": "source-transfer",
+              "Domain": "source-transfer.test",
+              "PhpVersion": null,
+              "DatabaseEngine": "none",
+              "Https": false
+            }
+            """);
+            var dbBackup = Path.Combine(root, "transfer.sql");
+            await File.WriteAllTextAsync(dbBackup, "-- transfer fixture");
+            var transfer = new ProjectTransferService(root);
+            var archive = await transfer.ExportAsync(source, new ProjectSnapshotOptions(IncludeDatabase: true), [dbBackup]);
+
+            var blocked = Path.Combine(root, "backups", "imports", "same");
+            Directory.CreateDirectory(Path.GetDirectoryName(blocked)!);
+            File.WriteAllText(blocked, "blocks directory creation");
+
+            Assert.ThrowsAny<IOException>(() =>
+                transfer.ImportAsync(archive.ArchivePath, "same", "new.test", overwrite: true).GetAwaiter().GetResult());
+
+            var restoredSite = sites.GetSites().Single(value => value.Name == "same");
+            Assert.Equal("old.test", restoredSite.Domain);
+            Assert.Equal("8.0.0", restoredSite.PhpVersion);
+            using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(existing, ProjectWorkspaceService.ManifestFileName)));
+            Assert.Equal("old.test", manifest.RootElement.GetProperty("Domain").GetString());
         }
         finally
         {
