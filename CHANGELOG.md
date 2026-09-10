@@ -6,6 +6,7 @@ All notable changes to DevBox Windows are documented here.
 
 ### Added
 
+- GitHub Actions now separates automatic pull-request validation from publishing: PRs run the reusable Windows test/package validation workflow, while releases are started manually with a `patch`, `minor`, or `major` version increment that updates version metadata, creates the tag and publishes the GitHub Release.
 - Project Manager WPF workflow for creating, importing, diagnosing, repairing and operating local projects.
 - Automatic stack detection for Laravel, Symfony, WordPress, Composer PHP and Node projects, including Composer `ext-*` requirement discovery.
 - Versioned per-project `devbox.json` manifests and persistent built-in/custom stack profiles.
@@ -19,7 +20,7 @@ All notable changes to DevBox Windows are documented here.
 - Verified Microsoft Garnet `2.1.7` installer as the native Redis-compatible Windows service on `127.0.0.1:6379`, using pinned x64/ARM64 ReadyToRun package SHA-256 values.
 - Xdebug configuration UI and safe local DLL installation with PE validation, optional SHA-256 verification, atomic replacement and recorded provenance checksum.
 - Portable Node.js LTS `24.19.0` runtime catalog for Windows x64/ARM64 with pinned official SHA-256 values and versioned installation under `runtime/node/<version>`.
-- Per-project Node.js pinning: npm presets use the exact `NodeVersion` recorded in `devbox.json` instead of silently falling back to another Node.js installation from `PATH`.
+- Per-project Node.js pinning: npm presets use the exact `NodeVersion` recorded in `devbox.json` instead of silently falling back to another Node installation from `PATH`.
 - Standalone `devbox.exe` CLI backed by `DevBox.Core`, with service status/start/stop/restart, Site creation, PHP runtime activation, database creation and ADDON installation commands.
 - Verified application self-update flow that downloads the stable release installer and `SHA256SUMS.txt`, checks the installer hash before execution, closes DevBox through the normal shutdown path and relaunches it after installation.
 - Release builds now package `devbox.exe` with the GUI application for both x64 and ARM64 portable layouts.
