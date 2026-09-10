@@ -19,8 +19,9 @@ public sealed class ProjectStackProfileServiceTests
             Assert.Equal(ProjectKind.Laravel, request.Kind);
             Assert.Equal("mysql", request.DatabaseEngine);
             Assert.True(request.Https);
-            Assert.Contains("redis", request.Addons!);
-            Assert.Contains("mailpit", request.Addons!);
+            Assert.Contains("redis", request.Services!);
+            Assert.Contains("mailpit", request.Services!);
+            Assert.Empty(request.Addons!);
         }
         finally
         {
@@ -43,6 +44,7 @@ public sealed class ProjectStackProfileServiceTests
                 "24",
                 "postgresql",
                 false,
+                Array.Empty<string>(),
                 ["redis"],
                 "Team profile"));
 
@@ -52,7 +54,8 @@ public sealed class ProjectStackProfileServiceTests
             Assert.Equal("8.4.0", profile.PhpVersion);
             Assert.Equal("postgresql", profile.DatabaseEngine);
             Assert.False(profile.Https);
-            Assert.Equal(new[] { "redis" }, profile.Addons);
+            Assert.Equal(new[] { "redis" }, profile.Services);
+            Assert.Empty(profile.Addons);
         }
         finally
         {
@@ -75,6 +78,7 @@ public sealed class ProjectStackProfileServiceTests
                 null,
                 "mysql",
                 true,
+                Array.Empty<string>(),
                 Array.Empty<string>(),
                 "Custom team stack"));
 
