@@ -142,12 +142,8 @@ public sealed partial class LocalCertificateAuthorityService
     public void RotateAuthority()
     {
         EnsureWindows();
-        if (Exists)
-            _ = RemoveTrustCurrentUser();
-        TryDeleteFile(_caPfxPath);
-        TryDeleteFile(_caPemPath);
-        _secrets.Delete(PasswordSecretKey);
-        _ = EnsureAuthority(trustCurrentUser: true);
+        RemoveAuthority();
+        using var replacement = EnsureAuthority(trustCurrentUser: true);
     }
 
     private void CreateAuthority()
