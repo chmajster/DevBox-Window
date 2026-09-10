@@ -11,7 +11,7 @@ on:
       version:
         description: 'Version to package without creating a GitHub Release'
         required: true
-        default: '0.2.0'
+        default: '0.2.2'
         type: string
 
 permissions:
@@ -74,6 +74,11 @@ jobs:
 
       - name: Publish win-arm64
         run: dotnet publish src/DevBox.App/DevBox.App.csproj --configuration Release --runtime win-arm64 --self-contained true --output publish/win-arm64 /p:Version=${{ env.DEVBOX_VERSION }}
+
+      - name: Bundle Nginx, PHP and MySQL runtimes
+        shell: pwsh
+        run: |
+          & ./packaging/Prepare-BundledRuntimes.ps1 -PublishDirectories "publish/win-x64","publish/win-arm64"
 
       - name: Package portable builds
         shell: pwsh

@@ -60,6 +60,24 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         ArgumentNullException.ThrowIfNull(definition);
         ValidateDefinition(definition);
 
+        var bundledPath = VersionPath(definition.Key, definition.Version);
+        if (Directory.Exists(bundledPath))
+        {
+            ValidateRuntimeExecutable(bundledPath, definition.ExecutableRelativePath);
+            await ActivateAsync(
+                definition.Key,
+                definition.Version,
+                definition.ExecutableRelativePath,
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (!definition.HasRemotePackage)
+        {
+            throw new InvalidOperationException(
+                $"Runtime {definition.DisplayName} {definition.Version} is not bundled and has no verified remote package.");
+        }
+
         var tempRoot = Path.Combine(_rootPath, "tmp", "runtimes", definition.Key, Guid.NewGuid().ToString("N"));
         var archivePath = Path.Combine(tempRoot, "package.zip");
         var extractPath = Path.Combine(tempRoot, "extract");
@@ -68,8 +86,8 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
 
         try
         {
-            await DownloadAsync(definition.DownloadUrl, archivePath, cancellationToken).ConfigureAwait(false);
-            VerifySha256(archivePath, definition.Sha256);
+            await DownloadAsync(definition.DownloadUrl!, archivePath, cancellationToken).ConfigureAwait(false);
+            VerifySha256(archivePath, definition.Sha256!);
             ExtractZipSafely(archivePath, extractPath);
 
             var sourcePath = string.IsNullOrWhiteSpace(definition.ArchiveRootDirectory)
@@ -238,6 +256,13 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         if (!string.IsNullOrWhiteSpace(definition.ArchiveRootDirectory))
         {
             ValidateRelativePath(definition.ArchiveRootDirectory, nameof(definition.ArchiveRootDirectory));
+        }
+
+        var hasUrl = !string.IsNullOrWhiteSpace(definition.DownloadUrl);
+        var hasHash = !string.IsNullOrWhiteSpace(definition.Sha256);
+        if (hasUrl != hasHash)
+        {
+            throw new InvalidDataException("A remote runtime definition must provide both an HTTPS URL and a pinned SHA-256 value.");
         }
     }
 
