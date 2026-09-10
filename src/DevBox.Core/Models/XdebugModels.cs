@@ -14,3 +14,9 @@ public sealed record XdebugConfiguration(
     string Mode = "debug,develop",
     int ClientPort = 9003,
     string StartWithRequest = "trigger");
+
+public sealed record XdebugBinaryInstallation(
+    string BinaryPath,
+    string Sha256,
+    string SourceFileName,
+    long SizeBytes);
