@@ -6,6 +6,16 @@ public sealed partial class LocalCertificateAuthorityService : IDisposable
 {
     public X509Certificate2 EnsureRootTrusted() => EnsureAuthority(trustCurrentUser: true);
 
+    public void RemoveAuthority()
+    {
+        EnsureWindows();
+        if (Exists)
+            _ = RemoveTrustCurrentUser();
+        TryDeleteFile(_caPfxPath);
+        TryDeleteFile(_caPemPath);
+        _secrets.Delete(PasswordSecretKey);
+    }
+
     public void Dispose()
     {
         // The service owns no unmanaged or long-lived disposable resources.
