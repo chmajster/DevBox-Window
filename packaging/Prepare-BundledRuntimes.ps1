@@ -13,6 +13,7 @@ $packages = @(
         Version = '8.5.10'
         Url = 'https://downloads.php.net/~windows/releases/archives/php-8.5.10-nts-Win32-vs17-x64.zip'
         ExpectedSha256 = '22ec430195984d233eb9e62c637a945bbcda06efca2f392d9d96d62c6acd34f8'
+        ExpectedMd5 = $null
         ArchiveRoot = $null
         ExecutableRelativePath = 'php-cgi.exe'
     },
@@ -22,6 +23,7 @@ $packages = @(
         Version = '1.31.5'
         Url = 'https://nginx.org/download/nginx-1.31.5.zip'
         ExpectedSha256 = '00ad32a2bf66cee0ec8eb194347e8e79917f47017ccd3ad4bebf5574fabe002c'
+        ExpectedMd5 = $null
         ArchiveRoot = 'nginx-1.31.5'
         ExecutableRelativePath = 'nginx.exe'
     },
@@ -31,6 +33,7 @@ $packages = @(
         Version = '8.4.11'
         Url = 'https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.11-winx64.zip'
         ExpectedSha256 = $null
+        ExpectedMd5 = '2e833921898a9a030ea6bfe81bd811bc'
         ArchiveRoot = 'mysql-8.4.11-winx64'
         ExecutableRelativePath = 'bin\mysqld.exe'
     }
@@ -51,6 +54,10 @@ try {
     foreach ($package in $packages) {
         Write-Host "Preparing $($package.DisplayName) $($package.Version)..."
 
+        if ([string]::IsNullOrWhiteSpace($package.ExpectedSha256) -and [string]::IsNullOrWhiteSpace($package.ExpectedMd5)) {
+            throw "No pinned source digest is configured for $($package.DisplayName) $($package.Version)."
+        }
+
         $archivePath = Join-Path $tempRoot "$($package.Key)-$($package.Version).zip"
         $extractPath = Join-Path $tempRoot "$($package.Key)-extract"
 
@@ -60,6 +67,12 @@ try {
         if (-not [string]::IsNullOrWhiteSpace($package.ExpectedSha256) -and
             $actualSha256 -ne $package.ExpectedSha256.ToLowerInvariant()) {
             throw "SHA-256 mismatch for $($package.DisplayName) $($package.Version). Expected $($package.ExpectedSha256), got $actualSha256."
+        }
+
+        $actualMd5 = (Get-FileHash -LiteralPath $archivePath -Algorithm MD5).Hash.ToLowerInvariant()
+        if (-not [string]::IsNullOrWhiteSpace($package.ExpectedMd5) -and
+            $actualMd5 -ne $package.ExpectedMd5.ToLowerInvariant()) {
+            throw "MD5 mismatch for $($package.DisplayName) $($package.Version). Expected $($package.ExpectedMd5), got $actualMd5."
         }
 
         Expand-Archive -LiteralPath $archivePath -DestinationPath $extractPath -Force
@@ -91,13 +104,18 @@ try {
             Set-Content -LiteralPath (Join-Path $versionPath '.devbox-version') -Value $package.Version -Encoding ascii -NoNewline
         }
 
+        $sourceIntegrityAlgorithm = if (-not [string]::IsNullOrWhiteSpace($package.ExpectedSha256)) { 'SHA-256' } else { 'MD5' }
+        $sourceIntegrityDigest = if (-not [string]::IsNullOrWhiteSpace($package.ExpectedSha256)) { $package.ExpectedSha256.ToLowerInvariant() } else { $package.ExpectedMd5.ToLowerInvariant() }
+
         $manifest += [ordered]@{
             key = $package.Key
             displayName = $package.DisplayName
             version = $package.Version
             sourceUrl = $package.Url
             sha256 = $actualSha256
-            sourceSha256Pinned = -not [string]::IsNullOrWhiteSpace($package.ExpectedSha256)
+            sourceIntegrityAlgorithm = $sourceIntegrityAlgorithm
+            sourceIntegrityDigest = $sourceIntegrityDigest
+            sourceIntegrityPinned = $true
             executableRelativePath = $package.ExecutableRelativePath.Replace('\', '/')
         }
     }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows.Input;
 
 namespace DevBox.App.ViewModels;
@@ -46,7 +47,9 @@ public sealed class AsyncRelayCommand : ICommand
 
     public bool CanExecute(object? parameter) => !_isExecuting && (_canExecute?.Invoke(parameter) ?? true);
 
-    public async void Execute(object? parameter)
+    public void Execute(object? parameter) => _ = ExecuteAsync(parameter);
+
+    public async Task ExecuteAsync(object? parameter)
     {
         if (!CanExecute(parameter))
         {
@@ -59,6 +62,11 @@ public sealed class AsyncRelayCommand : ICommand
         {
             await _execute(parameter);
         }
+        catch (Exception ex)
+        {
+            Trace.TraceError($"Unhandled asynchronous command exception: {ex}");
+            ExecutionFailed?.Invoke(ex);
+        }
         finally
         {
             _isExecuting = false;
@@ -67,6 +75,7 @@ public sealed class AsyncRelayCommand : ICommand
     }
 
     public event EventHandler? CanExecuteChanged;
+    public event Action<Exception>? ExecutionFailed;
 
     public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
 }

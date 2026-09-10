@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using DevBox.Core.Abstractions;
@@ -10,6 +11,7 @@ namespace DevBox.Core.Services;
 
 public sealed class ProcessManager : IProcessManager
 {
+    private static readonly TimeSpan ProcessIdentityTolerance = TimeSpan.FromSeconds(2);
     private readonly ConcurrentDictionary<string, ManagedProcess> _processes = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new(StringComparer.OrdinalIgnoreCase);
     private bool _disposed;
@@ -74,12 +76,23 @@ public sealed class ProcessManager : IProcessManager
                 throw new InvalidOperationException($"Unable to start {definition.DisplayName}: {ex.Message}", ex);
             }
 
-            managed.StartedAt = DateTimeOffset.UtcNow;
-            _processes[definition.Key] = managed;
-            WritePidMarker(managed);
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-            AppendLog(managed, "APP", $"Started PID {process.Id}.");
+            managed.StartedAt = TryGetStartTime(process) ?? DateTimeOffset.UtcNow;
+            try
+            {
+                WritePidMarker(managed);
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+                _processes[definition.Key] = managed;
+                AppendLog(managed, "APP", $"Started PID {process.Id}.");
+            }
+            catch
+            {
+                _processes.TryRemove(definition.Key, out _);
+                DeletePidMarker(definition, process.Id);
+                TryTerminateStartedProcess(process);
+                process.Dispose();
+                throw;
+            }
 
             return Snapshot(managed, ServiceState.Running);
         }
@@ -182,12 +195,17 @@ public sealed class ProcessManager : IProcessManager
         if (managed.Process.HasExited)
         {
             var exitCode = managed.Process.ExitCode;
+            var processId = managed.Process.Id;
             var error = managed.LastError ?? (exitCode == 0 ? null : $"Process exited with code {exitCode}.");
+            TimeSpan? uptime = managed.StartedAt is null ? null : DateTimeOffset.UtcNow - managed.StartedAt.Value;
+            _processes.TryRemove(definition.Key, out _);
+            DeletePidMarker(definition, processId);
+            managed.Process.Dispose();
             return new ServiceSnapshot(
                 definition.Key, definition.DisplayName,
                 exitCode == 0 ? ServiceState.Stopped : ServiceState.Error,
-                managed.Process.Id, definition.Port, definition.Version,
-                managed.StartedAt is null ? null : DateTimeOffset.UtcNow - managed.StartedAt.Value,
+                null, definition.Port, definition.Version,
+                uptime,
                 error);
         }
 
@@ -361,12 +379,16 @@ public sealed class ProcessManager : IProcessManager
             catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
             {
                 process.Dispose();
+                DeletePidMarker(definition, marker.Value.ProcessId);
                 return null;
             }
 
+            var actualStartTime = TryGetStartTime(process);
             if (string.IsNullOrWhiteSpace(actualExecutable) ||
+                actualStartTime is null ||
                 !Path.GetFullPath(actualExecutable).Equals(marker.Value.ExecutablePath, StringComparison.OrdinalIgnoreCase) ||
-                !Path.GetFullPath(actualExecutable).Equals(Path.GetFullPath(definition.ExecutablePath), StringComparison.OrdinalIgnoreCase))
+                !Path.GetFullPath(actualExecutable).Equals(Path.GetFullPath(definition.ExecutablePath), StringComparison.OrdinalIgnoreCase) ||
+                Math.Abs(actualStartTime.Value.UtcDateTime.Ticks - marker.Value.StartTimeUtcTicks) > ProcessIdentityTolerance.Ticks)
             {
                 process.Dispose();
                 DeletePidMarker(definition, marker.Value.ProcessId);
@@ -376,7 +398,7 @@ public sealed class ProcessManager : IProcessManager
             process.EnableRaisingEvents = true;
             var managed = new ManagedProcess(process, definition)
             {
-                StartedAt = TryGetStartTime(process)
+                StartedAt = actualStartTime
             };
             process.Exited += (_, _) => OnExited(managed);
             AppendLog(managed, "APP", $"Adopted existing PID {process.Id} from a previous DevBox session.");
@@ -413,13 +435,35 @@ public sealed class ProcessManager : IProcessManager
 
     private static void WritePidMarker(ManagedProcess managed)
     {
+        if (managed.StartedAt is null)
+        {
+            throw new InvalidOperationException("Managed process start time is unavailable.");
+        }
+
         var path = PidMarkerPath(managed.Definition);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var executable = Path.GetFullPath(managed.Definition.ExecutablePath);
-        File.WriteAllLines(path, [managed.Process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture), executable]);
+        var tempPath = path + $".{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllLines(tempPath,
+            [
+                managed.Process.Id.ToString(CultureInfo.InvariantCulture),
+                executable,
+                managed.StartedAt.Value.UtcDateTime.Ticks.ToString(CultureInfo.InvariantCulture)
+            ]);
+            File.Move(tempPath, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
     }
 
-    private static (int ProcessId, string ExecutablePath)? ReadPidMarker(ServiceDefinition definition)
+    private static (int ProcessId, string ExecutablePath, long StartTimeUtcTicks)? ReadPidMarker(ServiceDefinition definition)
     {
         var path = PidMarkerPath(definition);
         if (!File.Exists(path))
@@ -430,16 +474,18 @@ public sealed class ProcessManager : IProcessManager
         try
         {
             var lines = File.ReadAllLines(path);
-            if (lines.Length < 2 ||
-                !int.TryParse(lines[0], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var processId) ||
-                processId <= 0)
+            if (lines.Length < 3 ||
+                !int.TryParse(lines[0], NumberStyles.None, CultureInfo.InvariantCulture, out var processId) ||
+                processId <= 0 ||
+                !long.TryParse(lines[2], NumberStyles.None, CultureInfo.InvariantCulture, out var startTimeUtcTicks) ||
+                startTimeUtcTicks <= 0)
             {
                 File.Delete(path);
                 return null;
             }
 
             var executable = Path.GetFullPath(lines[1].Trim());
-            return (processId, executable);
+            return (processId, executable, startTimeUtcTicks);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
@@ -475,6 +521,21 @@ public sealed class ProcessManager : IProcessManager
             DeletePidMarker(managed.Definition, managed.Process.Id);
         }
         catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private static void TryTerminateStartedProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(3000);
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
         {
         }
     }

@@ -91,6 +91,7 @@ public partial class App : System.Windows.Application
             provider.GetRequiredService<AddonCatalog>(),
             provider.GetRequiredService<AddonInstaller>(),
             provider.GetRequiredService<PhpExtensionInspector>(),
+            provider.GetRequiredService<PhpRuntimePoolManager>(),
             provider.GetRequiredService<IHostMappingService>(),
             provider.GetRequiredService<SiteManager>(),
             provider.GetRequiredService<IRuntimeManager>(),
@@ -148,6 +149,8 @@ public partial class App : System.Windows.Application
             var processManager = provider.GetRequiredService<IProcessManager>();
             var catalog = provider.GetRequiredService<ServiceCatalog>();
 
+            TryShutdownMySqlWithRememberedCredentials(provider, processManager, catalog);
+
             foreach (var definition in catalog.GetDefaultServices())
             {
                 try
@@ -171,6 +174,40 @@ public partial class App : System.Windows.Application
         }
         catch (ObjectDisposedException)
         {
+        }
+    }
+
+    private static void TryShutdownMySqlWithRememberedCredentials(
+        IServiceProvider provider,
+        IProcessManager processManager,
+        ServiceCatalog catalog)
+    {
+        var mysql = catalog.GetDefaultServices().First(service => service.Key.Equals("mysql", StringComparison.OrdinalIgnoreCase));
+        if (processManager.GetStatus(mysql).State != DevBox.Core.Models.ServiceState.Running)
+        {
+            return;
+        }
+
+        try
+        {
+            var requested = provider.GetRequiredService<DatabaseManager>()
+                .ShutdownUsingLastSuccessfulCredentialsAsync()
+                .GetAwaiter()
+                .GetResult();
+            if (!requested)
+            {
+                return;
+            }
+
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+            while (DateTimeOffset.UtcNow < deadline && processManager.GetStatus(mysql).State == DevBox.Core.Models.ServiceState.Running)
+            {
+                System.Threading.Thread.Sleep(100);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            TryWriteStartupLog($"Credential-aware MySQL shutdown failed; standard fallback will be used: {ex.Message}");
         }
     }
 

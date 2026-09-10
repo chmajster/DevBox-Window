@@ -1,4 +1,3 @@
-using System.IO.Compression;
 using System.Security.Cryptography;
 using DevBox.Core.Models;
 
@@ -6,6 +5,9 @@ namespace DevBox.Core.Services;
 
 public sealed class AddonInstaller : IDisposable
 {
+    private const long MaximumAddonDownloadBytes = 256L * 1024 * 1024;
+    private const long MaximumAddonExtractedBytes = 1024L * 1024 * 1024;
+    private const int MaximumAddonArchiveEntries = 50_000;
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
     private readonly string _rootPath;
@@ -130,12 +132,13 @@ public sealed class AddonInstaller : IDisposable
             throw new InvalidDataException("Addon download URL must use HTTPS.");
         }
 
-        using var response = await _httpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-
-        await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        await using var target = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true);
-        await source.CopyToAsync(target, cancellationToken).ConfigureAwait(false);
+        await ArchiveSafety.DownloadToFileAsync(
+            _httpClient,
+            uri,
+            destination,
+            MaximumAddonDownloadBytes,
+            "Addon",
+            cancellationToken).ConfigureAwait(false);
     }
 
     internal static void VerifySha256(string filePath, string expectedSha256)
@@ -164,30 +167,13 @@ public sealed class AddonInstaller : IDisposable
         }
     }
 
-    internal static void ExtractZipSafely(string archivePath, string destinationPath)
-    {
-        Directory.CreateDirectory(destinationPath);
-        var destinationRoot = Path.GetFullPath(destinationPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-
-        using var archive = ZipFile.OpenRead(archivePath);
-        foreach (var entry in archive.Entries)
-        {
-            var outputPath = Path.GetFullPath(Path.Combine(destinationPath, entry.FullName.Replace('/', Path.DirectorySeparatorChar)));
-            if (!outputPath.StartsWith(destinationRoot, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidDataException($"Unsafe ZIP entry detected: {entry.FullName}");
-            }
-
-            if (string.IsNullOrEmpty(entry.Name))
-            {
-                Directory.CreateDirectory(outputPath);
-                continue;
-            }
-
-            Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-            entry.ExtractToFile(outputPath, overwrite: true);
-        }
-    }
+    internal static void ExtractZipSafely(string archivePath, string destinationPath) =>
+        ArchiveSafety.ExtractZipSafely(
+            archivePath,
+            destinationPath,
+            MaximumAddonExtractedBytes,
+            MaximumAddonArchiveEntries,
+            "Addon");
 
     internal static bool IsPhpMyAdminConfigUsable(string content)
     {

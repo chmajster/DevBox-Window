@@ -276,6 +276,7 @@ public sealed class SslSiteRowViewModel(SiteDefinition site, bool trusted)
 {
     public string Name { get; } = site.Name;
     public string Domain { get; } = site.Domain;
+    public string? PhpVersion { get; } = site.PhpVersion;
     public bool HttpsEnabled { get; } = site.HttpsEnabled;
     public bool Trusted { get; } = trusted;
     public string HttpsStatus => HttpsEnabled ? "HTTPS enabled" : "HTTP only";
@@ -288,6 +289,7 @@ public sealed class SslWindowViewModel : ObservableObject
     private readonly LocalCertificateManager _certificateManager;
     private readonly IHostMappingService _hostMappingService;
     private readonly IProcessManager _processManager;
+    private readonly PhpRuntimePoolManager _phpRuntimePoolManager;
     private readonly IReadOnlyDictionary<string, ServiceDefinition> _services;
     private readonly IDialogService _dialogs;
     private readonly IShellService _shell;
@@ -297,6 +299,7 @@ public sealed class SslWindowViewModel : ObservableObject
         LocalCertificateManager certificateManager,
         IHostMappingService hostMappingService,
         IProcessManager processManager,
+        PhpRuntimePoolManager phpRuntimePoolManager,
         ServiceCatalog serviceCatalog,
         IDialogService dialogs,
         IShellService shell)
@@ -305,6 +308,7 @@ public sealed class SslWindowViewModel : ObservableObject
         _certificateManager = certificateManager;
         _hostMappingService = hostMappingService;
         _processManager = processManager;
+        _phpRuntimePoolManager = phpRuntimePoolManager;
         _services = serviceCatalog.GetDefaultServices().ToDictionary(service => service.Key, StringComparer.OrdinalIgnoreCase);
         _dialogs = dialogs;
         _shell = shell;
@@ -429,7 +433,14 @@ public sealed class SslWindowViewModel : ObservableObject
         try
         {
             await _hostMappingService.EnsureAsync(site.Domain);
-            await EnsureRunningAsync("php");
+            if (string.IsNullOrWhiteSpace(site.PhpVersion))
+            {
+                await EnsureRunningAsync("php");
+            }
+            else
+            {
+                _ = await _phpRuntimePoolManager.EnsureRunningAsync(site.PhpVersion);
+            }
             await EnsureRunningAsync("nginx");
             _shell.Open($"https://{site.Domain}");
         }

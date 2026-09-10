@@ -38,6 +38,7 @@ public sealed partial class SiteManager
             {
                 ValidateLoadedSite(site);
             }
+            ValidateLoadedCollection(sites);
             return sites;
         }
         catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException or InvalidDataException)
@@ -324,6 +325,42 @@ server {
         if (!string.Equals(site.PhpRuntimeKey, "php", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("Site metadata contains an unsupported PHP runtime key.");
+        }
+    }
+
+    private static void ValidateLoadedCollection(IReadOnlyCollection<SiteDefinition> sites)
+    {
+        var duplicateName = sites
+            .GroupBy(site => site.Name, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateName is not null)
+        {
+            throw new InvalidDataException($"Site metadata contains duplicate site name '{duplicateName.Key}'.");
+        }
+
+        var duplicateDomain = sites
+            .GroupBy(site => site.Domain, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateDomain is not null)
+        {
+            throw new InvalidDataException($"Site metadata contains duplicate domain '{duplicateDomain.Key}'.");
+        }
+
+        var portCollision = sites
+            .Where(site => !string.IsNullOrWhiteSpace(site.PhpVersion))
+            .GroupBy(site => PhpRuntimePoolManager.GetPort(site.PhpVersion!))
+            .FirstOrDefault(group => group
+                .Select(site => site.PhpVersion!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Skip(1)
+                .Any());
+        if (portCollision is not null)
+        {
+            var versions = string.Join(", ", portCollision
+                .Select(site => site.PhpVersion!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(version => version, StringComparer.OrdinalIgnoreCase));
+            throw new InvalidDataException($"Site metadata contains PHP runtime versions that collide on FastCGI port {portCollision.Key}: {versions}.");
         }
     }
 
