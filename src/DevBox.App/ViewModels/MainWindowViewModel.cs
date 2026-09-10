@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Windows;
@@ -13,12 +14,14 @@ namespace DevBox.App.ViewModels;
 
 public sealed class MainWindowViewModel : ObservableObject, IDisposable
 {
+    private static readonly TimeSpan AddonHealthRefreshInterval = TimeSpan.FromSeconds(15);
     private readonly string _rootPath;
     private readonly ServiceCatalog _serviceCatalog;
     private readonly IProcessManager _processManager;
     private readonly AddonCatalog _addonCatalog;
     private readonly AddonInstaller _addonInstaller;
     private readonly PhpExtensionInspector _phpExtensionInspector;
+    private readonly PhpRuntimePoolManager _phpRuntimePoolManager;
     private readonly IHostMappingService _hostMappingService;
     private readonly SiteManager _siteManager;
     private readonly IRuntimeManager _runtimeManager;
@@ -31,6 +34,8 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private readonly HashSet<string> _busyAddons = new(StringComparer.OrdinalIgnoreCase);
     private readonly DispatcherTimer _refreshTimer;
     private bool _addonHealthRefreshRunning;
+    private bool _refreshTickRunning;
+    private DateTimeOffset _lastAddonHealthRefresh = DateTimeOffset.MinValue;
     private string _currentSection = "Dashboard";
     private string _newSiteName = string.Empty;
     private string _newSiteDomain = string.Empty;
@@ -45,6 +50,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         AddonCatalog addonCatalog,
         AddonInstaller addonInstaller,
         PhpExtensionInspector phpExtensionInspector,
+        PhpRuntimePoolManager phpRuntimePoolManager,
         IHostMappingService hostMappingService,
         SiteManager siteManager,
         IRuntimeManager runtimeManager,
@@ -59,6 +65,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         _addonCatalog = addonCatalog;
         _addonInstaller = addonInstaller;
         _phpExtensionInspector = phpExtensionInspector;
+        _phpRuntimePoolManager = phpRuntimePoolManager;
         _hostMappingService = hostMappingService;
         _siteManager = siteManager;
         _runtimeManager = runtimeManager;
@@ -108,7 +115,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         RefreshDiagnostics();
         RefreshLogs();
 
-        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _refreshTimer.Tick += RefreshTimerOnTick;
         _refreshTimer.Start();
     }
@@ -225,15 +232,34 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
     private async void RefreshTimerOnTick(object? sender, EventArgs e)
     {
-        RefreshStatuses();
-        RefreshAddonInstallState();
-        if (CurrentSection == "ADDONS")
+        if (_refreshTickRunning || _disposed)
         {
-            await RefreshAddonHealthAsync();
+            return;
         }
-        if (CurrentSection == "Logs" && SelectedLog is not null)
+
+        _refreshTickRunning = true;
+        try
         {
-            LoadSelectedLog();
+            RefreshStatuses();
+            RefreshAddonInstallState();
+            var now = DateTimeOffset.UtcNow;
+            if (CurrentSection == "ADDONS" && now - _lastAddonHealthRefresh >= AddonHealthRefreshInterval)
+            {
+                _lastAddonHealthRefresh = now;
+                await RefreshAddonHealthAsync();
+            }
+            if (CurrentSection == "Logs" && SelectedLog is not null)
+            {
+                LoadSelectedLog();
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceError($"DevBox refresh cycle failed: {ex}");
+        }
+        finally
+        {
+            _refreshTickRunning = false;
         }
     }
 
@@ -244,7 +270,23 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         if (section == "Runtimes") RefreshRuntimes();
         if (section == "Diagnostics") RefreshDiagnostics();
         if (section == "Logs") RefreshLogs();
-        if (section == "ADDONS") _ = RefreshAddonHealthAsync();
+        if (section == "ADDONS")
+        {
+            _lastAddonHealthRefresh = DateTimeOffset.UtcNow;
+            _ = RefreshAddonHealthSafelyAsync();
+        }
+    }
+
+    private async Task RefreshAddonHealthSafelyAsync()
+    {
+        try
+        {
+            await RefreshAddonHealthAsync();
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceError($"DevBox addon health refresh failed: {ex}");
+        }
     }
 
     private async Task RunServiceAsync(object? parameter, ServiceAction action)
@@ -485,7 +527,16 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                 _dialogs.Warning("Hosts entry missing", $"Cannot open {site.Domain} until its hosts mapping is configured.");
                 return;
             }
-            await EnsureRunningAsync("php");
+
+            if (string.IsNullOrWhiteSpace(site.PhpVersion))
+            {
+                await EnsureRunningAsync("php");
+            }
+            else
+            {
+                _ = await _phpRuntimePoolManager.EnsureRunningAsync(site.PhpVersion);
+            }
+
             await EnsureRunningAsync("nginx");
             _shell.Open(site.Url);
         }

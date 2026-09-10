@@ -8,6 +8,9 @@ namespace DevBox.Core.Services;
 public sealed class RuntimeManager : IRuntimeManager, IDisposable
 {
     private const string VersionMarker = ".devbox-version";
+    private const long MaximumRuntimeDownloadBytes = 1536L * 1024 * 1024;
+    private const long MaximumRuntimeExtractedBytes = 4L * 1024 * 1024 * 1024;
+    private const int MaximumRuntimeArchiveEntries = 100_000;
     private readonly string _rootPath;
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
@@ -200,32 +203,13 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         }
     }
 
-    internal static void ExtractZipSafely(string archivePath, string destinationPath)
-    {
-        Directory.CreateDirectory(destinationPath);
-        var destinationRoot = Path.GetFullPath(destinationPath)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-
-        using var archive = ZipFile.OpenRead(archivePath);
-        foreach (var entry in archive.Entries)
-        {
-            var normalizedEntry = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
-            var outputPath = Path.GetFullPath(Path.Combine(destinationPath, normalizedEntry));
-            if (!outputPath.StartsWith(destinationRoot, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidDataException($"Unsafe ZIP entry detected: {entry.FullName}");
-            }
-
-            if (string.IsNullOrEmpty(entry.Name))
-            {
-                Directory.CreateDirectory(outputPath);
-                continue;
-            }
-
-            Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-            entry.ExtractToFile(outputPath, overwrite: true);
-        }
-    }
+    internal static void ExtractZipSafely(string archivePath, string destinationPath) =>
+        ArchiveSafety.ExtractZipSafely(
+            archivePath,
+            destinationPath,
+            MaximumRuntimeExtractedBytes,
+            MaximumRuntimeArchiveEntries,
+            "Runtime");
 
     private async Task DownloadAsync(string url, string destination, CancellationToken cancellationToken)
     {
@@ -234,11 +218,13 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
             throw new InvalidDataException("Runtime download URL must use HTTPS.");
         }
 
-        using var response = await _httpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        await using var target = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true);
-        await source.CopyToAsync(target, cancellationToken).ConfigureAwait(false);
+        await ArchiveSafety.DownloadToFileAsync(
+            _httpClient,
+            uri,
+            destination,
+            MaximumRuntimeDownloadBytes,
+            "Runtime",
+            cancellationToken).ConfigureAwait(false);
     }
 
     private string RuntimeRoot(string runtimeKey) => Path.Combine(_rootPath, "runtime", runtimeKey);

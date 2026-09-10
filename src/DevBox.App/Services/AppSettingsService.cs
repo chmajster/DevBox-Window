@@ -75,7 +75,7 @@ public sealed class AppSettingsService : IAppSettingsService
             ?? throw new InvalidOperationException("Unable to open the current-user startup registry key.");
         if (enabled)
         {
-            key.SetValue(RunValueName, $"\"{executable}\" --startup", RegistryValueKind.String);
+            key.SetValue(RunValueName, BuildStartupCommand(executable!), RegistryValueKind.String);
         }
         else
         {
@@ -84,6 +84,25 @@ public sealed class AppSettingsService : IAppSettingsService
 
         Current.StartWithWindows = enabled;
         Save();
+    }
+
+    internal static string BuildStartupCommand(string executable)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(executable);
+        return $"\"{Path.GetFullPath(executable)}\" --startup";
+    }
+
+    internal static bool IsStartupCommandForExecutable(string? configuredCommand, string executable)
+    {
+        if (string.IsNullOrWhiteSpace(configuredCommand))
+        {
+            return false;
+        }
+
+        return string.Equals(
+            configuredCommand.Trim(),
+            BuildStartupCommand(executable),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private bool? TryReadStartupRegistryState()
@@ -103,7 +122,7 @@ public sealed class AppSettingsService : IAppSettingsService
                 return true;
             }
 
-            return configuredCommand.Contains(Path.GetFullPath(executable), StringComparison.OrdinalIgnoreCase);
+            return IsStartupCommandForExecutable(configuredCommand, executable);
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or SecurityException or IOException)
         {

@@ -39,6 +39,14 @@ All notable changes to DevBox Windows are documented here.
 
 ### Fixed
 
+- Sites pinned to a specific PHP version now ensure their dedicated FastCGI pool is running before opening over either HTTP or HTTPS instead of always starting the global PHP service.
+- Asynchronous WPF commands now contain and trace unexpected exceptions at the command boundary instead of leaking them through `async void` execution.
+- Dashboard refreshes are non-reentrant, run every two seconds, and throttle expensive ADDONS health checks to a 15-second cadence.
+- Site metadata validation now rejects duplicate names/domains/document roots and dedicated PHP versions that map to the same FastCGI port before accepting `sites.json`.
+- Service PID markers are written atomically and include process start time, reducing PID-reuse misidentification; failed post-start registration now terminates the partially started process.
+- MySQL shutdown can reuse the last successful connection credentials kept only in process memory before falling back to the standard managed-process stop path.
+- Windows autostart detection now requires an exact normalized `"DevBox.exe" --startup` command instead of accepting substring matches.
+- The Inno Setup fallback application version is aligned with DevBox `0.2.2`.
 - Managed-service discovery in Project Manager is side-effect free and no longer rewrites `services.json` while displaying disabled services.
 - Redis project profiles now map to the Windows-native Garnet executable instead of an unavailable `redis-server.exe` assumption.
 - Xdebug tests comply with the xUnit single-item analyzer and no longer stop Release builds before tests execute.
@@ -69,6 +77,11 @@ All notable changes to DevBox Windows are documented here.
 - PHP extension parsing recognizes inline `php.ini` comments and extension toggling collapses duplicate entries to a single canonical directive.
 - PHP extension checks report the runtime as unavailable when PHP CLI cannot be started, including corrupt or non-executable runtime files.
 - Default MySQL shutdown explicitly uses the local root account and a bounded connection timeout before process termination fallback.
+
+### Security
+
+- Runtime and ADDONS downloads now enforce explicit byte limits, and ZIP extraction enforces entry-count/extracted-size limits while rejecting traversal, NTFS alternate data streams, symbolic-link entries and suspicious compression ratios.
+- Bundled MySQL packaging verifies the vendor-published digest before extraction and records SHA-256 provenance for the packaged archive.
 
 ## 0.2.1 - 2026-09-09
 

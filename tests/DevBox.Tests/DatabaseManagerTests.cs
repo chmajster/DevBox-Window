@@ -47,4 +47,31 @@ public sealed class DatabaseManagerTests
         var options = new DatabaseConnectionOptions(Port: 70000);
         Assert.Throws<ArgumentOutOfRangeException>(options.Validate);
     }
+
+    [Fact]
+    public async Task ShutdownUsingLastSuccessfulCredentialsAsync_WithoutSuccessfulConnection_ReturnsFalse()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "devbox-database-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var manager = new DatabaseManager(root);
+
+            var result = await manager.ShutdownUsingLastSuccessfulCredentialsAsync();
+
+            Assert.False(result);
+            Assert.Null(manager.GetLastSuccessfulConnectionOptions());
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void DatabaseConnectionOptions_RecordRetainsPasswordInMemory()
+    {
+        var options = new DatabaseConnectionOptions("127.0.0.1", 3306, "root", "secret");
+
+        Assert.Equal("secret", options.Password);
+    }
 }

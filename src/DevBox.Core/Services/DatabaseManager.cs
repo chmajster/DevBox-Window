@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -10,6 +11,9 @@ public sealed partial class DatabaseManager
     private readonly string _rootPath;
     private readonly string _mysqlExecutable;
     private readonly string _mysqlDumpExecutable;
+    private readonly string _mysqlAdminExecutable;
+    private readonly object _credentialsGate = new();
+    private DatabaseConnectionOptions? _lastSuccessfulOptions;
 
     public DatabaseManager(string rootPath)
     {
@@ -17,6 +21,7 @@ public sealed partial class DatabaseManager
         _rootPath = Path.GetFullPath(rootPath);
         _mysqlExecutable = Path.Combine(_rootPath, "runtime", "mysql", "current", "bin", "mysql.exe");
         _mysqlDumpExecutable = Path.Combine(_rootPath, "runtime", "mysql", "current", "bin", "mysqldump.exe");
+        _mysqlAdminExecutable = Path.Combine(_rootPath, "runtime", "mysql", "current", "bin", "mysqladmin.exe");
     }
 
     public async Task<IReadOnlyList<string>> ListDatabasesAsync(
@@ -261,6 +266,38 @@ public sealed partial class DatabaseManager
             cancellationToken)).ConfigureAwait(false);
     }
 
+    public async Task<bool> ShutdownUsingLastSuccessfulCredentialsAsync(CancellationToken cancellationToken = default)
+    {
+        DatabaseConnectionOptions? options;
+        lock (_credentialsGate)
+        {
+            options = _lastSuccessfulOptions;
+        }
+
+        if (options is null || !File.Exists(_mysqlAdminExecutable))
+        {
+            return false;
+        }
+
+        options.Validate();
+        await WithClientConfigAsync(options, configPath => RunAsync(
+            _mysqlAdminExecutable,
+            configPath,
+            ["--protocol=tcp", "shutdown"],
+            null,
+            null,
+            cancellationToken)).ConfigureAwait(false);
+        return true;
+    }
+
+    internal DatabaseConnectionOptions? GetLastSuccessfulConnectionOptions()
+    {
+        lock (_credentialsGate)
+        {
+            return _lastSuccessfulOptions;
+        }
+    }
+
     internal static string ValidateDatabaseName(string databaseName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databaseName);
@@ -280,6 +317,14 @@ public sealed partial class DatabaseManager
             throw new InvalidOperationException($"System database '{normalized}' cannot be modified by DevBox.");
         }
         return normalized;
+    }
+
+    private void RememberSuccessfulOptions(DatabaseConnectionOptions options)
+    {
+        lock (_credentialsGate)
+        {
+            _lastSuccessfulOptions = options;
+        }
     }
 
     private string ResolveBackupPath(string databaseName, string? destinationPath)
@@ -320,8 +365,10 @@ public sealed partial class DatabaseManager
             }
 
             File.WriteAllText(configPath, config.ToString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-            File.SetAttributes(configPath, File.GetAttributes(configPath) | FileAttributes.Hidden);
-            return await operation(configPath).ConfigureAwait(false);
+            File.SetAttributes(configPath, File.GetAttributes(configPath) | FileAttributes.Hidden | FileAttributes.Temporary);
+            var result = await operation(configPath).ConfigureAwait(false);
+            RememberSuccessfulOptions(options);
+            return result;
         }
         finally
         {
@@ -377,9 +424,16 @@ public sealed partial class DatabaseManager
         }
 
         using var process = new Process { StartInfo = startInfo };
-        if (!process.Start())
+        try
         {
-            throw new InvalidOperationException($"Unable to start {Path.GetFileName(executable)}.");
+            if (!process.Start())
+            {
+                throw new InvalidOperationException($"Unable to start {Path.GetFileName(executable)}.");
+            }
+        }
+        catch (Win32Exception ex)
+        {
+            throw new InvalidOperationException($"Unable to start {Path.GetFileName(executable)}: {ex.Message}", ex);
         }
 
         var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
