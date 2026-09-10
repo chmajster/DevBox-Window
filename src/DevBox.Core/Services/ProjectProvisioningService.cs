@@ -6,7 +6,7 @@ public sealed class ProjectProvisioningService
 {
     private readonly string _rootPath;
     private readonly ProjectWorkspaceService _workspace;
-    private readonly DatabaseManager _databases;
+    private readonly ProjectDatabaseProvisioner _projectDatabases;
     private readonly ManagedServiceCatalog _managedServices;
 
     public ProjectProvisioningService(
@@ -18,7 +18,8 @@ public sealed class ProjectProvisioningService
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         _rootPath = Path.GetFullPath(rootPath);
         _workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
-        _databases = databases ?? throw new ArgumentNullException(nameof(databases));
+        ArgumentNullException.ThrowIfNull(databases);
+        _projectDatabases = new ProjectDatabaseProvisioner(_rootPath, databases);
         _managedServices = managedServices ?? throw new ArgumentNullException(nameof(managedServices));
     }
 
@@ -45,27 +46,32 @@ public sealed class ProjectProvisioningService
         _workspace.SaveManifest(projectRoot, manifest);
         actions.Add("Saved devbox.json project manifest.");
 
-        if (manifest.DatabaseEngine.Equals("mysql", StringComparison.OrdinalIgnoreCase) &&
+        if (!string.IsNullOrWhiteSpace(manifest.NodeVersion))
+        {
+            var nodeExe = Path.Combine(_rootPath, "runtime", "node", manifest.NodeVersion, "node.exe");
+            var npmCmd = Path.Combine(_rootPath, "runtime", "node", manifest.NodeVersion, "npm.cmd");
+            if (File.Exists(nodeExe) && File.Exists(npmCmd))
+                actions.Add($"Pinned Node.js {manifest.NodeVersion} is available for project commands.");
+            else
+                warnings.Add($"Node.js {manifest.NodeVersion} is pinned by the profile but is not installed. Install the portable Node LTS runtime from Developer Tools before running npm presets.");
+        }
+
+        if (!manifest.DatabaseEngine.Equals("none", StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(manifest.DatabaseName))
         {
-            var mysql = Path.Combine(_rootPath, "runtime", "mysql", "current", "bin", "mysql.exe");
-            if (File.Exists(mysql))
+            if (_projectDatabases.IsAvailable(manifest.DatabaseEngine))
             {
-                await _databases.CreateDatabaseAsync(
+                await _projectDatabases.EnsureDatabaseAsync(
+                    manifest.DatabaseEngine,
                     manifest.DatabaseName,
-                    databaseOptions ?? new DatabaseConnectionOptions(),
+                    databaseOptions,
                     cancellationToken).ConfigureAwait(false);
-                actions.Add($"Ensured MySQL database {manifest.DatabaseName}.");
+                actions.Add($"Ensured {DisplayEngine(manifest.DatabaseEngine)} database {manifest.DatabaseName}.");
             }
             else
             {
-                warnings.Add("MySQL database was declared but the active MySQL client runtime is not available yet.");
+                warnings.Add($"{DisplayEngine(manifest.DatabaseEngine)} database was declared but its native client runtime is not available yet.");
             }
-        }
-        else if (!manifest.DatabaseEngine.Equals("none", StringComparison.OrdinalIgnoreCase) &&
-                 !manifest.DatabaseEngine.Equals("mysql", StringComparison.OrdinalIgnoreCase))
-        {
-            warnings.Add($"Database engine '{manifest.DatabaseEngine}' is declared in devbox.json but its native provisioning provider is not installed yet.");
         }
 
         foreach (var serviceKey in manifest.Services)
@@ -81,17 +87,21 @@ public sealed class ProjectProvisioningService
             var enabled = File.Exists(executablePath);
             _managedServices.Upsert(template with { Enabled = enabled });
             if (enabled)
-            {
                 actions.Add($"Registered managed service {template.DisplayName}.");
-            }
             else
-            {
                 warnings.Add($"{template.DisplayName} is required by the profile but its runtime is not installed. The service definition was registered disabled.");
-            }
         }
 
         return new ProjectProvisioningResult(site, manifest, actions, warnings);
     }
+
+    private static string DisplayEngine(string engine) => engine.ToLowerInvariant() switch
+    {
+        "mysql" => "MySQL",
+        "mariadb" => "MariaDB",
+        "postgresql" => "PostgreSQL",
+        _ => engine
+    };
 
     private static ManagedServiceManifest? ResolveManagedServiceTemplate(string key) =>
         key.ToLowerInvariant() switch

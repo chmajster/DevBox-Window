@@ -6,6 +6,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DevBox.Core", "src\DevBox.C
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DevBox.App", "src\DevBox.App\DevBox.App.csproj", "{76A99924-2DCA-42E7-9DAE-C9F3F2A252C7}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DevBox.Cli", "src\DevBox.Cli\DevBox.Cli.csproj", "{B3D55019-613B-47E1-A1D3-09D9DA31E1F0}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DevBox.Tests", "tests\DevBox.Tests\DevBox.Tests.csproj", "{E5338E77-70B5-448C-A2EB-7F31FC6B6E3D}"
 EndProject
 Global
@@ -22,6 +24,10 @@ Global
     {76A99924-2DCA-42E7-9DAE-C9F3F2A252C7}.Debug|Any CPU.Build.0 = Debug|Any CPU
     {76A99924-2DCA-42E7-9DAE-C9F3F2A252C7}.Release|Any CPU.ActiveCfg = Release|Any CPU
     {76A99924-2DCA-42E7-9DAE-C9F3F2A252C7}.Release|Any CPU.Build.0 = Release|Any CPU
+    {B3D55019-613B-47E1-A1D3-09D9DA31E1F0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {B3D55019-613B-47E1-A1D3-09D9DA31E1F0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    {B3D55019-613B-47E1-A1D3-09D9DA31E1F0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {B3D55019-613B-47E1-A1D3-09D9DA31E1F0}.Release|Any CPU.Build.0 = Release|Any CPU
     {E5338E77-70B5-448C-A2EB-7F31FC6B6E3D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
     {E5338E77-70B5-448C-A2EB-7F31FC6B6E3D}.Debug|Any CPU.Build.0 = Debug|Any CPU
     {E5338E77-70B5-448C-A2EB-7F31FC6B6E3D}.Release|Any CPU.ActiveCfg = Release|Any CPU

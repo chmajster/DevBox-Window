@@ -28,6 +28,22 @@ public partial class ToolsWindow : Window
 
     private void ProjectManager_Click(object sender, RoutedEventArgs e) => _featureWindows.ShowProjects(this);
 
+    private async void InstallPortableNode_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            using var runtimeManager = new RuntimeManager(App.DevBoxRoot);
+            var catalog = new NodeRuntimeCatalog();
+            var service = new NodeRuntimeService(runtimeManager, catalog);
+            await service.InstallRecommendedAsync();
+            _dialogs.Info("Node.js installed", $"Portable Node.js {NodeRuntimeCatalog.RecommendedVersion} was installed and activated under runtime/node. Project presets can pin this exact version through devbox.json.");
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or HttpRequestException or PlatformNotSupportedException or Win32Exception)
+        {
+            _dialogs.Error("Portable Node.js installation failed", ex.Message);
+        }
+    }
+
     private async void InstallMailpit_Click(object sender, RoutedEventArgs e) => await InstallOptionalRuntimeAsync("mailpit", "Mailpit");
 
     private async void InstallRedis_Click(object sender, RoutedEventArgs e) => await InstallOptionalRuntimeAsync("redis", "Garnet Redis-compatible server");

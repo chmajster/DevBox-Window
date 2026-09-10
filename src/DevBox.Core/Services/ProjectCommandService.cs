@@ -63,7 +63,7 @@ public sealed class ProjectCommandService
         var root = EnsureProjectRoot(projectPath);
         var preset = GetPresets(root).FirstOrDefault(item => item.Key.Equals(presetKey, StringComparison.OrdinalIgnoreCase))
             ?? throw new KeyNotFoundException($"Project command preset '{presetKey}' is not available for this project.");
-        var executable = ResolveTool(preset.Tool);
+        var executable = ResolveTool(preset.Tool, root);
         var startInfo = DeveloperToolsService.BuildStartInfo(executable, preset.Arguments);
         startInfo.WorkingDirectory = root;
 
@@ -107,21 +107,56 @@ public sealed class ProjectCommandService
         return new ProjectCommandResult(preset.Key, process.ExitCode, output.Trim(), error.Trim(), duration);
     }
 
-    private string ResolveTool(string tool)
+    internal string ResolveTool(string tool, string projectRoot)
     {
+        var manifest = _workspaceService.LoadManifest(projectRoot);
         return tool switch
         {
-            "php" => RequireFile(Path.Combine(_rootPath, "runtime", "php", "current", "php.exe"), "Active PHP CLI runtime is not installed."),
+            "php" => ResolvePhp(manifest),
             "composer" => DeveloperToolsService.ResolveCommand([
                 Path.Combine(_rootPath, "tools", "composer", "composer.cmd"),
                 "composer.cmd", "composer.bat", "composer.exe"
             ]) ?? throw new FileNotFoundException("Composer is not available."),
-            "npm" => DeveloperToolsService.ResolveCommand(["npm.cmd", "npm.exe"])
-                ?? throw new FileNotFoundException("npm is not available."),
+            "npm" => ResolveNpm(manifest),
             "pnpm" => DeveloperToolsService.ResolveCommand(["pnpm.cmd", "pnpm.exe"])
                 ?? throw new FileNotFoundException("pnpm is not available."),
             _ => throw new InvalidOperationException($"Unsupported project command tool '{tool}'.")
         };
+    }
+
+    private string ResolvePhp(DevBoxProjectManifest? manifest)
+    {
+        if (!string.IsNullOrWhiteSpace(manifest?.PhpVersion))
+        {
+            ValidateRuntimeVersion(manifest.PhpVersion);
+            return RequireFile(
+                Path.Combine(_rootPath, "runtime", "php", manifest.PhpVersion, "php.exe"),
+                $"PHP {manifest.PhpVersion} is pinned by devbox.json but is not installed.");
+        }
+
+        return RequireFile(Path.Combine(_rootPath, "runtime", "php", "current", "php.exe"), "Active PHP CLI runtime is not installed.");
+    }
+
+    private string ResolveNpm(DevBoxProjectManifest? manifest)
+    {
+        if (!string.IsNullOrWhiteSpace(manifest?.NodeVersion))
+        {
+            ValidateRuntimeVersion(manifest.NodeVersion);
+            return RequireFile(
+                Path.Combine(_rootPath, "runtime", "node", manifest.NodeVersion, "npm.cmd"),
+                $"Node.js {manifest.NodeVersion} is pinned by devbox.json but is not installed.");
+        }
+
+        return DeveloperToolsService.ResolveCommand(["npm.cmd", "npm.exe"])
+            ?? throw new FileNotFoundException("npm is not available.");
+    }
+
+    private static void ValidateRuntimeVersion(string version)
+    {
+        if (version.Length > 64 || version is "." or ".." || version.Any(character => !char.IsLetterOrDigit(character) && character is not '.' and not '-' and not '_'))
+        {
+            throw new InvalidDataException("Project runtime version contains unsupported path characters.");
+        }
     }
 
     private string EnsureProjectRoot(string projectPath)

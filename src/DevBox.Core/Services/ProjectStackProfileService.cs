@@ -56,14 +56,8 @@ public sealed partial class ProjectStackProfileService
 
         var profiles = LoadCustomProfiles().ToList();
         var existing = profiles.FindIndex(item => item.Key.Equals(profile.Key, StringComparison.OrdinalIgnoreCase));
-        if (existing >= 0)
-        {
-            profiles[existing] = profile;
-        }
-        else
-        {
-            profiles.Add(profile);
-        }
+        if (existing >= 0) profiles[existing] = profile;
+        else profiles.Add(profile);
 
         Directory.CreateDirectory(Path.GetDirectoryName(_profilesPath)!);
         AtomicWrite(_profilesPath, JsonSerializer.Serialize(profiles, JsonOptions));
@@ -74,10 +68,7 @@ public sealed partial class ProjectStackProfileService
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         var profiles = LoadCustomProfiles().ToList();
         var removed = profiles.RemoveAll(item => item.Key.Equals(key, StringComparison.OrdinalIgnoreCase)) > 0;
-        if (!removed)
-        {
-            return false;
-        }
+        if (!removed) return false;
 
         Directory.CreateDirectory(Path.GetDirectoryName(_profilesPath)!);
         AtomicWrite(_profilesPath, JsonSerializer.Serialize(profiles, JsonOptions));
@@ -86,19 +77,13 @@ public sealed partial class ProjectStackProfileService
 
     private IReadOnlyList<ProjectStackProfile> LoadCustomProfiles()
     {
-        if (!File.Exists(_profilesPath))
-        {
-            return Array.Empty<ProjectStackProfile>();
-        }
+        if (!File.Exists(_profilesPath)) return Array.Empty<ProjectStackProfile>();
 
         try
         {
             var profiles = JsonSerializer.Deserialize<List<ProjectStackProfile>>(File.ReadAllText(_profilesPath), JsonOptions)
                 ?? new List<ProjectStackProfile>();
-            foreach (var profile in profiles)
-            {
-                Validate(profile);
-            }
+            foreach (var profile in profiles) Validate(profile);
             return profiles;
         }
         catch (JsonException ex)
@@ -109,30 +94,16 @@ public sealed partial class ProjectStackProfileService
 
     private static void Validate(ProjectStackProfile profile)
     {
-        if (!SafeKeyRegex().IsMatch(profile.Key))
-        {
-            throw new InvalidDataException("Profile key contains unsupported characters.");
-        }
-        if (string.IsNullOrWhiteSpace(profile.DisplayName) || profile.DisplayName.Length > 100)
-        {
-            throw new InvalidDataException("Profile display name is invalid.");
-        }
-        if (profile.Kind == ProjectKind.Unknown)
-        {
-            throw new InvalidDataException("Profile must select a supported project kind.");
-        }
-        if (profile.DatabaseEngine is not ("mysql" or "mariadb" or "postgresql" or "none"))
-        {
-            throw new InvalidDataException("Profile database engine is invalid.");
-        }
-        if (profile.Addons.Any(addon => !SafeKeyRegex().IsMatch(addon)))
-        {
-            throw new InvalidDataException("Profile contains an invalid addon key.");
-        }
-        if (profile.Services.Any(service => !SafeKeyRegex().IsMatch(service)))
-        {
-            throw new InvalidDataException("Profile contains an invalid managed-service key.");
-        }
+        if (!SafeKeyRegex().IsMatch(profile.Key)) throw new InvalidDataException("Profile key contains unsupported characters.");
+        if (string.IsNullOrWhiteSpace(profile.DisplayName) || profile.DisplayName.Length > 100) throw new InvalidDataException("Profile display name is invalid.");
+        if (profile.Kind == ProjectKind.Unknown) throw new InvalidDataException("Profile must select a supported project kind.");
+        if (profile.DatabaseEngine is not ("mysql" or "mariadb" or "postgresql" or "none")) throw new InvalidDataException("Profile database engine is invalid.");
+        if (profile.Addons.Any(addon => !SafeKeyRegex().IsMatch(addon))) throw new InvalidDataException("Profile contains an invalid addon key.");
+        if (profile.Services.Any(service => !SafeKeyRegex().IsMatch(service))) throw new InvalidDataException("Profile contains an invalid managed-service key.");
+        if (!string.IsNullOrWhiteSpace(profile.NodeVersion) && !SafeRuntimeVersionRegex().IsMatch(profile.NodeVersion))
+            throw new InvalidDataException("Profile Node.js version contains unsupported characters.");
+        if (!string.IsNullOrWhiteSpace(profile.PhpVersion) && !SafeRuntimeVersionRegex().IsMatch(profile.PhpVersion))
+            throw new InvalidDataException("Profile PHP version contains unsupported characters.");
     }
 
     private static void AtomicWrite(string path, string content)
@@ -141,28 +112,19 @@ public sealed partial class ProjectStackProfileService
         try
         {
             File.WriteAllText(temp, content);
-            if (File.Exists(path))
-            {
-                File.Replace(temp, path, null);
-            }
-            else
-            {
-                File.Move(temp, path);
-            }
+            if (File.Exists(path)) File.Replace(temp, path, null);
+            else File.Move(temp, path);
         }
         finally
         {
-            if (File.Exists(temp))
-            {
-                File.Delete(temp);
-            }
+            if (File.Exists(temp)) File.Delete(temp);
         }
     }
 
     private static readonly IReadOnlyList<ProjectStackProfile> BuiltInProfiles =
     [
-        new("laravel", "Laravel", ProjectKind.Laravel, null, "22", "mysql", true, Array.Empty<string>(), ["mailpit", "redis"], "Laravel stack with MySQL, Node.js, Redis and Mailpit."),
-        new("symfony", "Symfony", ProjectKind.Symfony, null, "22", "mysql", true, Array.Empty<string>(), ["mailpit", "redis"], "Symfony stack with MySQL, Node.js, Redis and Mailpit."),
+        new("laravel", "Laravel", ProjectKind.Laravel, null, NodeRuntimeCatalog.RecommendedVersion, "mysql", true, Array.Empty<string>(), ["mailpit", "redis"], "Laravel stack with MySQL, portable Node.js LTS, Redis and Mailpit."),
+        new("symfony", "Symfony", ProjectKind.Symfony, null, NodeRuntimeCatalog.RecommendedVersion, "mysql", true, Array.Empty<string>(), ["mailpit", "redis"], "Symfony stack with MySQL, portable Node.js LTS, Redis and Mailpit."),
         new("wordpress", "WordPress", ProjectKind.WordPress, null, null, "mysql", true, Array.Empty<string>(), ["mailpit"], "WordPress stack with MySQL and local mail capture."),
         new("php", "Plain PHP", ProjectKind.EmptyPhp, null, null, "mysql", true, Array.Empty<string>(), Array.Empty<string>(), "Minimal PHP site with MySQL and HTTPS."),
         new("php-minimal", "Plain PHP - minimal", ProjectKind.EmptyPhp, null, null, "none", false, Array.Empty<string>(), Array.Empty<string>(), "Minimal PHP site without database or HTTPS.")
@@ -177,4 +139,7 @@ public sealed partial class ProjectStackProfileService
 
     [GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,63}$", RegexOptions.CultureInvariant)]
     private static partial Regex SafeKeyRegex();
+
+    [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", RegexOptions.CultureInvariant)]
+    private static partial Regex SafeRuntimeVersionRegex();
 }

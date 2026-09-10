@@ -11,12 +11,20 @@ All notable changes to DevBox Windows are documented here.
 - Versioned per-project `devbox.json` manifests and persistent built-in/custom stack profiles.
 - Project Health and Repair checks for document roots, Nginx vhosts, PHP runtimes/extensions, manifests and local TLS files.
 - Safe predefined project command presets for Composer, npm, Laravel Artisan and Symfony Console workflows.
-- Project provisioning that combines Site registration, project metadata, MySQL database creation when available and optional managed-service declarations.
+- Project provisioning that combines Site registration, project metadata, database creation and optional managed-service declarations.
+- Multi-engine project database provisioning for MySQL, MariaDB and PostgreSQL using native clients without placing passwords on process command lines.
 - MySQL database size/charset/collation metadata plus protected drop, clone and rename operations.
 - Manifest-driven optional services in `config/services.json` and integration with the existing DevBox process lifecycle.
 - Verified Mailpit `1.31.1` installer for Windows x64/ARM64 using pinned GitHub release SHA-256 values; web UI listens on `8025` and SMTP on `1025`.
 - Verified Microsoft Garnet `2.1.7` installer as the native Redis-compatible Windows service on `127.0.0.1:6379`, using pinned x64/ARM64 ReadyToRun package SHA-256 values.
 - Xdebug configuration UI and safe local DLL installation with PE validation, optional SHA-256 verification, atomic replacement and recorded provenance checksum.
+- Portable Node.js LTS `24.19.0` runtime catalog for Windows x64/ARM64 with pinned official SHA-256 values and versioned installation under `runtime/node/<version>`.
+- Per-project Node.js pinning: npm presets use the exact `NodeVersion` recorded in `devbox.json` instead of silently falling back to another Node.js installation from `PATH`.
+- Standalone `devbox.exe` CLI backed by `DevBox.Core`, with service status/start/stop/restart, Site creation, PHP runtime activation, database creation and ADDON installation commands.
+- Verified application self-update flow that downloads the stable release installer and `SHA256SUMS.txt`, checks the installer hash before execution, closes DevBox through the normal shutdown path and relaunches it after installation.
+- Release builds now package `devbox.exe` with the GUI application for both x64 and ARM64 portable layouts.
+- Release workflow support for Authenticode signing of DevBox-owned binaries and the installer when `WINDOWS_SIGNING_CERTIFICATE_BASE64` and `WINDOWS_SIGNING_CERTIFICATE_PASSWORD` secrets are configured.
+- CI now publishes the CLI as a self-contained single-file executable and validates that it is included in the installer input layout.
 - Official DevBox 0.2.2 release packages now bundle Nginx `1.31.5`, PHP FastCGI `8.5.10` NTS and MySQL `8.4.11` LTS under versioned `runtime/` directories.
 - First Run can activate a bundled runtime locally without making an HTTP request; PHP and Nginx retain their verified remote fallback when the bundle is absent.
 - Release packaging records upstream source URLs and calculated SHA-256 values in `runtime/bundled-runtimes.json`; PHP and Nginx archives are additionally verified against pinned SHA-256 values before extraction.
@@ -104,4 +112,4 @@ All notable changes to DevBox Windows are documented here.
 ### Known limitations
 
 - Built-in automatic MySQL download remains disabled until the package can satisfy the same pinned SHA-256 policy as other remote runtimes. Packaged DevBox 0.2.2 releases carry MySQL directly.
-- The generated Windows installer is not Authenticode code-signed.
+- Authenticode support is implemented in the release workflow, but artifacts remain unsigned until a code-signing PFX and password are configured as repository secrets.
