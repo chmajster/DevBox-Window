@@ -4,6 +4,9 @@ All notable changes to DevBox Windows are documented here.
 
 ## Unreleased
 
+- Manual Release can keep PHP/phpMyAdmin online-only; PHP is omitted from release packaging and both can be downloaded on demand from verified catalogs.
+- Runtimes now exposes a verified Download action for PHP, while phpMyAdmin uses Download/Reinstall in ADDONS and remains installable even before PHP is present.
+
 ### Added
 
 - GitHub Actions now separates automatic pull-request validation from publishing: PRs run the reusable Windows test/package validation workflow, while releases are started manually with a `patch`, `minor`, or `major` version increment that updates version metadata, creates the tag and publishes the GitHub Release.

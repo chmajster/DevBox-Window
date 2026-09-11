@@ -49,6 +49,7 @@ public partial class App : System.Windows.Application
         services.AddSingleton(_ => new DeveloperToolsService(DevBoxRoot));
         services.AddSingleton(_ => new ApplicationUpdateService(typeof(App).Assembly.GetName().Version ?? new Version(0, 2, 0)));
         services.AddSingleton<IRuntimeManager>(_ => new RuntimeManager(DevBoxRoot));
+        services.AddSingleton(_ => new RuntimePlatformService(DevBoxRoot));
         services.AddSingleton(new RuntimeCatalog());
         services.AddSingleton(provider => new EnvironmentReadinessService(
             DevBoxRoot,
@@ -95,6 +96,7 @@ public partial class App : System.Windows.Application
             provider.GetRequiredService<IHostMappingService>(),
             provider.GetRequiredService<SiteManager>(),
             provider.GetRequiredService<IRuntimeManager>(),
+            provider.GetRequiredService<RuntimePlatformService>(),
             provider.GetRequiredService<DiagnosticsService>(),
             provider.GetRequiredService<LogReader>(),
             provider.GetRequiredService<IDialogService>(),

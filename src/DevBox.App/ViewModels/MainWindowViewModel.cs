@@ -25,6 +25,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private readonly IHostMappingService _hostMappingService;
     private readonly SiteManager _siteManager;
     private readonly IRuntimeManager _runtimeManager;
+    private readonly RuntimePlatformService _runtimePlatformService;
     private readonly DiagnosticsService _diagnosticsService;
     private readonly LogReader _logReader;
     private readonly IDialogService _dialogs;
@@ -54,6 +55,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         IHostMappingService hostMappingService,
         SiteManager siteManager,
         IRuntimeManager runtimeManager,
+        RuntimePlatformService runtimePlatformService,
         DiagnosticsService diagnosticsService,
         LogReader logReader,
         IDialogService dialogs,
@@ -69,6 +71,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         _hostMappingService = hostMappingService;
         _siteManager = siteManager;
         _runtimeManager = runtimeManager;
+        _runtimePlatformService = runtimePlatformService;
         _diagnosticsService = diagnosticsService;
         _logReader = logReader;
         _dialogs = dialogs;
@@ -105,6 +108,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         RefreshDiagnosticsCommand = new RelayCommand(RefreshDiagnostics);
         RefreshLogsCommand = new RelayCommand(RefreshLogs);
         ClearLogCommand = new RelayCommand(ClearSelectedLog, () => SelectedLog is not null);
+        DownloadRuntimeCommand = new AsyncRelayCommand(DownloadRuntimeAsync);
         ActivateRuntimeCommand = new AsyncRelayCommand(ActivateRuntimeAsync);
         RemoveRuntimeCommand = new AsyncRelayCommand(RemoveRuntimeAsync);
 
@@ -184,6 +188,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     public RelayCommand RefreshDiagnosticsCommand { get; }
     public RelayCommand RefreshLogsCommand { get; }
     public RelayCommand ClearLogCommand { get; }
+    public AsyncRelayCommand DownloadRuntimeCommand { get; }
     public AsyncRelayCommand ActivateRuntimeCommand { get; }
     public AsyncRelayCommand RemoveRuntimeCommand { get; }
 
@@ -375,20 +380,32 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
     private async Task InstallAddonAsync(object? parameter)
     {
-        if (!TryBeginAddonOperation(parameter, "Installing...", out var addon)) return;
+        if (!TryBeginAddonOperation(parameter, "Downloading...", out var addon)) return;
         try
         {
             await _addonInstaller.InstallAsync(addon);
             RuntimeLayout.EnsureInitialized(_rootPath);
-            var phpConfigChanged = _phpExtensionInspector.EnsureConfigured(addon.RequiredPhpExtensions);
+            var phpCheck = await _phpExtensionInspector.CheckAsync(addon.RequiredPhpExtensions);
+            var phpConfigChanged = phpCheck.RuntimeAvailable &&
+                                   _phpExtensionInspector.EnsureConfigured(addon.RequiredPhpExtensions);
             var domain = new Uri(addon.LocalUrl).Host;
             var hostConfigured = await _hostMappingService.EnsureAsync(domain);
             if (phpConfigChanged) await RestartIfRunningAsync("php");
             await RestartIfRunningAsync("nginx");
             await RefreshAddonHealthAsync();
-            _dialogs.Info($"{addon.DisplayName} installed", hostConfigured
-                ? $"{addon.DisplayName} {addon.Version} installed and configured."
-                : $"{addon.DisplayName} installed, but the hosts mapping is missing.");
+
+            if (!phpCheck.RuntimeAvailable)
+            {
+                _dialogs.Warning(
+                    $"{addon.DisplayName} downloaded",
+                    $"{addon.DisplayName} {addon.Version} was downloaded and configured, but PHP is not installed. Open Runtimes and click Download for PHP.");
+            }
+            else
+            {
+                _dialogs.Info($"{addon.DisplayName} installed", hostConfigured
+                    ? $"{addon.DisplayName} {addon.Version} installed and configured."
+                    : $"{addon.DisplayName} installed, but the hosts mapping is missing.");
+            }
         }
         catch (Exception ex) when (IsExpectedAddonError(ex))
         {
@@ -571,6 +588,39 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
+    private async Task DownloadRuntimeAsync(object? parameter)
+    {
+        if (parameter is not RuntimeRowViewModel runtime || !runtime.CanDownload) return;
+
+        try
+        {
+            await _runtimePlatformService.InstallAsync(runtime.Key, runtime.Version);
+
+            var executableRelativePath = RuntimeExecutable(runtime.Key);
+            var installations = _runtimeManager.GetInstalled(runtime.Key, executableRelativePath);
+            var activated = false;
+            if (!installations.Any(item => item.IsActive))
+            {
+                await _runtimePlatformService.ActivateAsync(runtime.Key, runtime.Version);
+                activated = true;
+            }
+
+            RefreshRuntimes();
+            RefreshStatuses();
+            _dialogs.Info(
+                $"{runtime.Name} downloaded",
+                activated
+                    ? $"{runtime.Name} {runtime.Version} was downloaded, verified and activated."
+                    : $"{runtime.Name} {runtime.Version} was downloaded and verified.");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException or FileNotFoundException)
+        {
+            RefreshRuntimes();
+            RefreshStatuses();
+            _dialogs.Error($"{runtime.Name} download failed", ex.Message);
+        }
+    }
+
     private async Task ActivateRuntimeAsync(object? parameter)
     {
         if (parameter is not RuntimeRowViewModel runtime || runtime.Status == "Active") return;
@@ -673,6 +723,16 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private void RefreshRuntimes()
     {
         Runtimes.Clear();
+        var supportedKeys = new HashSet<string>(["php", "nginx", "mysql"], StringComparer.OrdinalIgnoreCase);
+        var represented = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var status in _runtimePlatformService.GetStatuses()
+                     .Where(item => supportedKeys.Contains(item.Package.Key)))
+        {
+            Runtimes.Add(new RuntimeRowViewModel(status, _rootPath));
+            represented.Add($"{status.Package.Key}|{status.Package.Version}");
+        }
+
         foreach (var descriptor in new[]
         {
             (Key: "php", Executable: "php-cgi.exe"),
@@ -682,7 +742,10 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         {
             foreach (var runtime in _runtimeManager.GetInstalled(descriptor.Key, descriptor.Executable))
             {
-                Runtimes.Add(new RuntimeRowViewModel(runtime));
+                if (represented.Add($"{runtime.Key}|{runtime.Version}"))
+                {
+                    Runtimes.Add(new RuntimeRowViewModel(runtime));
+                }
             }
         }
     }

@@ -36,7 +36,7 @@ public sealed class ServiceRowViewModel : ObservableObject
 public sealed class AddonRowViewModel : ObservableObject
 {
     private string _status = "Not installed";
-    private string _installAction = "Install";
+    private string _installAction = "Download";
     private string _hostStatus = "Host: —";
     private string _configStatus = "Config: —";
     private string _phpStatus = "PHP: —";
@@ -68,7 +68,7 @@ public sealed class AddonRowViewModel : ObservableObject
     public void ApplyInstallation(bool installed)
     {
         Status = installed ? "Installed" : "Not installed";
-        InstallAction = installed ? "Reinstall" : "Install";
+        InstallAction = installed ? "Reinstall" : "Download";
         if (!installed)
         {
             HostStatus = "Host: —";
@@ -99,7 +99,7 @@ public sealed class AddonRowViewModel : ObservableObject
     public void SetError()
     {
         Status = "Operation failed";
-        InstallAction = "Retry";
+        InstallAction = "Retry download";
     }
 }
 
@@ -112,12 +112,53 @@ public sealed class SiteRowViewModel(SiteDefinition site)
     public string Url { get; } = site.HttpsEnabled ? $"https://{site.Domain}" : $"http://{site.Domain}";
 }
 
-public sealed class RuntimeRowViewModel(RuntimeInstallation runtime)
+public sealed class RuntimeRowViewModel
 {
-    public string Key { get; } = runtime.Key;
-    public string Version { get; } = runtime.Version;
-    public string Status { get; } = !runtime.IsValid ? "Broken" : runtime.IsActive ? "Active" : "Installed";
-    public string InstallPath { get; } = runtime.InstallPath;
+    public RuntimeRowViewModel(RuntimeVersionStatus status, string rootPath)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+
+        Key = status.Package.Key;
+        Name = status.Package.DisplayName;
+        Version = status.Package.Version;
+        IsInstalled = status.Installed;
+        CanDownload = !status.Installed &&
+                      !string.IsNullOrWhiteSpace(status.Package.DownloadUrl) &&
+                      !string.IsNullOrWhiteSpace(status.Package.Sha256);
+        CanActivate = status.Installed && status.Valid && !status.Active;
+        CanRemove = status.Installed;
+        Status = !status.Installed
+            ? CanDownload ? "Available online" : "Not installed"
+            : !status.Valid ? "Broken" : status.Active ? "Active" : "Installed";
+        InstallPath = status.Installed
+            ? Path.Combine(Path.GetFullPath(rootPath), "runtime", Key, Version)
+            : status.Package.DownloadUrl ?? "No verified online package configured";
+    }
+
+    public RuntimeRowViewModel(RuntimeInstallation runtime)
+    {
+        ArgumentNullException.ThrowIfNull(runtime);
+        Key = runtime.Key;
+        Name = runtime.Key;
+        Version = runtime.Version;
+        Status = !runtime.IsValid ? "Broken" : runtime.IsActive ? "Active" : "Installed";
+        InstallPath = runtime.InstallPath;
+        IsInstalled = true;
+        CanDownload = false;
+        CanActivate = runtime.IsValid && !runtime.IsActive;
+        CanRemove = true;
+    }
+
+    public string Key { get; }
+    public string Name { get; }
+    public string Version { get; }
+    public string Status { get; }
+    public string InstallPath { get; }
+    public bool IsInstalled { get; }
+    public bool CanDownload { get; }
+    public bool CanActivate { get; }
+    public bool CanRemove { get; }
 }
 
 public sealed class DiagnosticRowViewModel(DiagnosticCheck check)
