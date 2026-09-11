@@ -32,9 +32,7 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
 
         var runtimeRoot = RuntimeRoot(runtimeKey);
         if (!Directory.Exists(runtimeRoot))
-        {
             return Array.Empty<RuntimeInstallation>();
-        }
 
         var activeVersion = ReadVersionMarker(Path.Combine(runtimeRoot, "current"));
         return Directory.GetDirectories(runtimeRoot)
@@ -45,12 +43,7 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
             {
                 var version = Path.GetFileName(path);
                 var executable = Path.Combine(path, executableRelativePath);
-                return new RuntimeInstallation(
-                    runtimeKey,
-                    version,
-                    path,
-                    version.Equals(activeVersion, StringComparison.OrdinalIgnoreCase),
-                    File.Exists(executable));
+                return new RuntimeInstallation(runtimeKey, version, path, version.Equals(activeVersion, StringComparison.OrdinalIgnoreCase), File.Exists(executable));
             })
             .OrderByDescending(item => ParseVersionForSort(item.Version), Comparer<Version>.Default)
             .ThenByDescending(item => item.Version, StringComparer.OrdinalIgnoreCase)
@@ -60,10 +53,7 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
     public Task InstallAsync(RuntimeDefinition definition, CancellationToken cancellationToken = default) =>
         InstallAsync(definition, progress: null, cancellationToken);
 
-    public async Task InstallAsync(
-        RuntimeDefinition definition,
-        IProgress<int>? progress,
-        CancellationToken cancellationToken = default)
+    public async Task InstallAsync(RuntimeDefinition definition, IProgress<int>? progress, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(definition);
@@ -73,10 +63,7 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         await InstallUnderLockAsync(definition, progress, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task InstallUnderLockAsync(
-        RuntimeDefinition definition,
-        IProgress<int>? progress,
-        CancellationToken cancellationToken)
+    private async Task InstallUnderLockAsync(RuntimeDefinition definition, IProgress<int>? progress, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(definition);
@@ -88,20 +75,13 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
             progress?.Report(85);
             ValidateRuntimeExecutable(bundledPath, definition.ExecutableRelativePath);
             progress?.Report(95);
-            await ActivateUnderLockAsync(
-                definition.Key,
-                definition.Version,
-                definition.ExecutableRelativePath,
-                cancellationToken).ConfigureAwait(false);
+            await ActivateUnderLockAsync(definition.Key, definition.Version, definition.ExecutableRelativePath, cancellationToken).ConfigureAwait(false);
             progress?.Report(100);
             return;
         }
 
         if (!definition.HasRemotePackage)
-        {
-            throw new InvalidOperationException(
-                $"Runtime {definition.DisplayName} {definition.Version} is not bundled and has no verified remote package.");
-        }
+            throw new InvalidOperationException($"Runtime {definition.DisplayName} {definition.Version} is not bundled and has no verified remote package.");
 
         var tempRoot = Path.Combine(_rootPath, "tmp", "runtimes", definition.Key, Guid.NewGuid().ToString("N"));
         var archivePath = Path.Combine(tempRoot, "package.zip");
@@ -112,35 +92,26 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         try
         {
             progress?.Report(5);
-            IProgress<int>? downloadProgress = progress is null
-                ? null
-                : new MappedProgress(progress, 5, 60);
+            IProgress<int>? downloadProgress = progress is null ? null : new MappedProgress(progress, 5, 60);
             await DownloadAsync(definition.DownloadUrl!, archivePath, downloadProgress, cancellationToken).ConfigureAwait(false);
-
             progress?.Report(68);
             VerifySha256(archivePath, definition.Sha256!);
-
             progress?.Report(74);
             ExtractZipSafely(archivePath, extractPath);
 
             var sourcePath = string.IsNullOrWhiteSpace(definition.ArchiveRootDirectory)
                 ? extractPath
                 : Path.Combine(extractPath, definition.ArchiveRootDirectory);
-
             if (!Directory.Exists(sourcePath))
-            {
                 throw new InvalidDataException($"Archive root '{definition.ArchiveRootDirectory}' was not found.");
-            }
 
             progress?.Report(82);
             CopyDirectory(sourcePath, stagingPath, cancellationToken);
             ValidateRuntimeExecutable(stagingPath, definition.ExecutableRelativePath);
             File.WriteAllText(Path.Combine(stagingPath, VersionMarker), definition.Version);
-
             progress?.Report(90);
             var installPath = VersionPath(definition.Key, definition.Version);
             ReplaceDirectory(stagingPath, installPath);
-
             progress?.Report(95);
             await ActivateUnderLockAsync(definition.Key, definition.Version, definition.ExecutableRelativePath, cancellationToken).ConfigureAwait(false);
             progress?.Report(100);
@@ -168,10 +139,7 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
 
         var sourcePath = VersionPath(runtimeKey, version);
         if (!Directory.Exists(sourcePath))
-        {
             throw new DirectoryNotFoundException($"Runtime {runtimeKey} {version} is not installed.");
-        }
-
         ValidateRuntimeExecutable(sourcePath, executableRelativePath);
 
         var runtimeRoot = RuntimeRoot(runtimeKey);
@@ -200,102 +168,64 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         var runtimeRoot = RuntimeRoot(runtimeKey);
         var activeVersion = ReadVersionMarker(Path.Combine(runtimeRoot, "current"));
         if (version.Equals(activeVersion, StringComparison.OrdinalIgnoreCase))
-        {
             throw new InvalidOperationException("The active runtime version cannot be removed. Activate another version first.");
+
+        if (runtimeKey.Equals("php", StringComparison.OrdinalIgnoreCase))
+        {
+            var dependents = new SiteManager(_rootPath).GetSites()
+                .Where(site => site.PhpVersion?.Equals(version, StringComparison.OrdinalIgnoreCase) == true)
+                .Select(site => site.Domain)
+                .OrderBy(domain => domain, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (dependents.Length > 0)
+                throw new InvalidOperationException($"PHP {version} cannot be removed because it is assigned to: {string.Join(", ", dependents)}.");
         }
 
         var installPath = VersionPath(runtimeKey, version);
         if (Directory.Exists(installPath))
-        {
             Directory.Delete(installPath, recursive: true);
-        }
-
         return Task.CompletedTask;
     }
 
     public void Dispose()
     {
-        if (_disposed)
-        {
-            return;
-        }
-
+        if (_disposed) return;
         _disposed = true;
-        if (_ownsHttpClient)
-        {
-            _httpClient.Dispose();
-        }
+        if (_ownsHttpClient) _httpClient.Dispose();
     }
 
     internal static void VerifySha256(string filePath, string expectedSha256)
     {
         if (string.IsNullOrWhiteSpace(expectedSha256) || expectedSha256.Trim().Length != 64)
-        {
             throw new InvalidDataException("Invalid expected SHA-256 value.");
-        }
-
         byte[] expected;
-        try
-        {
-            expected = Convert.FromHexString(expectedSha256.Trim());
-        }
-        catch (FormatException ex)
-        {
-            throw new InvalidDataException("Invalid expected SHA-256 value.", ex);
-        }
-
+        try { expected = Convert.FromHexString(expectedSha256.Trim()); }
+        catch (FormatException ex) { throw new InvalidDataException("Invalid expected SHA-256 value.", ex); }
         using var stream = File.OpenRead(filePath);
         var actual = SHA256.HashData(stream);
         if (!CryptographicOperations.FixedTimeEquals(actual, expected))
-        {
             throw new InvalidDataException("SHA-256 verification failed for runtime package.");
-        }
     }
 
     internal static void ExtractZipSafely(string archivePath, string destinationPath) =>
-        ArchiveSafety.ExtractZipSafely(
-            archivePath,
-            destinationPath,
-            MaximumRuntimeExtractedBytes,
-            MaximumRuntimeArchiveEntries,
-            "Runtime");
+        ArchiveSafety.ExtractZipSafely(archivePath, destinationPath, MaximumRuntimeExtractedBytes, MaximumRuntimeArchiveEntries, "Runtime");
 
-    private async Task DownloadAsync(
-        string url,
-        string destination,
-        IProgress<int>? progress,
-        CancellationToken cancellationToken)
+    private async Task DownloadAsync(string url, string destination, IProgress<int>? progress, CancellationToken cancellationToken)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
-        {
             throw new InvalidDataException("Runtime download URL must use HTTPS.");
-        }
-
-        await ArchiveSafety.DownloadToFileAsync(
-            _httpClient,
-            uri,
-            destination,
-            MaximumRuntimeDownloadBytes,
-            "Runtime",
-            cancellationToken,
-            progress).ConfigureAwait(false);
+        await ArchiveSafety.DownloadToFileAsync(_httpClient, uri, destination, MaximumRuntimeDownloadBytes, "Runtime", cancellationToken, progress).ConfigureAwait(false);
     }
 
     internal Task<FileStream> AcquireRuntimeLockAsync(string runtimeKey, CancellationToken cancellationToken)
     {
         ValidateSegment(runtimeKey, nameof(runtimeKey));
-        return CrossProcessFileLock.AcquireAsync(
-            Path.Combine(_rootPath, "tmp", "locks", $"runtime-{runtimeKey.ToLowerInvariant()}.lock"),
-            cancellationToken,
-            TimeSpan.FromSeconds(30));
+        return CrossProcessFileLock.AcquireAsync(Path.Combine(_rootPath, "tmp", "locks", $"runtime-{runtimeKey.ToLowerInvariant()}.lock"), cancellationToken, TimeSpan.FromSeconds(30));
     }
 
     private string RuntimeRoot(string runtimeKey) => Path.Combine(_rootPath, "runtime", runtimeKey);
-
     private string VersionPath(string runtimeKey, string version) => Path.Combine(RuntimeRoot(runtimeKey), version);
-
-    private static Version ParseVersionForSort(string version) =>
-        Version.TryParse(version, out var parsed) ? parsed : new Version(0, 0);
+    private static Version ParseVersionForSort(string version) => Version.TryParse(version, out var parsed) ? parsed : new Version(0, 0);
 
     private static void ValidateDefinition(RuntimeDefinition definition)
     {
@@ -303,16 +233,11 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         ValidateSegment(definition.Version, nameof(definition.Version));
         ValidateRelativePath(definition.ExecutableRelativePath, nameof(definition.ExecutableRelativePath));
         if (!string.IsNullOrWhiteSpace(definition.ArchiveRootDirectory))
-        {
             ValidateRelativePath(definition.ArchiveRootDirectory, nameof(definition.ArchiveRootDirectory));
-        }
-
         var hasUrl = !string.IsNullOrWhiteSpace(definition.DownloadUrl);
         var hasHash = !string.IsNullOrWhiteSpace(definition.Sha256);
         if (hasUrl != hasHash)
-        {
             throw new InvalidDataException("A remote runtime definition must provide both an HTTPS URL and a pinned SHA-256 value.");
-        }
     }
 
     private static void ValidateRuntimeExecutable(string root, string executableRelativePath)
@@ -320,33 +245,24 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         var executablePath = Path.GetFullPath(Path.Combine(root, executableRelativePath));
         if (!executablePath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase) || !File.Exists(executablePath))
-        {
             throw new InvalidDataException($"Runtime executable '{executableRelativePath}' was not found in the package.");
-        }
     }
 
     private static void ValidateSegment(string value, string parameterName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value, parameterName);
         if (value is "." or ".." || value.Any(character => !char.IsLetterOrDigit(character) && character is not '.' and not '-' and not '_'))
-        {
             throw new ArgumentException("Value contains unsafe path characters.", parameterName);
-        }
     }
 
     private static void ValidateRelativePath(string value, string parameterName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value, parameterName);
         if (Path.IsPathRooted(value))
-        {
             throw new ArgumentException("Path must be relative.", parameterName);
-        }
-
         var normalized = value.Replace('/', Path.DirectorySeparatorChar);
         if (normalized.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries).Any(part => part == ".."))
-        {
             throw new ArgumentException("Relative path cannot contain parent traversal.", parameterName);
-        }
     }
 
     private static string? ReadVersionMarker(string directory)
@@ -365,7 +281,6 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
             var relative = Path.GetRelativePath(sourcePath, directory);
             Directory.CreateDirectory(Path.Combine(destinationPath, relative));
         }
-
         foreach (var file in Directory.GetFiles(sourcePath, "*", SearchOption.AllDirectories))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -379,18 +294,10 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
     private static void ReplaceDirectory(string stagingPath, string installPath)
     {
         var parent = Path.GetDirectoryName(Path.GetFullPath(installPath));
-        if (string.IsNullOrWhiteSpace(parent))
-        {
-            throw new InvalidOperationException("Target path has no parent directory.");
-        }
-
+        if (string.IsNullOrWhiteSpace(parent)) throw new InvalidOperationException("Target path has no parent directory.");
         Directory.CreateDirectory(parent);
         var backupPath = installPath + $".backup-{Guid.NewGuid():N}";
-        if (Directory.Exists(installPath))
-        {
-            Directory.Move(installPath, backupPath);
-        }
-
+        if (Directory.Exists(installPath)) Directory.Move(installPath, backupPath);
         try
         {
             Directory.Move(stagingPath, installPath);
@@ -399,31 +306,17 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         catch
         {
             TryDeleteDirectory(installPath);
-            if (Directory.Exists(backupPath))
-            {
-                Directory.Move(backupPath, installPath);
-            }
+            if (Directory.Exists(backupPath)) Directory.Move(backupPath, installPath);
             throw;
         }
     }
 
     private static void TryDeleteDirectory(string path)
     {
-        if (!Directory.Exists(path))
-        {
-            return;
-        }
-
-        try
-        {
-            Directory.Delete(path, recursive: true);
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
+        if (!Directory.Exists(path)) return;
+        try { Directory.Delete(path, recursive: true); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
