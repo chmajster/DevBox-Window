@@ -61,14 +61,13 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDi
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait; Tasks: launchafterinstall
 
 ; Runtime modules and temporary package data are always DevBox-owned.
-; Addon project directories are removed conditionally from [Code] only when ownership
-; can be established, so an unrelated www\phpmyadmin project is never deleted by name alone.
+; Addon project directories and their vhosts are removed conditionally from [Code]
+; only when ownership can be established.
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\runtime"
 Type: filesandordirs; Name: "{app}\tmp\runtimes"
 Type: filesandordirs; Name: "{app}\tmp\runtime-imports"
 Type: filesandordirs; Name: "{app}\tmp\addons"
-Type: files; Name: "{app}\config\nginx\sites-enabled\phpmyadmin.test.conf"
 
 [Code]
 const
@@ -220,21 +219,30 @@ begin
   DelTree(RootPrefix + 'tmp\runtimes', True, True, True);
   DelTree(RootPrefix + 'tmp\runtime-imports', True, True, True);
   DelTree(RootPrefix + 'tmp\addons', True, True, True);
+
   if ManagedPhpMyAdmin then
-    DelTree(PhpMyAdminPath, True, True, True)
-  else if DirExists(PhpMyAdminPath) then
-    Log('Preserving www\phpmyadmin because no DevBox ownership marker or matching legacy DevBox vhost was found.');
-  DeleteFile(PhpMyAdminVhost);
+  begin
+    DelTree(PhpMyAdminPath, True, True, True);
+    DeleteFile(PhpMyAdminVhost);
+  end
+  else
+  begin
+    if DirExists(PhpMyAdminPath) then
+      Log('Preserving www\phpmyadmin because no DevBox ownership marker or matching legacy DevBox vhost was found.');
+    if FileExists(PhpMyAdminVhost) then
+      Log('Preserving phpmyadmin.test.conf because it is not recognized as a DevBox-managed vhost.');
+  end;
 
   Result :=
     not DirExists(RootPrefix + 'runtime') and
     not DirExists(RootPrefix + 'tmp\runtimes') and
     not DirExists(RootPrefix + 'tmp\runtime-imports') and
-    not DirExists(RootPrefix + 'tmp\addons') and
-    not FileExists(PhpMyAdminVhost);
+    not DirExists(RootPrefix + 'tmp\addons');
 
   if ManagedPhpMyAdmin then
-    Result := Result and not DirExists(PhpMyAdminPath);
+    Result := Result and
+      not DirExists(PhpMyAdminPath) and
+      not FileExists(PhpMyAdminVhost);
 
   if not Result then
   begin
