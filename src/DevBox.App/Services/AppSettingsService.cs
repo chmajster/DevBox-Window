@@ -29,11 +29,9 @@ public sealed class AppSettingsService : IAppSettingsService
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         _settingsPath = Path.Combine(Path.GetFullPath(rootPath), "config", "appsettings.json");
         Current = Load();
-        var registryState = TryReadStartupRegistryState();
+        var registryState = TryReadAndRepairStartupRegistryState();
         if (registryState.HasValue)
-        {
             Current.StartWithWindows = registryState.Value;
-        }
     }
 
     public AppSettings Current { get; }
@@ -46,20 +44,14 @@ public sealed class AppSettingsService : IAppSettingsService
         {
             File.WriteAllText(tempPath, JsonSerializer.Serialize(Current, JsonOptions));
             if (File.Exists(_settingsPath))
-            {
                 File.Replace(tempPath, _settingsPath, null);
-            }
             else
-            {
                 File.Move(tempPath, _settingsPath);
-            }
         }
         finally
         {
             if (File.Exists(tempPath))
-            {
                 File.Delete(tempPath);
-            }
         }
     }
 
@@ -67,20 +59,14 @@ public sealed class AppSettingsService : IAppSettingsService
     {
         var executable = Environment.ProcessPath;
         if (enabled && string.IsNullOrWhiteSpace(executable))
-        {
             throw new InvalidOperationException("Unable to determine the DevBox executable path.");
-        }
 
         using var key = Registry.CurrentUser.CreateSubKey(RunKeyPath, writable: true)
             ?? throw new InvalidOperationException("Unable to open the current-user startup registry key.");
         if (enabled)
-        {
             key.SetValue(RunValueName, BuildStartupCommand(executable!), RegistryValueKind.String);
-        }
         else
-        {
             key.DeleteValue(RunValueName, throwOnMissingValue: false);
-        }
 
         Current.StartWithWindows = enabled;
         Save();
@@ -95,9 +81,7 @@ public sealed class AppSettingsService : IAppSettingsService
     internal static bool IsStartupCommandForExecutable(string? configuredCommand, string executable)
     {
         if (string.IsNullOrWhiteSpace(configuredCommand))
-        {
             return false;
-        }
 
         return string.Equals(
             configuredCommand.Trim(),
@@ -105,24 +89,23 @@ public sealed class AppSettingsService : IAppSettingsService
             StringComparison.OrdinalIgnoreCase);
     }
 
-    private bool? TryReadStartupRegistryState()
+    private bool? TryReadAndRepairStartupRegistryState()
     {
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
+            using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: true);
             var configuredCommand = key?.GetValue(RunValueName) as string;
             if (string.IsNullOrWhiteSpace(configuredCommand))
-            {
                 return false;
-            }
 
             var executable = Environment.ProcessPath;
             if (string.IsNullOrWhiteSpace(executable))
-            {
                 return true;
-            }
+            if (IsStartupCommandForExecutable(configuredCommand, executable))
+                return true;
 
-            return IsStartupCommandForExecutable(configuredCommand, executable);
+            key?.SetValue(RunValueName, BuildStartupCommand(executable), RegistryValueKind.String);
+            return true;
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or SecurityException or IOException)
         {
@@ -135,9 +118,7 @@ public sealed class AppSettingsService : IAppSettingsService
         try
         {
             if (!File.Exists(_settingsPath))
-            {
                 return new AppSettings();
-            }
             return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_settingsPath), JsonOptions) ?? new AppSettings();
         }
         catch (JsonException)
