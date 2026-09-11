@@ -109,6 +109,33 @@ public sealed class RuntimeManagerTests
         }
     }
 
+    [Fact]
+    public async Task RemoveAsync_RejectsPhpVersionAssignedToSite()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var runtimePath = Path.Combine(root, "runtime", "php", "8.3.0");
+            Directory.CreateDirectory(runtimePath);
+            File.WriteAllText(Path.Combine(runtimePath, "php-cgi.exe"), "runtime");
+            var project = Path.Combine(root, "www", "demo");
+            Directory.CreateDirectory(project);
+            var sites = new SiteManager(root);
+            _ = sites.Create("demo", "demo.test", project);
+            _ = sites.Update(new SiteDefinition("demo", "demo.test", project, "php", "8.3.0", false));
+
+            using var manager = new RuntimeManager(root, new HttpClient(new StaticHandler(Array.Empty<byte>())));
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.RemoveAsync("php", "8.3.0"));
+
+            Assert.Contains("demo.test", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.True(Directory.Exists(runtimePath));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
     private static byte[] CreateArchive(params (string Path, string Content)[] files)
     {
         using var memory = new MemoryStream();
@@ -134,9 +161,7 @@ public sealed class RuntimeManagerTests
     private static void DeleteRoot(string root)
     {
         if (Directory.Exists(root))
-        {
             Directory.Delete(root, recursive: true);
-        }
     }
 
     private sealed class StaticHandler(byte[] content) : HttpMessageHandler
