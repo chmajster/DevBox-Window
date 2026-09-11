@@ -145,17 +145,33 @@ public sealed class ProjectSnapshotService
                     Directory.Move(databaseStaging, databaseDestination);
                 }
             }
-            catch
+            catch (Exception original)
             {
-                TryDeleteDirectory(destination);
-                if (previous is not null && Directory.Exists(previous) && !Directory.Exists(destination))
-                    Directory.Move(previous, destination);
-                RestoreSite(sites, safeName, previousSite);
+                var rollbackActions = new List<Action>
+                {
+                    () => TryDeleteDirectory(destination),
+                    () =>
+                    {
+                        if (previous is not null && Directory.Exists(previous) && !Directory.Exists(destination))
+                            Directory.Move(previous, destination);
+                    },
+                    () => RestoreSite(sites, safeName, previousSite)
+                };
+
                 foreach (var tlsState in tlsStates.Reverse())
-                    tlsRollback.Restore(tlsState);
+                {
+                    var state = tlsState;
+                    rollbackActions.Add(() => tlsRollback.Restore(state));
+                }
+
                 if (databaseDestination is not null)
-                    TryDeleteDirectory(databaseDestination);
-                throw;
+                {
+                    var databasePath = databaseDestination;
+                    rollbackActions.Add(() => TryDeleteDirectory(databasePath));
+                }
+
+                RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
+                throw new InvalidOperationException("Rollback executor returned unexpectedly.");
             }
 
             if (previous is not null)
