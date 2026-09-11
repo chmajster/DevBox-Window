@@ -22,7 +22,9 @@ jobs:
 
       - name: Apply fixes
         shell: pwsh
-        run: python .github/scripts/apply_snapshot_hardening.py
+        run: |
+          python .github/scripts/apply_snapshot_hardening.py
+          python .github/scripts/apply_local_domain_consistency.py
 
       - name: Validate diff
         shell: pwsh
@@ -36,8 +38,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/DevBox.Core/Services/ProjectSnapshotService.cs
+          git add src tests
           if (-not (git diff --cached --quiet)) {
-            git commit -m "fix: harden project snapshot lifecycle"
+            git commit -m "fix: harden snapshots and local project domains"
             git push origin HEAD:fix/snapshot-hardening-2026-09-11
           }
