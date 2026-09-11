@@ -67,10 +67,11 @@ replace_once(
     '            var domain = NormalizeDomain(targetDomain ?? (name.Equals(transfer.ProjectName, StringComparison.OrdinalIgnoreCase) ? transfer.Domain : $"{name}.test"));',
     '            var domain = NormalizeDomain(targetDomain ?? (name.Equals(transfer.ProjectName, StringComparison.OrdinalIgnoreCase) ? transfer.Domain : LocalDomainName.FromName(name)));')
 
-replace_once(
+replace_exact(
     'src/DevBox.Core/Services/EnvironmentLockService.cs',
     '        var domain = GetString(manifest, "Domain") ?? $"{projectName}.test";',
-    '        var domain = GetString(manifest, "Domain") ?? LocalDomainName.FromName(projectName);')
+    '        var domain = GetString(manifest, "Domain") ?? LocalDomainName.FromName(projectName);',
+    2)
 
 # The first snapshot hardening pass adds a local hashing implementation. Use the shared policy instead.
 replace_once(
