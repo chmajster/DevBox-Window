@@ -167,13 +167,41 @@ begin
     Result := Candidate;
 end;
 
+function IsManagedPhpMyAdmin(const RootPrefix: String): Boolean;
+var
+  PhpMyAdminPath: String;
+  PhpMyAdminVhost: String;
+  PhpMyAdminMarker: String;
+  VhostContent: AnsiString;
+begin
+  Result := False;
+  PhpMyAdminPath := RootPrefix + 'www\phpmyadmin';
+  PhpMyAdminVhost := RootPrefix + 'config\nginx\sites-enabled\phpmyadmin.test.conf';
+  PhpMyAdminMarker := PhpMyAdminPath + '\.devbox-addon';
+
+  if FileExists(PhpMyAdminMarker) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  if not FileExists(PhpMyAdminVhost) then
+    Exit;
+
+  if not LoadStringFromFile(PhpMyAdminVhost, VhostContent) then
+    Exit;
+
+  Result :=
+    (Pos('server_name phpmyadmin.test', VhostContent) > 0) and
+    (Pos('root www/phpmyadmin;', VhostContent) > 0);
+end;
+
 function RemoveGeneratedModules(const BaseDir: String): Boolean;
 var
   ModuleRoot: String;
   RootPrefix: String;
   PhpMyAdminPath: String;
   PhpMyAdminVhost: String;
-  PhpMyAdminMarker: String;
   ManagedPhpMyAdmin: Boolean;
 begin
   Result := True;
@@ -184,8 +212,7 @@ begin
   RootPrefix := AddBackslash(ModuleRoot);
   PhpMyAdminPath := RootPrefix + 'www\phpmyadmin';
   PhpMyAdminVhost := RootPrefix + 'config\nginx\sites-enabled\phpmyadmin.test.conf';
-  PhpMyAdminMarker := PhpMyAdminPath + '\.devbox-addon';
-  ManagedPhpMyAdmin := FileExists(PhpMyAdminMarker) or FileExists(PhpMyAdminVhost);
+  ManagedPhpMyAdmin := IsManagedPhpMyAdmin(RootPrefix);
 
   Log('Removing generated DevBox modules from: ' + ModuleRoot);
 
@@ -196,7 +223,7 @@ begin
   if ManagedPhpMyAdmin then
     DelTree(PhpMyAdminPath, True, True, True)
   else if DirExists(PhpMyAdminPath) then
-    Log('Preserving www\phpmyadmin because no DevBox ownership marker or legacy DevBox vhost was found.');
+    Log('Preserving www\phpmyadmin because no DevBox ownership marker or matching legacy DevBox vhost was found.');
   DeleteFile(PhpMyAdminVhost);
 
   Result :=
