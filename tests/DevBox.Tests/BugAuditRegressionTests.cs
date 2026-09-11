@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using DevBox.Core.Models;
 using DevBox.Core.Services;
 using Xunit;
 
