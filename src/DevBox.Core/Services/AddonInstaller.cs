@@ -58,6 +58,7 @@ public sealed class AddonInstaller : IDisposable
             try
             {
                 ConfigureAddon(addon);
+                AddonOwnership.WriteMarker(addon);
                 DeleteDirectoryIfExists(backupPath);
             }
             catch
@@ -89,7 +90,14 @@ public sealed class AddonInstaller : IDisposable
             throw new InvalidOperationException($"{addon.DisplayName} is not installed.");
         }
 
+        if (!AddonOwnership.IsOwned(_rootPath, addon))
+        {
+            throw new InvalidOperationException(
+                $"{addon.InstallPath} exists but is not recognized as a DevBox-managed {addon.DisplayName} installation.");
+        }
+
         ConfigureAddon(addon);
+        AddonOwnership.WriteMarker(addon);
         return Task.CompletedTask;
     }
 
@@ -103,6 +111,12 @@ public sealed class AddonInstaller : IDisposable
 
         if (Directory.Exists(addon.InstallPath))
         {
+            if (!AddonOwnership.IsOwned(_rootPath, addon))
+            {
+                throw new InvalidOperationException(
+                    $"Refusing to remove '{addon.InstallPath}' because it is not recognized as a DevBox-managed addon directory.");
+            }
+
             var trashRoot = Path.Combine(_rootPath, "tmp", "addons", "trash");
             Directory.CreateDirectory(trashRoot);
             var trashPath = Path.Combine(trashRoot, $"{addon.Key}-{Guid.NewGuid():N}");
