@@ -77,7 +77,18 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         _dialogs = dialogs;
         _shell = shell;
 
-        _definitions = _serviceCatalog.GetDefaultServices().ToDictionary(item => item.Key, StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            _definitions = _serviceCatalog.GetDefaultServices().ToDictionary(item => item.Key, StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or ArgumentException)
+        {
+            Trace.TraceError($"Managed service configuration is invalid; continuing with core services: {ex}");
+            _definitions = _serviceCatalog.GetCoreServices().ToDictionary(item => item.Key, StringComparer.OrdinalIgnoreCase);
+            _dialogs.Warning(
+                "Managed service configuration invalid",
+                $"Optional managed services were ignored so DevBox can continue with Nginx, PHP and MySQL. {ex.Message}");
+        }
         _addonDefinitions = _addonCatalog.GetDefaultAddons().ToDictionary(item => item.Key, StringComparer.OrdinalIgnoreCase);
 
         foreach (var definition in _definitions.Values)

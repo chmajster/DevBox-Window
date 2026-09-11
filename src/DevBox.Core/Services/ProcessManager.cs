@@ -129,9 +129,7 @@ public sealed class ProcessManager : IProcessManager
             if (managed is null)
                 return Stopped(definition);
 
-            try
-            {
-                var timeout = definition.ShutdownTimeout ?? TimeSpan.FromSeconds(5);
+            var timeout = definition.ShutdownTimeout ?? TimeSpan.FromSeconds(5);
                 var gracefulRequested = false;
                 if (!string.IsNullOrWhiteSpace(definition.StopExecutablePath) && File.Exists(definition.StopExecutablePath))
                 {
@@ -153,7 +151,6 @@ public sealed class ProcessManager : IProcessManager
                     managed.Process.Kill(entireProcessTree: true);
                     await managed.Process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
                 }
-            }
             AppendLog(managed, "APP", "Stopped.");
             CleanupStoppedProcess(definition, managed);
             return Stopped(definition);

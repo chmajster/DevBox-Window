@@ -82,6 +82,31 @@ public sealed class StartupRuntimeAuditTests
     }
 
     [Fact]
+    public void Diagnostics_InvalidManagedServiceManifest_FallsBackToCoreServices()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "devbox-invalid-services", Guid.NewGuid().ToString("N"));
+        try
+        {
+            RuntimeLayout.EnsureInitialized(root);
+            File.WriteAllText(Path.Combine(root, "config", "services.json"), "{ invalid json");
+            var catalog = new ServiceCatalog(root);
+            using var processes = new ProcessManager();
+            var diagnostics = new DiagnosticsService(root, catalog, processes);
+
+            var checks = diagnostics.Run();
+
+            Assert.Contains(checks, check => check.Name == "Managed services configuration" && !check.Success);
+            Assert.Contains(checks, check => check.Name == "Nginx executable");
+            Assert.Contains(checks, check => check.Name == "PHP FastCGI executable");
+            Assert.Contains(checks, check => check.Name == "MySQL executable");
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void RuntimeCatalog_RejectsArchiveRootTraversal()
     {
         var root = Path.Combine(Path.GetTempPath(), "devbox-runtime-catalog", Guid.NewGuid().ToString("N"));

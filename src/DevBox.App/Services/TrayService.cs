@@ -93,8 +93,10 @@ public sealed class TrayService : ITrayService
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or ArgumentException)
         {
-            ShowError("Service configuration invalid", ex.Message);
-            return;
+            definitions = _catalog.GetCoreServices();
+            ShowError(
+                "Managed service configuration invalid",
+                $"Optional managed services were ignored; core services will continue. {ex.Message}");
         }
 
         var errors = new List<string>();
