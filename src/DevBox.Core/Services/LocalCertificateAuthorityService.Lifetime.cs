@@ -8,6 +8,7 @@ public sealed partial class LocalCertificateAuthorityService : IDisposable
     internal Func<X509Certificate2, bool>? IsTrustedCurrentUserOverride { get; set; }
     internal Action<X509Certificate2>? RemoveTrustCurrentUserOverride { get; set; }
     internal Action<X509Certificate2>? RestoreTrustCurrentUserOverride { get; set; }
+    internal Action<string>? DeleteAuthorityFileOverride { get; set; }
 
     public X509Certificate2 EnsureRootTrusted() => EnsureAuthority(trustCurrentUser: true);
 
@@ -16,15 +17,14 @@ public sealed partial class LocalCertificateAuthorityService : IDisposable
         EnsureWindows();
         using var availableAuthority = LoadAvailableAuthority();
         var wasTrusted = availableAuthority is not null && ProbeTrustCurrentUser(availableAuthority);
+        var pfxState = CaptureAuthorityFile(_caPfxPath);
+        var pemState = CaptureAuthorityFile(_caPemPath);
 
         try
         {
             if (availableAuthority is not null)
                 RemoveAuthorityTrustCurrentUser(availableAuthority);
 
-            // Do not remove the DPAPI password unless both authority files were actually
-            // removed. Propagating file deletion failures keeps an existing PFX loadable
-            // instead of leaving it behind without its password.
             DeleteAuthorityFile(_caPfxPath);
             DeleteAuthorityFile(_caPemPath);
             if (File.Exists(_caPfxPath) || File.Exists(_caPemPath))
@@ -32,13 +32,45 @@ public sealed partial class LocalCertificateAuthorityService : IDisposable
 
             _secrets.Delete(PasswordSecretKey);
         }
-        catch
+        catch (Exception original)
         {
-            // File deletion can fail after trust was already removed. If the authority
-            // existed and was trusted before the transaction, restore that trust so the
-            // still-present CA remains usable and existing site certificates keep working.
+            var rollbackErrors = new List<Exception>();
+
+            try
+            {
+                RestoreAuthorityFile(_caPfxPath, pfxState);
+            }
+            catch (Exception ex)
+            {
+                rollbackErrors.Add(ex);
+            }
+
+            try
+            {
+                RestoreAuthorityFile(_caPemPath, pemState);
+            }
+            catch (Exception ex)
+            {
+                rollbackErrors.Add(ex);
+            }
+
             if (wasTrusted && availableAuthority is not null)
-                RestoreAuthorityTrustCurrentUser(availableAuthority);
+            {
+                try
+                {
+                    RestoreAuthorityTrustCurrentUser(availableAuthority);
+                }
+                catch (Exception ex)
+                {
+                    rollbackErrors.Add(ex);
+                }
+            }
+
+            if (rollbackErrors.Count > 0)
+                throw new AggregateException(
+                    "Local CA removal failed and one or more rollback operations also failed.",
+                    new[] { original }.Concat(rollbackErrors));
+
             throw;
         }
     }
@@ -109,9 +141,63 @@ public sealed partial class LocalCertificateAuthorityService : IDisposable
             store.Remove(match);
     }
 
-    private static void DeleteAuthorityFile(string path)
+    private static byte[]? CaptureAuthorityFile(string path) =>
+        File.Exists(path) ? File.ReadAllBytes(path) : null;
+
+    private void DeleteAuthorityFile(string path)
     {
+        if (!File.Exists(path))
+            return;
+
+        if (DeleteAuthorityFileOverride is not null)
+        {
+            DeleteAuthorityFileOverride(path);
+            return;
+        }
+
+        File.Delete(path);
+    }
+
+    private static void RestoreAuthorityFile(string path, byte[]? content)
+    {
+        if (content is null)
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+            return;
+        }
+
         if (File.Exists(path))
-            File.Delete(path);
+        {
+            try
+            {
+                if (File.ReadAllBytes(path).AsSpan().SequenceEqual(content))
+                    return;
+            }
+            catch (IOException)
+            {
+                // Continue to the strict restore below so the rollback failure is visible.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Continue to the strict restore below so the rollback failure is visible.
+            }
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temp = path + $".{Guid.NewGuid():N}.rollback.tmp";
+        try
+        {
+            File.WriteAllBytes(temp, content);
+            if (File.Exists(path))
+                File.Replace(temp, path, null);
+            else
+                File.Move(temp, path);
+        }
+        finally
+        {
+            if (File.Exists(temp))
+                File.Delete(temp);
+        }
     }
 }
