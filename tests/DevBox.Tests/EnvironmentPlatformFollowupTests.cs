@@ -1,3 +1,4 @@
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using DevBox.Core.Models;
 using DevBox.Core.Services;
@@ -159,6 +160,45 @@ public sealed class EnvironmentPlatformFollowupTests
     }
 
     [Fact]
+    public void SiteUpdate_RestoresVhostsWhenMetadataPersistenceFails()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var root = TemporaryRoot();
+        try
+        {
+            var project = Path.Combine(root, "www", "update-rollback");
+            Directory.CreateDirectory(project);
+            File.WriteAllText(Path.Combine(project, "index.html"), "fixture");
+
+            var sites = new SiteManager(root);
+            var original = sites.RegisterExisting("update-rollback", "old-update.test", project);
+            var oldVhost = sites.GetNginxConfigPath("old-update.test");
+            var newVhost = sites.GetNginxConfigPath("new-update.test");
+            var oldVhostContent = File.ReadAllText(oldVhost);
+            var metadataPath = Path.Combine(root, "config", "sites.json");
+
+            // Readers are allowed so GetSites can load the current metadata, but the
+            // handle prevents File.Replace from committing the updated metadata.
+            using (var metadataLock = new FileStream(metadataPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                Assert.ThrowsAny<IOException>(() =>
+                    sites.Update(original with { Domain = "new-update.test" }));
+            }
+
+            Assert.True(File.Exists(oldVhost));
+            Assert.Equal(oldVhostContent, File.ReadAllText(oldVhost));
+            Assert.False(File.Exists(newVhost));
+            Assert.Equal("old-update.test", sites.GetSites().Single().Domain);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public void LocalCa_ReplacesCorruptExistingLeafPem()
     {
         if (!OperatingSystem.IsWindows())
@@ -220,6 +260,53 @@ public sealed class EnvironmentPlatformFollowupTests
         {
             DeleteRoot(root);
         }
+    }
+
+    [Fact]
+    public void LocalCa_RemoveAuthorityCleansTrustWhenOnlyPemRemains()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var root = TemporaryRoot();
+        string? thumbprint = null;
+        try
+        {
+            using var authority = new LocalCertificateAuthorityService(root);
+            using (var certificate = authority.EnsureAuthority(trustCurrentUser: true))
+                thumbprint = certificate.Thumbprint;
+
+            Assert.True(IsRootTrusted(thumbprint));
+
+            var pfxPath = Path.Combine(root, "config", "ssl", "ca", "devbox-local-ca.pfx");
+            File.Delete(pfxPath);
+            authority.RemoveAuthority();
+
+            Assert.False(IsRootTrusted(thumbprint));
+            Assert.False(File.Exists(authority.CertificatePath));
+            Assert.Null(new SecureSecretStore(root).Get("ssl.local-ca.pfx-password"));
+        }
+        finally
+        {
+            if (!string.IsNullOrWhiteSpace(thumbprint))
+                RemoveRootTrust(thumbprint);
+            DeleteRoot(root);
+        }
+    }
+
+    private static bool IsRootTrusted(string thumbprint)
+    {
+        using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
+        store.Open(OpenFlags.ReadOnly);
+        return store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, validOnly: false).Count > 0;
+    }
+
+    private static void RemoveRootTrust(string thumbprint)
+    {
+        using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
+        store.Open(OpenFlags.ReadWrite);
+        foreach (var certificate in store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, validOnly: false))
+            store.Remove(certificate);
     }
 
     private static string TemporaryRoot()
