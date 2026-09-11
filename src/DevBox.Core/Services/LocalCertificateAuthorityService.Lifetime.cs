@@ -5,18 +5,22 @@ namespace DevBox.Core.Services;
 
 public sealed partial class LocalCertificateAuthorityService : IDisposable
 {
+    internal Func<X509Certificate2, bool>? IsTrustedCurrentUserOverride { get; set; }
+    internal Action<X509Certificate2>? RemoveTrustCurrentUserOverride { get; set; }
+    internal Action<X509Certificate2>? RestoreTrustCurrentUserOverride { get; set; }
+
     public X509Certificate2 EnsureRootTrusted() => EnsureAuthority(trustCurrentUser: true);
 
     public void RemoveAuthority()
     {
         EnsureWindows();
         using var availableAuthority = LoadAvailableAuthority();
-        var wasTrusted = availableAuthority is not null && IsTrustedCurrentUser(availableAuthority);
+        var wasTrusted = availableAuthority is not null && ProbeTrustCurrentUser(availableAuthority);
 
         try
         {
             if (availableAuthority is not null)
-                RemoveTrustCurrentUser(availableAuthority);
+                RemoveAuthorityTrustCurrentUser(availableAuthority);
 
             // Do not remove the DPAPI password unless both authority files were actually
             // removed. Propagating file deletion failures keeps an existing PFX loadable
@@ -34,7 +38,7 @@ public sealed partial class LocalCertificateAuthorityService : IDisposable
             // existed and was trusted before the transaction, restore that trust so the
             // still-present CA remains usable and existing site certificates keep working.
             if (wasTrusted && availableAuthority is not null)
-                TrustCurrentUser(availableAuthority);
+                RestoreAuthorityTrustCurrentUser(availableAuthority);
             throw;
         }
     }
@@ -63,6 +67,31 @@ public sealed partial class LocalCertificateAuthorityService : IDisposable
             return LoadAuthority();
 
         return null;
+    }
+
+    private bool ProbeTrustCurrentUser(X509Certificate2 certificate) =>
+        IsTrustedCurrentUserOverride?.Invoke(certificate) ?? IsTrustedCurrentUser(certificate);
+
+    private void RemoveAuthorityTrustCurrentUser(X509Certificate2 certificate)
+    {
+        if (RemoveTrustCurrentUserOverride is not null)
+        {
+            RemoveTrustCurrentUserOverride(certificate);
+            return;
+        }
+
+        RemoveTrustCurrentUser(certificate);
+    }
+
+    private void RestoreAuthorityTrustCurrentUser(X509Certificate2 certificate)
+    {
+        if (RestoreTrustCurrentUserOverride is not null)
+        {
+            RestoreTrustCurrentUserOverride(certificate);
+            return;
+        }
+
+        TrustCurrentUser(certificate);
     }
 
     private static bool IsTrustedCurrentUser(X509Certificate2 certificate)
