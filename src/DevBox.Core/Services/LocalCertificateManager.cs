@@ -5,6 +5,14 @@ using DevBox.Core.Models;
 
 namespace DevBox.Core.Services;
 
+public sealed class CertificateTrustStoreException : Exception
+{
+    public CertificateTrustStoreException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
 public sealed partial class LocalCertificateManager
 {
     private readonly string _certificateRoot;
@@ -29,9 +37,7 @@ public sealed partial class LocalCertificateManager
             {
                 using var existing = X509Certificate2.CreateFromPemFile(certificatePath, privateKeyPath);
                 if (existing.NotAfter.ToUniversalTime() > DateTime.UtcNow.AddDays(7))
-                {
                     return ToModel(normalizedDomain, certificatePath, privateKeyPath, existing);
-                }
                 replacedThumbprint = existing.Thumbprint;
             }
             catch (CryptographicException)
@@ -66,9 +72,7 @@ public sealed partial class LocalCertificateManager
 
         if (!string.IsNullOrWhiteSpace(replacedThumbprint) &&
             !replacedThumbprint.Equals(certificate.Thumbprint, StringComparison.OrdinalIgnoreCase))
-        {
             RemoveTrustedThumbprint(replacedThumbprint);
-        }
 
         return ToModel(normalizedDomain, certificatePath, privateKeyPath, certificate);
     }
@@ -121,14 +125,26 @@ public sealed partial class LocalCertificateManager
             }
             catch (CryptographicException)
             {
-                // Corrupt PEM: there is no reliable thumbprint to remove. It is safe to
-                // discard the unusable local material, but trust-store failures below are
-                // deliberately not swallowed because the PEM is needed for later cleanup.
+                // Corrupt PEM: no trustworthy thumbprint can be recovered. The local
+                // material itself is unusable, so it may be removed below.
             }
         }
 
         if (!string.IsNullOrWhiteSpace(thumbprint))
-            RemoveTrustedThumbprint(thumbprint);
+        {
+            try
+            {
+                RemoveTrustedThumbprint(thumbprint);
+            }
+            catch (Exception ex) when (ex is CryptographicException or IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                // Keep cert/key files intact when the trust store cannot be updated.
+                // Callers can retry later and still have the leaf thumbprint available.
+                throw new CertificateTrustStoreException(
+                    $"Could not remove certificate trust for '{normalizedDomain}'. TLS files were preserved.",
+                    ex);
+            }
+        }
 
         DeleteIfExists(certificatePath);
         DeleteIfExists(privateKeyPath);
