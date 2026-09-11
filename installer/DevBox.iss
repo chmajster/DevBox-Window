@@ -60,6 +60,16 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDi
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait; Tasks: launchafterinstall
 
+; DevBox modules are downloaded/generated after Setup, so they are not automatically
+; tracked by Inno Setup. Remove only managed module paths; keep user projects in www.
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\runtime"
+Type: filesandordirs; Name: "{app}\tmp\runtimes"
+Type: filesandordirs; Name: "{app}\tmp\runtime-imports"
+Type: filesandordirs; Name: "{app}\tmp\addons"
+Type: filesandordirs; Name: "{app}\www\phpmyadmin"
+Type: files; Name: "{app}\config\nginx\sites-enabled\phpmyadmin.test.conf"
+
 [Code]
 const
   AppUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{C87C96C9-E130-4BB4-90A2-14F80D69B58F}_is1';
@@ -157,6 +167,24 @@ begin
     Result := Candidate;
 end;
 
+procedure RemoveGeneratedModules(const BaseDir: String);
+var
+  ModuleRoot: String;
+begin
+  if BaseDir = '' then
+    Exit;
+
+  ModuleRoot := RemoveBackslashUnlessRoot(BaseDir);
+  Log('Removing generated DevBox modules from: ' + ModuleRoot);
+
+  DelTree(AddBackslash(ModuleRoot) + 'runtime', True, True, True);
+  DelTree(AddBackslash(ModuleRoot) + 'tmp\runtimes', True, True, True);
+  DelTree(AddBackslash(ModuleRoot) + 'tmp\runtime-imports', True, True, True);
+  DelTree(AddBackslash(ModuleRoot) + 'tmp\addons', True, True, True);
+  DelTree(AddBackslash(ModuleRoot) + 'www\phpmyadmin', True, True, True);
+  DeleteFile(AddBackslash(ModuleRoot) + 'config\nginx\sites-enabled\phpmyadmin.test.conf');
+end;
+
 function RunExistingUninstaller(const SilentMode: Boolean): Boolean;
 var
   Uninstaller: String;
@@ -220,7 +248,7 @@ begin
     False);
 
   MaintenancePage.Add('&Upgrade / update - keep the installation and replace application files');
-  MaintenancePage.Add('&Reinstall - remove the installed application first, then install this package');
+  MaintenancePage.Add('&Reinstall - remove the application and downloaded modules, then install this package');
   MaintenancePage.Add('&Uninstall - remove DevBox and exit Setup');
 
   if InstalledVersion = '{#MyAppVersion}' then
@@ -241,6 +269,8 @@ begin
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  PreviousInstallLocation: String;
 begin
   Result := True;
 
@@ -256,14 +286,18 @@ begin
     1:
       begin
         Log('Existing installation action selected: reinstall.');
+        PreviousInstallLocation := InstalledLocation;
         if not RunExistingUninstaller(True) then
         begin
           Result := False;
           Exit;
         end;
 
+        // The old uninstaller may predate [UninstallDelete], therefore perform
+        // explicit cleanup here as well so the first reinstall also removes modules.
+        RemoveGeneratedModules(PreviousInstallLocation);
         ExistingInstallation := False;
-        Log('Existing installation removed successfully; continuing with reinstall.');
+        Log('Existing installation and generated modules removed successfully; continuing with reinstall.');
       end;
 
     2:
@@ -277,14 +311,16 @@ begin
         end;
 
         Log('Existing installation action selected: uninstall.');
+        PreviousInstallLocation := InstalledLocation;
         if not RunExistingUninstaller(False) then
         begin
           Result := False;
           Exit;
         end;
 
+        RemoveGeneratedModules(PreviousInstallLocation);
         MaintenanceExit := True;
-        MsgBox('DevBox was uninstalled successfully.', mbInformation, MB_OK);
+        MsgBox('DevBox and downloaded modules were uninstalled successfully.', mbInformation, MB_OK);
         PostMessage(WizardForm.Handle, WM_CLOSE, 0, 0);
         Result := False;
       end;

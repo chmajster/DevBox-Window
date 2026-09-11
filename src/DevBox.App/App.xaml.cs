@@ -110,9 +110,16 @@ public partial class App : System.Windows.Application
         });
 
         var readiness = _serviceProvider.GetRequiredService<EnvironmentReadinessService>().Check();
-        if (readiness.Items.Any(item => !item.Ready))
+        var environmentIncomplete = readiness.Items.Any(item => !item.Ready);
+        if (environmentIncomplete)
         {
-            _serviceProvider.GetRequiredService<FirstRunWindow>().ShowDialog();
+            TryWriteStartupLog("Environment is incomplete. DevBox will open the Modules tab so missing components can be installed without blocking startup.");
+        }
+
+        var viewModel = _serviceProvider.GetRequiredService<MainWindowViewModel>();
+        if (environmentIncomplete)
+        {
+            viewModel.NavigateCommand.Execute("Runtimes");
         }
 
         var window = _serviceProvider.GetRequiredService<MainWindow>();
