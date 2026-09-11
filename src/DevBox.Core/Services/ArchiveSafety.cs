@@ -13,7 +13,8 @@ internal static class ArchiveSafety
         string destination,
         long maximumBytes,
         string packageName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IProgress<int>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(uri);
@@ -24,6 +25,7 @@ internal static class ArchiveSafety
             throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         }
 
+        progress?.Report(0);
         using var response = await httpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
@@ -35,7 +37,8 @@ internal static class ArchiveSafety
 
         await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         await using var target = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true);
-        await CopyToWithLimitAsync(source, target, maximumBytes, packageName, cancellationToken).ConfigureAwait(false);
+        await CopyToWithLimitAsync(source, target, maximumBytes, declaredLength, packageName, cancellationToken, progress).ConfigureAwait(false);
+        progress?.Report(100);
     }
 
     public static void ExtractZipSafely(
@@ -115,11 +118,14 @@ internal static class ArchiveSafety
         Stream source,
         Stream target,
         long maximumBytes,
+        long? declaredLength,
         string packageName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IProgress<int>? progress)
     {
         var buffer = new byte[81920];
         long total = 0;
+        var lastProgress = -1;
         while (true)
         {
             var read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken).ConfigureAwait(false);
@@ -135,6 +141,16 @@ internal static class ArchiveSafety
             }
 
             await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+
+            if (progress is not null && declaredLength is > 0)
+            {
+                var percentage = (int)Math.Min(100L, total * 100L / declaredLength.Value);
+                if (percentage != lastProgress)
+                {
+                    lastProgress = percentage;
+                    progress.Report(percentage);
+                }
+            }
         }
     }
 
