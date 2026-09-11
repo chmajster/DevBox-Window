@@ -1,0 +1,43 @@
+name: Apply snapshot hardening
+
+on:
+  push:
+    branches:
+      - fix/snapshot-hardening-2026-09-11
+    paths:
+      - .github/snapshot-hardening-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/snapshot-hardening-2026-09-11
+          fetch-depth: 0
+
+      - name: Apply fixes
+        shell: pwsh
+        run: python .github/scripts/apply_snapshot_hardening.py
+
+      - name: Validate diff
+        shell: pwsh
+        run: |
+          git diff --check
+          dotnet build DevBox.sln --configuration Release
+          dotnet test DevBox.sln --configuration Release --no-build
+
+      - name: Commit fixes
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/DevBox.Core/Services/ProjectSnapshotService.cs
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "fix: harden project snapshot lifecycle"
+            git push origin HEAD:fix/snapshot-hardening-2026-09-11
+          }
