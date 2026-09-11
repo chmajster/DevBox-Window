@@ -7,7 +7,7 @@ namespace DevBox.Tests;
 public sealed class OnlineModuleDeliveryTests
 {
     [Fact]
-    public void RuntimeRow_RemotePhpPackage_ExposesDownloadAction()
+    public void RuntimeRow_RemotePhpPackage_ExposesInstallAction()
     {
         var package = new RuntimePackageEntry
         {
@@ -33,7 +33,35 @@ public sealed class OnlineModuleDeliveryTests
     }
 
     [Fact]
-    public void AddonRow_NotInstalled_UsesDownloadLabel()
+    public void RuntimeRow_InstallProgress_ExposesPercentageAndStage()
+    {
+        var package = new RuntimePackageEntry
+        {
+            Key = "php",
+            DisplayName = "PHP",
+            Version = "8.5.10",
+            Architecture = "x64",
+            ExecutableRelativePath = "php-cgi.exe",
+            DownloadUrl = "https://example.test/php.zip",
+            Sha256 = new string('a', 64),
+            Recommended = true
+        };
+
+        var row = new RuntimeRowViewModel(
+            new RuntimeVersionStatus(package, Installed: false, Active: false, Valid: false, RuntimeSupportState.Current),
+            Path.GetTempPath());
+
+        row.BeginInstall();
+        row.SetInstallProgress(42);
+
+        Assert.False(row.CanDownload);
+        Assert.Equal(42, row.ProgressPercent);
+        Assert.Equal("42%", row.ProgressText);
+        Assert.Equal("Downloading... 42%", row.Status);
+    }
+
+    [Fact]
+    public void AddonRow_NotInstalled_UsesInstallLabel()
     {
         var addon = new AddonDefinition(
             "phpmyadmin",
@@ -51,7 +79,7 @@ public sealed class OnlineModuleDeliveryTests
         var row = new AddonRowViewModel(addon);
         row.ApplyInstallation(installed: false);
 
-        Assert.Equal("Download", row.InstallAction);
+        Assert.Equal("Install", row.InstallAction);
         Assert.Equal("Not installed", row.Status);
     }
 }
