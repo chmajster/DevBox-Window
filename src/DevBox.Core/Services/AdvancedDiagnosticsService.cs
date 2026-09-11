@@ -167,10 +167,9 @@ public sealed class AdvancedDiagnosticsService
                 findings.Add(Warning($"site-vhost-{site.Name}", "Sites", "Generated Nginx vhost is missing.", vhost, "Run Project/Site repair."));
             if (site.HttpsEnabled)
             {
-                var cert = Path.Combine(_rootPath, "config", "ssl", "sites", $"{site.Domain}.crt.pem");
-                var key = Path.Combine(_rootPath, "config", "ssl", "sites", $"{site.Domain}.key.pem");
-                if (!File.Exists(cert) || !File.Exists(key))
-                    findings.Add(Error($"site-tls-{site.Name}", "TLS", "HTTPS is enabled but certificate material is missing.", site.Domain, "Reissue the Site certificate."));
+                var certificates = new LocalCertificateManager(_rootPath);
+                if (!certificates.IsMaterialValid(site.Domain))
+                    findings.Add(Error($"site-tls-{site.Name}", "TLS", "HTTPS is enabled but certificate material is missing, invalid, expired, mismatched, or issued for another domain.", site.Domain, "Reissue the Site certificate."));
             }
         }
     }

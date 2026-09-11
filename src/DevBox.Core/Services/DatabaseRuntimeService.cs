@@ -57,6 +57,7 @@ public sealed class DatabaseRuntimeService : IDisposable
         if (!File.Exists(executable))
             throw new FileNotFoundException($"{DisplayEngine(kind)} server executable was not found for version {version}.", executable);
 
+        using var registrationLock = AcquireRegistrationLock();
         var registrations = LoadRegistrations().ToList();
         var index = registrations.FindIndex(item => item.Engine.Equals(normalizedEngine, StringComparison.OrdinalIgnoreCase) && item.Version.Equals(version, StringComparison.OrdinalIgnoreCase));
         var existing = index >= 0 ? registrations[index] : null;
@@ -179,46 +180,57 @@ public sealed class DatabaseRuntimeService : IDisposable
             ? Path.Combine(backupRoot, $"{databaseName}-{DateTime.UtcNow:yyyyMMdd-HHmmss}{extension}")
             : Path.GetFullPath(destinationPath);
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        var temporaryDestination = destination + $".{Guid.NewGuid():N}.tmp";
 
-        if (kind == DatabaseEngineKind.PostgreSql)
+        try
         {
-            var executable = Path.Combine(RuntimePath(registration.Engine, version), "bin", "pg_dump.exe");
-            EnsureExecutable(executable);
-            var result = await RunProcessAsync(
-                executable,
-                ["-h", options.Host, "-p", options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), "-U", options.User, "-Fc", "-f", destination, databaseName],
-                _rootPath,
-                PasswordEnvironment(options, kind),
-                null,
-                cancellationToken).ConfigureAwait(false);
-            EnsureSuccess(result, "PostgreSQL backup");
-        }
-        else
-        {
-            var runtime = RuntimePath(registration.Engine, version);
-            var executable = FirstExisting(Path.Combine(runtime, "bin", "mysqldump.exe"), Path.Combine(runtime, "bin", "mariadb-dump.exe"))
-                ?? throw new FileNotFoundException($"{DisplayEngine(kind)} dump client was not found.");
-            var defaults = CreateMySqlDefaultsFile(options);
-            try
+            if (kind == DatabaseEngineKind.PostgreSql)
             {
+                var executable = Path.Combine(RuntimePath(registration.Engine, version), "bin", "pg_dump.exe");
+                EnsureExecutable(executable);
                 var result = await RunProcessAsync(
                     executable,
-                    [$"--defaults-extra-file={defaults}", "--single-transaction", "--routines", "--events", "--triggers", databaseName],
-                    runtime,
+                    ["-h", options.Host, "-p", options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), "-U", options.User, "-Fc", "-f", temporaryDestination, databaseName],
+                    _rootPath,
+                    PasswordEnvironment(options, kind),
                     null,
-                    destination,
                     cancellationToken).ConfigureAwait(false);
-                EnsureSuccess(result, $"{DisplayEngine(kind)} backup");
+                EnsureSuccess(result, "PostgreSQL backup");
             }
-            finally
+            else
             {
-                TryDeleteFile(defaults);
+                var runtime = RuntimePath(registration.Engine, version);
+                var executable = FirstExisting(Path.Combine(runtime, "bin", "mysqldump.exe"), Path.Combine(runtime, "bin", "mariadb-dump.exe"))
+                    ?? throw new FileNotFoundException($"{DisplayEngine(kind)} dump client was not found.");
+                var defaults = CreateMySqlDefaultsFile(options);
+                try
+                {
+                    var result = await RunProcessAsync(
+                        executable,
+                        [$"--defaults-extra-file={defaults}", "--single-transaction", "--routines", "--events", "--triggers", databaseName],
+                        runtime,
+                        null,
+                        temporaryDestination,
+                        cancellationToken).ConfigureAwait(false);
+                    EnsureSuccess(result, $"{DisplayEngine(kind)} backup");
+                }
+                finally
+                {
+                    TryDeleteFile(defaults);
+                }
             }
+
+            var temporaryInfo = new FileInfo(temporaryDestination);
+            if (!temporaryInfo.Exists)
+                throw new InvalidDataException("Database backup command completed without creating the backup file.");
+            File.Move(temporaryDestination, destination, overwrite: true);
+        }
+        finally
+        {
+            TryDeleteFile(temporaryDestination);
         }
 
         var info = new FileInfo(destination);
-        if (!info.Exists)
-            throw new InvalidDataException("Database backup command completed without creating the backup file.");
         return new DatabaseBackupResult(registration.Engine, databaseName, destination, info.Length, DateTimeOffset.UtcNow);
     }
 
@@ -242,6 +254,7 @@ public sealed class DatabaseRuntimeService : IDisposable
         if (kind == DatabaseEngineKind.PostgreSql)
         {
             var runtime = RuntimePath(registration.Engine, version);
+            await EnsurePostgreSqlDatabaseAsync(runtime, databaseName, options, cancellationToken).ConfigureAwait(false);
             var executable = Path.Combine(runtime, "bin", "pg_restore.exe");
             EnsureExecutable(executable);
             var result = await RunProcessAsync(
@@ -272,6 +285,39 @@ public sealed class DatabaseRuntimeService : IDisposable
         {
             TryDeleteFile(defaultsFile);
         }
+    }
+
+    private static async Task EnsurePostgreSqlDatabaseAsync(
+        string runtime,
+        string databaseName,
+        DatabaseConnectionOptions options,
+        CancellationToken cancellationToken)
+    {
+        var psql = Path.Combine(runtime, "bin", "psql.exe");
+        var createdb = Path.Combine(runtime, "bin", "createdb.exe");
+        EnsureExecutable(psql);
+        EnsureExecutable(createdb);
+        var port = options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var environment = PasswordEnvironment(options, DatabaseEngineKind.PostgreSql);
+        var exists = await RunProcessAsync(
+            psql,
+            ["-h", options.Host, "-p", port, "-U", options.User, "-d", "postgres", "-tA", "-c", $"SELECT 1 FROM pg_database WHERE datname = '{databaseName}';"],
+            runtime,
+            environment,
+            null,
+            cancellationToken).ConfigureAwait(false);
+        EnsureSuccess(exists, "PostgreSQL database existence check");
+        if (exists.StandardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Contains("1", StringComparer.Ordinal))
+            return;
+
+        var create = await RunProcessAsync(
+            createdb,
+            ["-h", options.Host, "-p", port, "-U", options.User, databaseName],
+            runtime,
+            environment,
+            null,
+            cancellationToken).ConfigureAwait(false);
+        EnsureSuccess(create, "PostgreSQL target database creation");
     }
 
     public void Dispose()
@@ -335,6 +381,24 @@ public sealed class DatabaseRuntimeService : IDisposable
         finally
         {
             TryDeleteFile(defaults);
+        }
+    }
+
+    private FileStream AcquireRegistrationLock()
+    {
+        var lockPath = _registrationsPath + ".lock";
+        Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (true)
+        {
+            try
+            {
+                return new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException) when (DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(25);
+            }
         }
     }
 

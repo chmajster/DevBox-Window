@@ -84,6 +84,10 @@ public sealed class GitProjectBootstrapService
                     actions = await RunSafeDetectedBootstrapAsync(projectRoot, detection.Kind, cancellationToken).ConfigureAwait(false);
             }
 
+            var failedAction = actions.FirstOrDefault(action => !action.Succeeded);
+            if (failedAction is not null)
+                throw new InvalidOperationException($"Bootstrap action '{failedAction.Key}' failed with exit code {failedAction.ExitCode}: {TrimOutput(failedAction.StandardError)}");
+
             return new GitBootstrapResult(projectRoot, detection.Kind, environment, actions);
         }
         catch

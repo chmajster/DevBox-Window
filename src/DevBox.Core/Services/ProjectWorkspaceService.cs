@@ -86,43 +86,63 @@ public sealed partial class ProjectWorkspaceService
     {
         ArgumentNullException.ThrowIfNull(request);
         if (request.Kind == ProjectKind.Node)
-        {
             throw new InvalidOperationException("Node-only projects are not served by the current PHP/Nginx Site model. Import the project first and run its Node service separately.");
-        }
 
         var projectRoot = Path.Combine(_wwwRoot, NormalizeProjectDirectoryName(request.Name));
-        Directory.CreateDirectory(projectRoot);
-        var documentRoot = UsesPublicDocumentRoot(request.Kind)
-            ? Path.Combine(projectRoot, "public")
-            : projectRoot;
-        Directory.CreateDirectory(documentRoot);
+        var projectRootExisted = Directory.Exists(projectRoot);
+        if (projectRootExisted && Directory.EnumerateFileSystemEntries(projectRoot).Any())
+            throw new InvalidOperationException($"Project destination is not empty: {projectRoot}");
 
-        var site = _siteManager.Create(request.Name, request.Domain, documentRoot);
-        if (!string.IsNullOrWhiteSpace(request.PhpVersion))
+        var rollbackDomain = request.Domain ?? $"{NormalizeProjectDirectoryName(request.Name)}.test";
+        var tlsRollback = new TlsRollbackStateService(_rootPath);
+        var tlsState = tlsRollback.Capture(rollbackDomain);
+        var siteCreated = false;
+        try
         {
-            site = _siteManager.SetPhpVersion(site.Name, request.PhpVersion);
-        }
+            Directory.CreateDirectory(projectRoot);
+            var documentRoot = UsesPublicDocumentRoot(request.Kind)
+                ? Path.Combine(projectRoot, "public")
+                : projectRoot;
+            Directory.CreateDirectory(documentRoot);
 
-        if (request.Https)
+            var site = _siteManager.Create(request.Name, request.Domain, documentRoot);
+            siteCreated = true;
+            if (!string.IsNullOrWhiteSpace(request.PhpVersion))
+                site = _siteManager.SetPhpVersion(site.Name, request.PhpVersion);
+
+            if (request.Https)
+            {
+                _certificateManager.Ensure(site.Domain);
+                site = _siteManager.SetHttps(site.Name, true);
+            }
+
+            EnsurePlaceholderEntryPoint(projectRoot, documentRoot, request.Kind);
+            SaveManifest(projectRoot, new DevBoxProjectManifest(
+                DevBoxProjectManifest.CurrentSchemaVersion,
+                site.Name,
+                site.Domain,
+                request.Kind,
+                site.PhpVersion,
+                request.NodeVersion,
+                NormalizeDatabaseEngine(request.DatabaseEngine),
+                string.IsNullOrWhiteSpace(request.DatabaseName) ? site.Name.Replace('-', '_') : request.DatabaseName.Trim(),
+                site.HttpsEnabled,
+                (request.Addons ?? Array.Empty<string>()).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value).ToArray()));
+
+            return site;
+        }
+        catch
         {
-            _certificateManager.Ensure(site.Domain);
-            site = _siteManager.SetHttps(site.Name, true);
+            if (siteCreated)
+            {
+                try { _siteManager.Delete(request.Name); }
+                catch (Exception) { }
+            }
+            try { tlsRollback.Restore(tlsState); }
+            catch (Exception) { }
+            RollbackOwnedProjectDirectory(projectRoot, projectRootExisted);
+            throw;
         }
-
-        EnsurePlaceholderEntryPoint(projectRoot, documentRoot, request.Kind);
-        SaveManifest(projectRoot, new DevBoxProjectManifest(
-            DevBoxProjectManifest.CurrentSchemaVersion,
-            site.Name,
-            site.Domain,
-            request.Kind,
-            site.PhpVersion,
-            request.NodeVersion,
-            NormalizeDatabaseEngine(request.DatabaseEngine),
-            string.IsNullOrWhiteSpace(request.DatabaseName) ? site.Name.Replace('-', '_') : request.DatabaseName.Trim(),
-            site.HttpsEnabled,
-            (request.Addons ?? Array.Empty<string>()).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value).ToArray()));
-
-        return site;
     }
 
     public SiteDefinition Import(ProjectImportRequest request)
@@ -131,47 +151,69 @@ public sealed partial class ProjectWorkspaceService
         var source = RequireExistingDirectory(request.SourcePath);
         var detection = Detect(source);
 
-        string projectRoot;
-        if (request.CopyIntoDevBox)
+        var projectRoot = request.CopyIntoDevBox
+            ? Path.Combine(_wwwRoot, NormalizeProjectDirectoryName(request.Name))
+            : EnsureUnderWww(source);
+        var projectRootExisted = Directory.Exists(projectRoot);
+        if (request.CopyIntoDevBox && projectRootExisted && Directory.EnumerateFileSystemEntries(projectRoot).Any())
+            throw new InvalidOperationException($"Import destination is not empty: {projectRoot}");
+
+        var manifestPath = Path.Combine(projectRoot, ManifestFileName);
+        var previousManifest = !request.CopyIntoDevBox && File.Exists(manifestPath) ? File.ReadAllBytes(manifestPath) : null;
+        var rollbackDomain = request.Domain ?? $"{NormalizeProjectDirectoryName(request.Name)}.test";
+        var tlsRollback = new TlsRollbackStateService(_rootPath);
+        var tlsState = tlsRollback.Capture(rollbackDomain);
+        var siteCreated = false;
+
+        try
         {
-            projectRoot = Path.Combine(_wwwRoot, NormalizeProjectDirectoryName(request.Name));
-            if (Directory.Exists(projectRoot) && Directory.EnumerateFileSystemEntries(projectRoot).Any())
+            if (request.CopyIntoDevBox)
             {
-                throw new InvalidOperationException($"Import destination is not empty: {projectRoot}");
+                Directory.CreateDirectory(projectRoot);
+                CopyDirectorySafely(source, projectRoot);
             }
-            Directory.CreateDirectory(projectRoot);
-            CopyDirectorySafely(source, projectRoot);
-        }
-        else
-        {
-            projectRoot = EnsureUnderWww(source);
-        }
 
-        var documentRoot = ResolveDocumentRoot(projectRoot, detection.Kind);
-        var site = _siteManager.Create(request.Name, request.Domain, documentRoot);
-        if (!string.IsNullOrWhiteSpace(request.PhpVersion))
-        {
-            site = _siteManager.SetPhpVersion(site.Name, request.PhpVersion);
-        }
-        if (request.Https)
-        {
-            _certificateManager.Ensure(site.Domain);
-            site = _siteManager.SetHttps(site.Name, true);
-        }
+            var documentRoot = ResolveDocumentRoot(projectRoot, detection.Kind);
+            var site = _siteManager.Create(request.Name, request.Domain, documentRoot);
+            siteCreated = true;
+            if (!string.IsNullOrWhiteSpace(request.PhpVersion))
+                site = _siteManager.SetPhpVersion(site.Name, request.PhpVersion);
+            if (request.Https)
+            {
+                _certificateManager.Ensure(site.Domain);
+                site = _siteManager.SetHttps(site.Name, true);
+            }
 
-        SaveManifest(projectRoot, new DevBoxProjectManifest(
-            DevBoxProjectManifest.CurrentSchemaVersion,
-            site.Name,
-            site.Domain,
-            detection.Kind,
-            site.PhpVersion,
-            null,
-            "mysql",
-            site.Name.Replace('-', '_'),
-            site.HttpsEnabled,
-            Array.Empty<string>()));
+            SaveManifest(projectRoot, new DevBoxProjectManifest(
+                DevBoxProjectManifest.CurrentSchemaVersion,
+                site.Name,
+                site.Domain,
+                detection.Kind,
+                site.PhpVersion,
+                null,
+                "mysql",
+                site.Name.Replace('-', '_'),
+                site.HttpsEnabled,
+                Array.Empty<string>()));
 
-        return site;
+            return site;
+        }
+        catch
+        {
+            if (siteCreated)
+            {
+                try { _siteManager.Delete(request.Name); }
+                catch (Exception) { }
+            }
+            try { tlsRollback.Restore(tlsState); }
+            catch (Exception) { }
+
+            if (request.CopyIntoDevBox)
+                RollbackOwnedProjectDirectory(projectRoot, projectRootExisted);
+            else
+                RestoreManifest(manifestPath, previousManifest);
+            throw;
+        }
     }
 
     public DevBoxProjectManifest? LoadManifest(string projectPath)
@@ -248,10 +290,9 @@ public sealed partial class ProjectWorkspaceService
         if (site.HttpsEnabled)
         {
             var certificate = Path.Combine(_rootPath, "config", "ssl", "sites", $"{site.Domain}.crt.pem");
-            var key = Path.Combine(_rootPath, "config", "ssl", "sites", $"{site.Domain}.key.pem");
-            checks.Add(File.Exists(certificate) && File.Exists(key)
+            checks.Add(_certificateManager.IsMaterialValid(site.Domain)
                 ? Healthy("certificate", "TLS certificate", certificate)
-                : Error("certificate", "TLS certificate", "HTTPS is enabled but the certificate or private key is missing.", true));
+                : Error("certificate", "TLS certificate", "HTTPS is enabled but certificate material is missing, invalid, expired, mismatched, or issued for another domain.", true));
         }
 
         if (detection.RequiredPhpExtensions.Count > 0)
@@ -354,6 +395,36 @@ public sealed partial class ProjectWorkspaceService
             }
         }
         return root;
+    }
+
+    private static void RollbackOwnedProjectDirectory(string projectRoot, bool existedBefore)
+    {
+        try
+        {
+            if (Directory.Exists(projectRoot))
+                Directory.Delete(projectRoot, recursive: true);
+            if (existedBefore)
+                Directory.CreateDirectory(projectRoot);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    private static void RestoreManifest(string path, byte[]? previous)
+    {
+        try
+        {
+            if (previous is null)
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+                return;
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllBytes(path, previous);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     private static bool UsesPublicDocumentRoot(ProjectKind kind) =>
