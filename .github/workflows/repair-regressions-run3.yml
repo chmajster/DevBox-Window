@@ -1,0 +1,40 @@
+name: One-shot post-merge regression repair 3
+
+on:
+  push:
+    branches:
+      - fix/post-merge-regressions-2026-09-11
+    paths:
+      - .github/workflows/repair-regressions-run3.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Apply targeted repairs
+        run: python .github/scripts/repair_regressions.py
+      - name: Apply nullable fixup
+        run: python .github/scripts/repair_regressions_fixup.py
+      - name: Fix generated regression tests
+        run: python .github/scripts/repair_test_fixup.py
+      - name: Restore
+        run: dotnet restore DevBox.sln
+      - name: Test repaired tree
+        run: dotnet test DevBox.sln --configuration Release --no-restore
+      - name: Commit repaired tree
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests installer README.md
+          git commit -m "fix: repair post-merge environment regressions"
+          git push origin HEAD:${GITHUB_REF_NAME}
