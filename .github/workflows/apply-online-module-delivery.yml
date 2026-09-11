@@ -31,14 +31,19 @@ jobs:
           grep -q 'DownloadRuntimeCommand' src/DevBox.App/ViewModels/MainWindowViewModel.cs
           grep -q 'Content="Download"' src/DevBox.App/MainWindow.xaml
 
-      - name: Commit final tree
+      - name: Commit application changes
         shell: bash
         run: |
-          rm -f .github/scripts/apply_online_module_delivery.py
-          rm -f .github/workflows/apply-online-module-delivery.yml
-          rm -f .github/online-module-delivery-trigger
+          git checkout -- .github/workflows/release.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
+          git add \
+            CHANGELOG.md \
+            packaging/Prepare-BundledRuntimes.ps1 \
+            src/DevBox.App/App.xaml.cs \
+            src/DevBox.App/MainWindow.xaml \
+            src/DevBox.App/ViewModels/MainWindowViewModel.cs \
+            src/DevBox.App/ViewModels/Rows.cs \
+            tests/DevBox.Tests/OnlineModuleDeliveryTests.cs
           git commit -m 'feat: support online PHP and phpMyAdmin delivery'
           git push origin HEAD:feat/online-php-phpmyadmin-downloads
