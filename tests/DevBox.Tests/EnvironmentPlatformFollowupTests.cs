@@ -138,8 +138,6 @@ public sealed class EnvironmentPlatformFollowupTests
             Directory.CreateDirectory(project);
             File.WriteAllText(Path.Combine(project, "index.html"), "fixture");
 
-            // A directory at the metadata path makes the final atomic move fail after
-            // the vhost has already been staged, exercising registration rollback.
             Directory.CreateDirectory(Path.Combine(root, "config", "sites.json"));
 
             var sites = new SiteManager(root);
@@ -179,8 +177,6 @@ public sealed class EnvironmentPlatformFollowupTests
             var oldVhostContent = File.ReadAllText(oldVhost);
             var metadataPath = Path.Combine(root, "config", "sites.json");
 
-            // Readers are allowed so GetSites can load the current metadata, but the
-            // handle prevents File.Replace from committing the updated metadata.
             using (var metadataLock = new FileStream(metadataPath, FileMode.Open, FileAccess.Read, FileShare.Read))
             {
                 Assert.ThrowsAny<IOException>(() =>
@@ -228,22 +224,23 @@ public sealed class EnvironmentPlatformFollowupTests
     }
 
     [Fact]
-    public void LocalCa_RemoveAuthorityKeepsPasswordWhenPfxDeletionFails()
+    public void LocalCa_RemoveAuthorityKeepsPasswordAndTrustWhenPfxDeletionFails()
     {
         if (!OperatingSystem.IsWindows())
             return;
 
         var root = TemporaryRoot();
+        string? thumbprint = null;
         try
         {
             using var authority = new LocalCertificateAuthorityService(root);
-            using (authority.EnsureAuthority(trustCurrentUser: false))
-            {
-            }
+            using (var certificate = authority.EnsureAuthority(trustCurrentUser: true))
+                thumbprint = certificate.Thumbprint;
 
             var secrets = new SecureSecretStore(root);
             const string passwordKey = "ssl.local-ca.pfx-password";
             Assert.NotNull(secrets.Get(passwordKey));
+            Assert.True(IsRootTrusted(thumbprint));
 
             var pfxPath = Path.Combine(root, "config", "ssl", "ca", "devbox-local-ca.pfx");
             using (var locked = new FileStream(pfxPath, FileMode.Open, FileAccess.Read, FileShare.None))
@@ -251,13 +248,17 @@ public sealed class EnvironmentPlatformFollowupTests
                 Assert.ThrowsAny<IOException>(() => authority.RemoveAuthority());
                 Assert.NotNull(secrets.Get(passwordKey));
                 Assert.True(File.Exists(pfxPath));
+                Assert.True(IsRootTrusted(thumbprint));
             }
 
             authority.RemoveAuthority();
             Assert.Null(secrets.Get(passwordKey));
+            Assert.False(IsRootTrusted(thumbprint));
         }
         finally
         {
+            if (!string.IsNullOrWhiteSpace(thumbprint))
+                RemoveRootTrust(thumbprint);
             DeleteRoot(root);
         }
     }
