@@ -593,7 +593,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         if (parameter is not RuntimeRowViewModel runtime || !runtime.CanDownload) return;
 
         runtime.BeginInstall();
-        var progress = new Progress<int>(runtime.SetInstallProgress);
+        var progress = new DispatcherProgress<int>(Application.Current.Dispatcher, runtime.SetInstallProgress);
         _definitions.TryGetValue(runtime.Key, out var service);
         var wasRunning = service is not null && _processManager.GetStatus(service).State == ServiceState.Running;
 
@@ -606,19 +606,6 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
             // RuntimeManager verifies SHA-256, installs atomically and reports each installation stage.
             await _runtimePlatformService.InstallAsync(runtime.Key, runtime.Version, progress);
-
-            if (wasRunning)
-            {
-                await _processManager.StartAsync(service!);
-            }
-
-            runtime.SetInstallProgress(100);
-            RefreshRuntimes();
-            RefreshStatuses();
-            RefreshDiagnostics();
-            _dialogs.Info(
-                $"{runtime.Name} installed",
-                $"{runtime.Name} {runtime.Version} was downloaded, verified, installed and activated.");
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException or FileNotFoundException or Win32Exception)
         {
@@ -642,7 +629,35 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             RefreshStatuses();
             RefreshDiagnostics();
             _dialogs.Error($"{runtime.Name} installation failed", ex.Message);
+            return;
         }
+
+        runtime.SetInstallProgress(100);
+
+        if (wasRunning && service is not null)
+        {
+            try
+            {
+                await _processManager.StartAsync(service);
+            }
+            catch (Exception restartError) when (restartError is IOException or UnauthorizedAccessException or InvalidOperationException or FileNotFoundException or Win32Exception)
+            {
+                RefreshRuntimes();
+                RefreshStatuses();
+                RefreshDiagnostics();
+                _dialogs.Warning(
+                    $"{runtime.Name} installed",
+                    $"{runtime.Name} {runtime.Version} was installed and activated, but {service.DisplayName} could not be restarted: {restartError.Message}");
+                return;
+            }
+        }
+
+        RefreshRuntimes();
+        RefreshStatuses();
+        RefreshDiagnostics();
+        _dialogs.Info(
+            $"{runtime.Name} installed",
+            $"{runtime.Name} {runtime.Version} was downloaded, verified, installed and activated.");
     }
 
     private async Task ActivateRuntimeAsync(object? parameter)
@@ -904,6 +919,17 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
     private static bool IsExpectedAddonError(Exception ex) =>
         ex is HttpRequestException or InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException or FileNotFoundException or Win32Exception;
+
+    private sealed class DispatcherProgress<T>(Dispatcher dispatcher, Action<T> callback) : IProgress<T>
+    {
+        public void Report(T value)
+        {
+            if (dispatcher.CheckAccess())
+                callback(value);
+            else
+                dispatcher.Invoke(() => callback(value));
+        }
+    }
 
     private enum ServiceAction
     {
