@@ -1,5 +1,6 @@
 using DevBox.App.ViewModels;
 using DevBox.Core.Models;
+using Xunit;
 
 namespace DevBox.Tests;
 
