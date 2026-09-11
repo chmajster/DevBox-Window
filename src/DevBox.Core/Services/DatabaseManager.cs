@@ -54,7 +54,7 @@ public sealed partial class DatabaseManager
         DatabaseConnectionOptions options,
         CancellationToken cancellationToken = default)
     {
-        var safeName = ValidateDatabaseName(databaseName);
+        var safeName = ValidateMutableDatabaseName(databaseName);
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
         EnsureExecutable(_mysqlExecutable);
@@ -96,19 +96,13 @@ public sealed partial class DatabaseManager
         var source = ValidateDatabaseName(sourceDatabase);
         var destination = ValidateMutableDatabaseName(destinationDatabase);
         if (source.Equals(destination, StringComparison.OrdinalIgnoreCase))
-        {
             throw new ArgumentException("Source and destination database names must be different.", nameof(destinationDatabase));
-        }
 
         var databases = await ListDatabasesAsync(options, cancellationToken).ConfigureAwait(false);
         if (!databases.Contains(source, StringComparer.OrdinalIgnoreCase))
-        {
             throw new InvalidOperationException($"Source database '{source}' does not exist.");
-        }
         if (databases.Contains(destination, StringComparer.OrdinalIgnoreCase))
-        {
             throw new InvalidOperationException($"Destination database '{destination}' already exists.");
-        }
 
         var tempDirectory = Path.Combine(_rootPath, "tmp", "mysql", "clone");
         Directory.CreateDirectory(tempDirectory);
@@ -142,9 +136,7 @@ public sealed partial class DatabaseManager
         finally
         {
             if (File.Exists(backupPath))
-            {
                 File.Delete(backupPath);
-            }
         }
     }
 
@@ -199,15 +191,11 @@ public sealed partial class DatabaseManager
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .FirstOrDefault();
             if (line is null)
-            {
                 throw new InvalidOperationException($"Database '{safeName}' does not exist.");
-            }
 
             var fields = line.Split('\t');
             if (fields.Length != 4 || !long.TryParse(fields[3], out var sizeBytes))
-            {
                 throw new InvalidDataException("MySQL returned an unexpected database metadata format.");
-            }
 
             return new DatabaseInfo(fields[0], fields[1], fields[2], sizeBytes);
         }).ConfigureAwait(false);
@@ -255,7 +243,7 @@ public sealed partial class DatabaseManager
         DatabaseConnectionOptions options,
         CancellationToken cancellationToken = default)
     {
-        var safeName = ValidateDatabaseName(databaseName);
+        var safeName = ValidateMutableDatabaseName(databaseName);
         ArgumentException.ThrowIfNullOrWhiteSpace(sqlFilePath);
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
@@ -263,9 +251,7 @@ public sealed partial class DatabaseManager
 
         var fullSqlPath = Path.GetFullPath(sqlFilePath);
         if (!File.Exists(fullSqlPath))
-        {
             throw new FileNotFoundException("SQL backup file was not found.", fullSqlPath);
-        }
 
         await CreateDatabaseAsync(safeName, options, cancellationToken).ConfigureAwait(false);
         await WithClientConfigAsync(options, configPath => RunAsync(
@@ -286,9 +272,7 @@ public sealed partial class DatabaseManager
         }
 
         if (options is null || !File.Exists(_mysqlAdminExecutable))
-        {
             return false;
-        }
 
         options.Validate();
         await WithClientConfigAsync(options, configPath => RunAsync(
@@ -314,9 +298,7 @@ public sealed partial class DatabaseManager
         ArgumentException.ThrowIfNullOrWhiteSpace(databaseName);
         var normalized = databaseName.Trim();
         if (!DatabaseNameRegex().IsMatch(normalized))
-        {
             throw new ArgumentException("Database name may contain only letters, digits and underscores and must be 1-64 characters long.", nameof(databaseName));
-        }
         return normalized;
     }
 
@@ -324,9 +306,7 @@ public sealed partial class DatabaseManager
     {
         var normalized = ValidateDatabaseName(databaseName);
         if (SystemDatabases.Contains(normalized))
-        {
             throw new InvalidOperationException($"System database '{normalized}' cannot be modified by DevBox.");
-        }
         return normalized;
     }
 
@@ -344,9 +324,7 @@ public sealed partial class DatabaseManager
         {
             var full = Path.GetFullPath(destinationPath);
             if (!full.EndsWith(".sql", StringComparison.OrdinalIgnoreCase))
-            {
                 throw new ArgumentException("Database backup destination must use the .sql extension.", nameof(destinationPath));
-            }
             return full;
         }
 
@@ -354,9 +332,7 @@ public sealed partial class DatabaseManager
         return Path.Combine(_rootPath, "backups", "databases", fileName);
     }
 
-    private async Task<T> WithClientConfigAsync<T>(
-        DatabaseConnectionOptions options,
-        Func<string, Task<T>> operation)
+    private async Task<T> WithClientConfigAsync<T>(DatabaseConnectionOptions options, Func<string, Task<T>> operation)
     {
         var tempDirectory = Path.Combine(_rootPath, "tmp", "mysql");
         Directory.CreateDirectory(tempDirectory);
@@ -371,9 +347,7 @@ public sealed partial class DatabaseManager
                 .Append("user=").AppendLine(QuoteOptionValue(options.User));
 
             if (options.Password is not null)
-            {
                 config.Append("password=").AppendLine(QuoteOptionValue(options.Password));
-            }
 
             File.WriteAllText(configPath, config.ToString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             File.SetAttributes(configPath, File.GetAttributes(configPath) | FileAttributes.Hidden | FileAttributes.Temporary);
@@ -387,9 +361,7 @@ public sealed partial class DatabaseManager
         }
     }
 
-    private async Task WithClientConfigAsync(
-        DatabaseConnectionOptions options,
-        Func<string, Task> operation)
+    private async Task WithClientConfigAsync(DatabaseConnectionOptions options, Func<string, Task> operation)
     {
         await WithClientConfigAsync<object?>(options, async configPath =>
         {
@@ -417,17 +389,13 @@ public sealed partial class DatabaseManager
 
         startInfo.ArgumentList.Add($"--defaults-extra-file={clientConfigPath}");
         foreach (var argument in arguments)
-        {
             startInfo.ArgumentList.Add(argument);
-        }
 
         using var process = new Process { StartInfo = startInfo };
         try
         {
             if (!process.Start())
-            {
                 throw new InvalidOperationException($"Unable to start {Path.GetFileName(executable)}.");
-            }
         }
         catch (Win32Exception ex)
         {
@@ -462,11 +430,9 @@ public sealed partial class DatabaseManager
             var error = await errorTask.ConfigureAwait(false);
             var outputText = outputTask is null ? string.Empty : await outputTask.ConfigureAwait(false);
             if (process.ExitCode != 0)
-            {
                 throw new InvalidOperationException(string.IsNullOrWhiteSpace(error)
                     ? $"{Path.GetFileName(executable)} exited with code {process.ExitCode}."
                     : error.Trim());
-            }
 
             return new ProcessResult(outputText);
         }
@@ -506,9 +472,7 @@ public sealed partial class DatabaseManager
     private static void EnsureExecutable(string path)
     {
         if (!File.Exists(path))
-        {
             throw new FileNotFoundException("MySQL runtime is not installed or is incomplete.", path);
-        }
     }
 
     private static void SecureDeleteClientConfig(string path)
