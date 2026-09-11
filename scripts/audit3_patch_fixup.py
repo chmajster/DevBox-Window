@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 path = Path('scripts/audit3_patch.py')
 text = path.read_text(encoding='utf-8')
@@ -27,11 +28,12 @@ if start < 0 or end < 0:
     raise RuntimeError('Delete cleanup block was not found in audit3_patch.py')
 text = text[:start] + text[end:]
 
-# Correct regex replacement backreferences.
-text = text.replace(r'{\1', r'{\g<1>')
-text = text.replace(r'{\2', r'{\g<2>')
-text = text.replace(r'{\3', r'{\g<3>')
-text = text.replace(r';\1', r';\g<1>')
+# Correct regex replacement backreferences. Double escaping avoids Python SyntaxWarning
+# while still producing the \g<n> syntax expected by re.sub replacement strings.
+text = text.replace(r'{\1', r'{\\g<1>')
+text = text.replace(r'{\2', r'{\\g<2>')
+text = text.replace(r'{\3', r'{\\g<3>')
+text = text.replace(r';\1', r';\\g<1>')
 
 # Duplicate validation in the private RuntimeManager method is harmless.
 start = text.find('# Strip duplicated guards from moved Install body.')
@@ -40,18 +42,20 @@ if start < 0 or end < 0:
     raise RuntimeError('RuntimeManager cleanup block was not found in audit3_patch.py')
 text = text[:start] + text[end:]
 
-# ProjectSnapshotService contains two C# CopyTo calls with 16-space indentation.
-# Replace both in one deterministic operation. The later 12-space generator matcher
-# was intended for the same extraction call and must therefore be removed.
+# ProjectSnapshotService contains two CopyTo calls that need async/cancellation-aware copies.
+# Replace both C# occurrences in one deterministic operation, then remove every later
+# generator matcher that would try to patch an already-replaced CopyTo call again.
 first_stmt = "replace_once(snapshot, '''                input.CopyTo(output);''', '''                await input.CopyToAsync(output, 81920, cancellationToken).ConfigureAwait(false);''')"
 if first_stmt not in text:
     raise RuntimeError('Primary snapshot CopyTo patch statement was not found.')
-replacement = """snapshot_text = read(snapshot)\nif snapshot_text.count('                input.CopyTo(output);') != 2:\n    raise RuntimeError('ProjectSnapshotService: expected two 16-space CopyTo calls')\nwrite(snapshot, snapshot_text.replace('                input.CopyTo(output);', '                await input.CopyToAsync(output, 81920, cancellationToken).ConfigureAwait(false);'))"""
+replacement = """snapshot_text = read(snapshot)\nif snapshot_text.count('                input.CopyTo(output);') != 2:\n    raise RuntimeError('ProjectSnapshotService: expected two CopyTo calls')\nwrite(snapshot, snapshot_text.replace('                input.CopyTo(output);', '                await input.CopyToAsync(output, 81920, cancellationToken).ConfigureAwait(false);'))"""
 text = text.replace(first_stmt, replacement, 1)
-late_stmt = "replace_once(snapshot, '''            input.CopyTo(output);''', '''            await input.CopyToAsync(output, 81920, cancellationToken).ConfigureAwait(false);''')"
-if late_stmt not in text:
-    raise RuntimeError('Late snapshot CopyTo patch statement was not found.')
-text = text.replace(late_stmt, '', 1)
+text, removed = re.subn(
+    r"replace_once\(snapshot, '''\s+input\.CopyTo\(output\);''', '''\s+await input\.CopyToAsync\(output, 81920, cancellationToken\)\.ConfigureAwait\(false\);'''\)\n?",
+    '',
+    text)
+if removed < 1:
+    raise RuntimeError('No redundant snapshot CopyTo patch statement was found.')
 
 path.write_text(text, encoding='utf-8', newline='')
-print('Fixed TLS/runtime backreferences and snapshot async transformation.')
+print(f'Fixed TLS/runtime backreferences and snapshot async transformation; removed {removed} redundant CopyTo matcher(s).')
