@@ -186,6 +186,30 @@ public sealed class SiteManagerTests
     }
 
     [Fact]
+    public void Create_PersistenceFailure_RemovesNewEmptyDocumentRoot()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var config = Path.Combine(root, "config");
+            Directory.CreateDirectory(config);
+            Directory.CreateDirectory(Path.Combine(config, "sites.json"));
+            var manager = new SiteManager(root);
+            var documentRoot = Path.Combine(root, "www", "failed-site");
+
+            var error = Record.Exception(() => manager.Create("failed-site"));
+
+            Assert.NotNull(error);
+            Assert.False(Directory.Exists(documentRoot));
+            Assert.False(File.Exists(manager.GetNginxConfigPath("failed-site.test")));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public void Delete_RemovesMetadataAndVhostButKeepsFilesByDefault()
     {
         var root = TemporaryRoot();

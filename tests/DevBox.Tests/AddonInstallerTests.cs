@@ -169,6 +169,35 @@ $cfg['TempDir'] = 'tmp';
     }
 
     [Fact]
+    public async Task UninstallAsync_VhostDeletionFailure_RestoresAddonDirectory()
+    {
+        var root = TempRoot();
+        string? vhost = null;
+        try
+        {
+            var addon = Definition(root, new string('0', 64));
+            Directory.CreateDirectory(addon.InstallPath);
+            File.WriteAllText(addon.EntryPointPath, "keep");
+            using var installer = new AddonInstaller(root, new HttpClient(new StaticResponseHandler(Array.Empty<byte>())));
+            await installer.RepairAsync(addon);
+            vhost = Path.Combine(root, "config", "nginx", "sites-enabled", "phpmyadmin.test.conf");
+            File.SetAttributes(vhost, File.GetAttributes(vhost) | FileAttributes.ReadOnly);
+
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => installer.UninstallAsync(addon));
+
+            Assert.True(Directory.Exists(addon.InstallPath));
+            Assert.True(File.Exists(addon.EntryPointPath));
+            Assert.Equal("keep", File.ReadAllText(addon.EntryPointPath));
+        }
+        finally
+        {
+            if (vhost is not null && File.Exists(vhost))
+                File.SetAttributes(vhost, FileAttributes.Normal);
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public async Task UninstallAsync_PathOutsideWww_IsRejected()
     {
         var root = TempRoot();

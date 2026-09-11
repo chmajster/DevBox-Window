@@ -58,7 +58,6 @@ public sealed class AddonInstaller : IDisposable
             try
             {
                 ConfigureAddon(addon);
-                DeleteDirectoryIfExists(backupPath);
             }
             catch
             {
@@ -69,10 +68,12 @@ public sealed class AddonInstaller : IDisposable
                 }
                 throw;
             }
+
+            TryDeleteDirectory(backupPath);
         }
         finally
         {
-            DeleteDirectoryIfExists(tempRoot);
+            TryDeleteDirectory(tempRoot);
         }
     }
 
@@ -101,16 +102,27 @@ public sealed class AddonInstaller : IDisposable
         EnsureInstallPathIsSafe(addon);
         using var addonLock = CrossProcessFileLock.Acquire(AddonLockPath(addon), TimeSpan.FromSeconds(30));
 
+        string? trashPath = null;
         if (Directory.Exists(addon.InstallPath))
         {
             var trashRoot = Path.Combine(_rootPath, "tmp", "addons", "trash");
             Directory.CreateDirectory(trashRoot);
-            var trashPath = Path.Combine(trashRoot, $"{addon.Key}-{Guid.NewGuid():N}");
+            trashPath = Path.Combine(trashRoot, $"{addon.Key}-{Guid.NewGuid():N}");
             Directory.Move(addon.InstallPath, trashPath);
-            Directory.Delete(trashPath, recursive: true);
         }
 
-        DeleteAddonNginxConfig(addon);
+        try
+        {
+            DeleteAddonNginxConfig(addon);
+        }
+        catch
+        {
+            if (trashPath is not null && Directory.Exists(trashPath) && !Directory.Exists(addon.InstallPath))
+                Directory.Move(trashPath, addon.InstallPath);
+            throw;
+        }
+
+        TryDeleteDirectory(trashPath);
         return Task.CompletedTask;
     }
 
@@ -411,5 +423,19 @@ server {
             return;
         }
         Directory.Delete(path, recursive: true);
+    }
+
+    private static void TryDeleteDirectory(string? path)
+    {
+        try
+        {
+            DeleteDirectoryIfExists(path);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 }

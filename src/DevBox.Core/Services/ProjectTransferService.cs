@@ -41,6 +41,14 @@ public sealed class ProjectTransferService
         var manifestObject = ReadManifest(root);
         var domain = GetString(manifestObject, "Domain") ?? LocalDomainName.FromName(projectName);
         var dbFiles = databaseBackups?.Where(File.Exists).Select(Path.GetFullPath).ToArray() ?? Array.Empty<string>();
+        if (options.IncludeDatabase)
+        {
+            var duplicateBackup = dbFiles
+                .GroupBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(group => group.Count() > 1);
+            if (duplicateBackup is not null)
+                throw new ArgumentException($"Database backup list contains duplicate file name '{duplicateBackup.Key}'.", nameof(databaseBackups));
+        }
         Directory.CreateDirectory(_exportRoot);
         var destination = string.IsNullOrWhiteSpace(destinationPath)
             ? Path.Combine(_exportRoot, $"{SafeFileName(projectName)}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.devbox-project.zip")
