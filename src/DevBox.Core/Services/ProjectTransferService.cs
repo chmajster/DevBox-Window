@@ -59,7 +59,9 @@ public sealed class ProjectTransferService
             ExportedAtUtc = DateTimeOffset.UtcNow,
             ProjectDirectory = "project",
             EnvironmentLockFile = File.Exists(Path.Combine(root, EnvironmentLockService.LockFileName)) ? EnvironmentLockService.LockFileName : null,
-            DatabaseBackups = dbFiles.Select(path => Path.GetFileName(path)!).ToArray()
+            DatabaseBackups = options.IncludeDatabase
+                ? dbFiles.Select(path => Path.GetFileName(path)!).ToArray()
+                : Array.Empty<string>()
         };
 
         try

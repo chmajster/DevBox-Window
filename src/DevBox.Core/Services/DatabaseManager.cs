@@ -113,13 +113,18 @@ public sealed partial class DatabaseManager
         var tempDirectory = Path.Combine(_rootPath, "tmp", "mysql", "clone");
         Directory.CreateDirectory(tempDirectory);
         var backupPath = Path.Combine(tempDirectory, $"{source}-{Guid.NewGuid():N}.sql");
+        var restoreStarted = false;
         try
         {
             await BackupAsync(source, backupPath, options, cancellationToken).ConfigureAwait(false);
+            restoreStarted = true;
             await RestoreAsync(destination, backupPath, options, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception original)
         {
+            if (!restoreStarted)
+                throw;
+
             try
             {
                 using var rollbackTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
