@@ -34,7 +34,7 @@ public sealed class PhpWindowViewModel : ObservableObject
     {
         _phpManager = phpManager;
         _processManager = processManager;
-        _phpService = serviceCatalog.GetDefaultServices().First(service => service.Key == "php");
+        _phpService = serviceCatalog.GetCoreServices().First(service => service.Key == "php");
         _dialogs = dialogs;
         _shell = shell;
         RefreshCommand = new RelayCommand(Refresh);
@@ -126,7 +126,7 @@ public sealed class DatabaseWindowViewModel : ObservableObject
     {
         _databaseManager = databaseManager;
         _processManager = processManager;
-        _mysqlService = serviceCatalog.GetDefaultServices().First(service => service.Key == "mysql");
+        _mysqlService = serviceCatalog.GetCoreServices().First(service => service.Key == "mysql");
         _fileDialogs = fileDialogs;
         _dialogs = dialogs;
         RefreshCommand = new AsyncRelayCommand(RefreshAsync);
@@ -309,7 +309,7 @@ public sealed class SslWindowViewModel : ObservableObject
         _hostMappingService = hostMappingService;
         _processManager = processManager;
         _phpRuntimePoolManager = phpRuntimePoolManager;
-        _services = serviceCatalog.GetDefaultServices().ToDictionary(service => service.Key, StringComparer.OrdinalIgnoreCase);
+        _services = serviceCatalog.GetCoreServices().ToDictionary(service => service.Key, StringComparer.OrdinalIgnoreCase);
         _dialogs = dialogs;
         _shell = shell;
         RefreshCommand = new RelayCommand(Refresh);

@@ -75,13 +75,20 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         var bundledPath = VersionPath(definition.Key, definition.Version);
         if (Directory.Exists(bundledPath))
         {
-            ValidateRuntimeExecutable(bundledPath, definition.ExecutableRelativePath);
-            await ActivateUnderLockAsync(
-                definition.Key,
-                definition.Version,
-                definition.ExecutableRelativePath,
-                cancellationToken).ConfigureAwait(false);
-            return;
+            try
+            {
+                ValidateRuntimeExecutable(bundledPath, definition.ExecutableRelativePath);
+                await ActivateUnderLockAsync(
+                    definition.Key,
+                    definition.Version,
+                    definition.ExecutableRelativePath,
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            catch (InvalidDataException) when (definition.HasRemotePackage)
+            {
+                QuarantineInvalidRuntime(bundledPath);
+            }
         }
 
         if (!definition.HasRemotePackage)
@@ -374,6 +381,18 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
             }
             throw;
         }
+    }
+
+    private static void QuarantineInvalidRuntime(string path)
+    {
+        if (!Directory.Exists(path))
+            return;
+        var parent = Path.GetDirectoryName(Path.GetFullPath(path))
+            ?? throw new InvalidOperationException("Runtime path has no parent directory.");
+        var name = Path.GetFileName(path);
+        var quarantine = Path.Combine(parent, $".invalid-{name}-{Guid.NewGuid():N}");
+        Directory.Move(path, quarantine);
+        TryDeleteDirectory(quarantine);
     }
 
     private static void TryDeleteDirectory(string path)

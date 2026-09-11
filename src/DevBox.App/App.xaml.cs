@@ -3,6 +3,7 @@ using System.Windows;
 using DevBox.App.Services;
 using DevBox.App.ViewModels;
 using DevBox.Core.Abstractions;
+using DevBox.Core.Models;
 using DevBox.Core.Services;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -11,6 +12,7 @@ namespace DevBox.App;
 public partial class App : System.Windows.Application
 {
     private ServiceProvider? _serviceProvider;
+    private SingleInstanceGuard? _singleInstanceGuard;
 
     public static string DevBoxRoot { get; private set; } = string.Empty;
     internal static bool IsExiting { get; private set; }
@@ -24,17 +26,48 @@ public partial class App : System.Windows.Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
+        TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
 
-        var privilegedExitCode = TryRunPrivilegedCommand(e.Args);
-        if (privilegedExitCode is not null)
+        try
         {
-            Shutdown(privilegedExitCode.Value);
-            return;
+            var privilegedExitCode = TryRunPrivilegedCommand(e.Args);
+            if (privilegedExitCode is not null)
+            {
+                Shutdown(privilegedExitCode.Value);
+                return;
+            }
+
+            DevBoxRoot = ResolveRoot();
+            _singleInstanceGuard = SingleInstanceGuard.TryAcquire(DevBoxRoot);
+            if (_singleInstanceGuard is null)
+            {
+                System.Windows.MessageBox.Show(
+                    "DevBox is already running for this installation. Check the notification area if the main window is hidden.",
+                    "DevBox Windows",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                Shutdown(0);
+                return;
+            }
+
+            RuntimeLayout.EnsureInitialized(DevBoxRoot);
+            StartMainApplication(e.Args);
         }
+        catch (Exception ex)
+        {
+            TryWriteStartupLog($"Fatal startup failure: {ex}");
+            System.Windows.MessageBox.Show(
+                $"DevBox could not start.\n\n{ex.Message}\n\nSee logs/devbox-error.log for details.",
+                "DevBox startup failed",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            Shutdown(1);
+        }
+    }
 
-        DevBoxRoot = ResolveRoot();
-        RuntimeLayout.EnsureInitialized(DevBoxRoot);
-
+    private void StartMainApplication(IReadOnlyList<string> args)
+    {
         var services = new ServiceCollection();
         services.AddSingleton(new ServiceCatalog(DevBoxRoot));
         services.AddSingleton<IProcessManager, ProcessManager>();
@@ -109,86 +142,117 @@ public partial class App : System.Windows.Application
             ValidateScopes = true
         });
 
-        var readiness = _serviceProvider.GetRequiredService<EnvironmentReadinessService>().Check();
+        var readinessService = _serviceProvider.GetRequiredService<EnvironmentReadinessService>();
+        var readiness = readinessService.Check();
         if (readiness.Items.Any(item => !item.Ready))
-        {
             _serviceProvider.GetRequiredService<FirstRunWindow>().ShowDialog();
-        }
 
+        var environmentReady = readinessService.Check().Items.All(item => item.Ready);
         var window = _serviceProvider.GetRequiredService<MainWindow>();
         MainWindow = window;
         window.Show();
 
         var tray = _serviceProvider.GetRequiredService<ITrayService>();
         tray.Initialize(window);
-        _ = tray.StartConfiguredServicesAsync();
-        _ = StartConfiguredPhpPoolsAsync(_serviceProvider);
 
-        var startedFromWindows = e.Args.Any(argument => argument.Equals("--startup", StringComparison.OrdinalIgnoreCase));
         var settings = _serviceProvider.GetRequiredService<IAppSettingsService>();
-        if (startedFromWindows && settings.Current.MinimizeToTray)
+        if (settings.Current.StartServicesAutomatically && environmentReady)
         {
-            window.Hide();
+            ObserveBackgroundTask(tray.StartConfiguredServicesAsync(), "automatic service startup");
+            ObserveBackgroundTask(StartConfiguredPhpPoolsAsync(_serviceProvider), "automatic versioned PHP pool startup");
         }
+        else if (settings.Current.StartServicesAutomatically && !environmentReady)
+        {
+            TryWriteStartupLog("Automatic service startup was skipped because the first-run environment is still incomplete.");
+        }
+
+        var startedFromWindows = args.Any(argument => argument.Equals("--startup", StringComparison.OrdinalIgnoreCase));
+        if (startedFromWindows && settings.Current.MinimizeToTray)
+            window.Hide();
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
         IsExiting = true;
-        if (_serviceProvider is not null)
+        try
         {
-            StopManagedServices(_serviceProvider);
-            _serviceProvider.Dispose();
-            _serviceProvider = null;
+            if (_serviceProvider is not null)
+                StopManagedServices(_serviceProvider);
         }
-        base.OnExit(e);
+        catch (Exception ex)
+        {
+            TryWriteStartupLog($"Unexpected shutdown failure: {ex}");
+        }
+        finally
+        {
+            if (_serviceProvider is not null)
+            {
+                try
+                {
+                    _serviceProvider.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    TryWriteStartupLog($"Unable to dispose application services cleanly: {ex}");
+                }
+                _serviceProvider = null;
+            }
+
+            _singleInstanceGuard?.Dispose();
+            _singleInstanceGuard = null;
+            DispatcherUnhandledException -= OnDispatcherUnhandledException;
+            TaskScheduler.UnobservedTaskException -= OnUnobservedTaskException;
+            base.OnExit(e);
+        }
     }
 
     private static void StopManagedServices(IServiceProvider provider)
     {
+        var processManager = provider.GetRequiredService<IProcessManager>();
+        var catalog = provider.GetRequiredService<ServiceCatalog>();
+        IReadOnlyList<ServiceDefinition> definitions;
         try
         {
-            var processManager = provider.GetRequiredService<IProcessManager>();
-            var catalog = provider.GetRequiredService<ServiceCatalog>();
+            definitions = catalog.GetDefaultServices();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or ArgumentException)
+        {
+            TryWriteStartupLog($"Unable to read managed service catalog during shutdown; core services will still be stopped: {ex.Message}");
+            definitions = catalog.GetCoreServices();
+        }
 
-            TryShutdownMySqlWithRememberedCredentials(provider, processManager, catalog);
+        TryShutdownMySqlWithRememberedCredentials(provider, processManager, definitions);
 
-            foreach (var definition in catalog.GetDefaultServices())
-            {
-                try
-                {
-                    processManager.StopAsync(definition).GetAwaiter().GetResult();
-                }
-                catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
-                {
-                    TryWriteStartupLog($"Unable to stop {definition.DisplayName} during DevBox exit: {ex.Message}");
-                }
-            }
-
+        foreach (var definition in definitions)
+        {
             try
             {
-                provider.GetRequiredService<PhpRuntimePoolManager>().StopAllAsync().GetAwaiter().GetResult();
+                processManager.StopAsync(definition).GetAwaiter().GetResult();
             }
-            catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or ObjectDisposedException)
             {
-                TryWriteStartupLog($"Unable to stop versioned PHP pools during DevBox exit: {ex.Message}");
+                TryWriteStartupLog($"Unable to stop {definition.DisplayName} during DevBox exit: {ex.Message}");
             }
         }
-        catch (ObjectDisposedException)
+
+        try
         {
+            provider.GetRequiredService<PhpRuntimePoolManager>().StopAllAsync().GetAwaiter().GetResult();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or ObjectDisposedException)
+        {
+            TryWriteStartupLog($"Unable to stop versioned PHP pools during DevBox exit: {ex.Message}");
         }
     }
 
     private static void TryShutdownMySqlWithRememberedCredentials(
         IServiceProvider provider,
         IProcessManager processManager,
-        ServiceCatalog catalog)
+        IReadOnlyList<ServiceDefinition> definitions)
     {
-        var mysql = catalog.GetDefaultServices().First(service => service.Key.Equals("mysql", StringComparison.OrdinalIgnoreCase));
-        if (processManager.GetStatus(mysql).State != DevBox.Core.Models.ServiceState.Running)
-        {
+        var mysql = definitions.FirstOrDefault(service => service.Key.Equals("mysql", StringComparison.OrdinalIgnoreCase));
+        if (mysql is null || processManager.GetStatus(mysql).State != ServiceState.Running)
             return;
-        }
 
         try
         {
@@ -197,17 +261,13 @@ public partial class App : System.Windows.Application
                 .GetAwaiter()
                 .GetResult();
             if (!requested)
-            {
                 return;
-            }
 
             var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-            while (DateTimeOffset.UtcNow < deadline && processManager.GetStatus(mysql).State == DevBox.Core.Models.ServiceState.Running)
-            {
+            while (DateTimeOffset.UtcNow < deadline && processManager.GetStatus(mysql).State == ServiceState.Running)
                 System.Threading.Thread.Sleep(100);
-            }
         }
-        catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or ObjectDisposedException)
         {
             TryWriteStartupLog($"Credential-aware MySQL shutdown failed; standard fallback will be used: {ex.Message}");
         }
@@ -234,16 +294,56 @@ public partial class App : System.Windows.Application
         }
     }
 
+    private static void ObserveBackgroundTask(Task task, string operation)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        _ = ObserveBackgroundTaskCoreAsync(task, operation);
+    }
+
+    private static async Task ObserveBackgroundTaskCoreAsync(Task task, string operation)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            TryWriteStartupLog($"Background {operation} failed: {ex}");
+        }
+    }
+
+    private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
+    {
+        TryWriteStartupLog($"Unobserved task exception: {e.Exception}");
+        e.SetObserved();
+    }
+
+    private static void OnDispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
+    {
+        TryWriteStartupLog($"Unhandled UI exception: {e.Exception}");
+        e.Handled = true;
+        System.Windows.MessageBox.Show(
+            $"DevBox encountered an unexpected error and must close.\n\n{e.Exception.Message}",
+            "DevBox error",
+            MessageBoxButton.OK,
+            MessageBoxImage.Error);
+        RequestExit();
+    }
+
     private static void TryWriteStartupLog(string message)
     {
         try
         {
-            Directory.CreateDirectory(Path.Combine(DevBoxRoot, "logs"));
+            var root = string.IsNullOrWhiteSpace(DevBoxRoot)
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DevBox Windows")
+                : DevBoxRoot;
+            var logDirectory = Path.Combine(root, "logs");
+            Directory.CreateDirectory(logDirectory);
             File.AppendAllText(
-                Path.Combine(DevBoxRoot, "logs", "devbox-error.log"),
+                Path.Combine(logDirectory, "devbox-error.log"),
                 $"{DateTimeOffset.Now:O} {message}{Environment.NewLine}");
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
         }
     }
@@ -288,19 +388,12 @@ public partial class App : System.Windows.Application
     private static void ValidateTestDomain(string domain)
     {
         if (!domain.EndsWith(".test", StringComparison.OrdinalIgnoreCase))
-        {
             throw new ArgumentException("Elevated hosts operations are limited to .test domains.", nameof(domain));
-        }
     }
 
     private static string ResolveRoot()
     {
         var configured = Environment.GetEnvironmentVariable("DEVBOX_ROOT");
-        if (!string.IsNullOrWhiteSpace(configured))
-        {
-            return Path.GetFullPath(configured);
-        }
-
-        return Path.GetFullPath(AppContext.BaseDirectory);
+        return Path.GetFullPath(string.IsNullOrWhiteSpace(configured) ? AppContext.BaseDirectory : configured);
     }
 }

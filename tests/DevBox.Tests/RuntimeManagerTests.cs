@@ -109,6 +109,33 @@ public sealed class RuntimeManagerTests
         }
     }
 
+    [Fact]
+    public async Task InstallAsync_CorruptExistingRuntime_RedownloadsVerifiedPackage()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var broken = Path.Combine(root, "runtime", "php", "8.4.0");
+            Directory.CreateDirectory(broken);
+            File.WriteAllText(Path.Combine(broken, "incomplete.txt"), "broken");
+            var package = CreateArchive(("package/php.exe", "repaired"));
+            var checksum = Convert.ToHexString(SHA256.HashData(package)).ToLowerInvariant();
+            using var client = new HttpClient(new StaticHandler(package));
+            using var manager = new RuntimeManager(root, client);
+            var definition = new RuntimeDefinition(
+                "php", "PHP", "8.4.0", "https://example.test/php.zip", checksum, "php.exe", "package");
+
+            await manager.InstallAsync(definition);
+
+            Assert.Equal("repaired", File.ReadAllText(Path.Combine(root, "runtime", "php", "8.4.0", "php.exe")));
+            Assert.True(File.Exists(Path.Combine(root, "runtime", "php", "current", "php.exe")));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
     private static byte[] CreateArchive(params (string Path, string Content)[] files)
     {
         using var memory = new MemoryStream();

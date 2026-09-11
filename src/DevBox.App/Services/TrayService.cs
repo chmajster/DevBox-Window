@@ -39,25 +39,21 @@ public sealed class TrayService : ITrayService
         ObjectDisposedException.ThrowIf(_disposed, this);
         _mainWindow = mainWindow ?? throw new ArgumentNullException(nameof(mainWindow));
         if (_notifyIcon is not null)
-        {
             return;
-        }
 
         var menu = new System.Windows.Forms.ContextMenuStrip();
         menu.Items.Add("Open DevBox", null, (_, _) => ShowMainWindow());
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-        menu.Items.Add("Start All", null, async (_, _) => await RunAllAsync(ServiceAction.Start));
-        menu.Items.Add("Restart All", null, async (_, _) => await RunAllAsync(ServiceAction.Restart));
-        menu.Items.Add("Stop All", null, async (_, _) => await RunAllAsync(ServiceAction.Stop));
+        menu.Items.Add("Start All", null, async (_, _) => await RunAllFromTrayAsync(ServiceAction.Start));
+        menu.Items.Add("Restart All", null, async (_, _) => await RunAllFromTrayAsync(ServiceAction.Restart));
+        menu.Items.Add("Stop All", null, async (_, _) => await RunAllFromTrayAsync(ServiceAction.Stop));
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => App.RequestExit());
 
         var executable = Environment.ProcessPath;
         Icon? icon = null;
         if (!string.IsNullOrWhiteSpace(executable) && File.Exists(executable))
-        {
             icon = Icon.ExtractAssociatedIcon(executable);
-        }
 
         _notifyIcon = new System.Windows.Forms.NotifyIcon
         {
@@ -73,18 +69,43 @@ public sealed class TrayService : ITrayService
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_settings.Current.StartServicesAutomatically)
-        {
             await RunAllAsync(ServiceAction.Start).ConfigureAwait(false);
+    }
+
+    private async Task RunAllFromTrayAsync(ServiceAction action)
+    {
+        try
+        {
+            await RunAllAsync(action);
+        }
+        catch (Exception ex)
+        {
+            ShowError("Service operation failed", ex.Message);
         }
     }
 
     private async Task RunAllAsync(ServiceAction action)
     {
+        IReadOnlyList<ServiceDefinition> definitions;
+        try
+        {
+            definitions = _catalog.GetDefaultServices();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or ArgumentException)
+        {
+            definitions = _catalog.GetCoreServices();
+            ShowError(
+                "Managed service configuration invalid",
+                $"Optional managed services were ignored; core services will continue. {ex.Message}");
+        }
+
         var errors = new List<string>();
-        foreach (var definition in _catalog.GetDefaultServices())
+        var missing = new List<string>();
+        foreach (var definition in definitions)
         {
             if (action != ServiceAction.Stop && !File.Exists(definition.ExecutablePath))
             {
+                missing.Add(definition.DisplayName);
                 continue;
             }
 
@@ -98,33 +119,36 @@ public sealed class TrayService : ITrayService
                     _ => throw new ArgumentOutOfRangeException(nameof(action))
                 };
             }
-            catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or FileNotFoundException or System.ComponentModel.Win32Exception)
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or FileNotFoundException or System.ComponentModel.Win32Exception or OperationCanceledException)
             {
                 errors.Add($"{definition.DisplayName}: {ex.Message}");
             }
         }
 
+        if (missing.Count > 0)
+            errors.Add($"Missing runtime: {string.Join(", ", missing)}");
         if (errors.Count > 0)
-        {
-            System.Windows.Application.Current.Dispatcher.Invoke(() =>
-                _dialogs.Error("Service operation failed", string.Join(Environment.NewLine, errors)));
-        }
+            ShowError("Service operation failed", string.Join(Environment.NewLine, errors));
+    }
+
+    private void ShowError(string title, string message)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.HasShutdownStarted)
+            return;
+        dispatcher.Invoke(() => _dialogs.Error(title, message));
     }
 
     private void ShowMainWindow()
     {
         var window = _mainWindow;
         if (window is null)
-        {
             return;
-        }
         window.Dispatcher.Invoke(() =>
         {
             window.Show();
             if (window.WindowState == WindowState.Minimized)
-            {
                 window.WindowState = WindowState.Normal;
-            }
             window.Activate();
             window.Topmost = true;
             window.Topmost = false;
@@ -135,9 +159,7 @@ public sealed class TrayService : ITrayService
     public void Dispose()
     {
         if (_disposed)
-        {
             return;
-        }
         _disposed = true;
         if (_notifyIcon is not null)
         {

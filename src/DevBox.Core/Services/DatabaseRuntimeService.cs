@@ -648,7 +648,7 @@ public sealed class DatabaseRuntimeService : IDisposable
     private static void ValidateVersion(string version)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(version);
-        if (version.Length > 64 || version.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || version.Contains(Path.DirectorySeparatorChar) || version.Contains(Path.AltDirectorySeparatorChar))
+        if (version.Length > 64 || version is "." or ".." || version.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || version.Contains(Path.DirectorySeparatorChar) || version.Contains(Path.AltDirectorySeparatorChar))
             throw new ArgumentException("Database runtime version contains unsupported characters.", nameof(version));
     }
 

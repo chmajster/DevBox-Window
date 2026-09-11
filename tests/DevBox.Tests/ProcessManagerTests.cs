@@ -108,6 +108,81 @@ public sealed class ProcessManagerTests
     }
 
     [Fact]
+    public async Task StartAsync_ProcessThatExitsImmediately_IsNotReportedRunning()
+    {
+        using var manager = new ProcessManager();
+        var executable = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        var definition = new ServiceDefinition(
+            "early-exit", "Early exit", executable,
+            new[] { "/d", "/c", "exit 7" },
+            Path.GetTempPath(), 0, "test");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.StartAsync(definition));
+
+        Assert.Contains("exited during startup", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(ServiceState.Stopped, manager.GetStatus(definition).State);
+    }
+
+    [Fact]
+    public async Task StartAsync_UnwritableLogPath_DoesNotCrashServiceLifecycle()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "devbox-process-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            var executable = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
+            var definition = new ServiceDefinition(
+                "bad-log", "Bad log", executable,
+                new[] { "-NoProfile", "-NonInteractive", "-Command", "Write-Output ok; Start-Sleep -Seconds 5" },
+                root, 0, "test",
+                ShutdownTimeout: TimeSpan.FromMilliseconds(100),
+                LogPath: root);
+            using var manager = new ProcessManager();
+
+            var started = await manager.StartAsync(definition);
+            Assert.Equal(ServiceState.Running, started.State);
+            await manager.StopAsync(definition);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public async Task StopAsync_CancelledGracefulWait_DoesNotKillManagedService()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "devbox-process-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            var executable = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
+            var stopExecutable = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+            var definition = new ServiceDefinition(
+                "cancel-stop", "Cancellation stop", executable,
+                new[] { "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30" },
+                root, 0, "test",
+                StopExecutablePath: stopExecutable,
+                StopArguments: new[] { "/d", "/c", "exit 0" },
+                ShutdownTimeout: TimeSpan.FromMilliseconds(500));
+
+            using var manager = new ProcessManager();
+            var started = await manager.StartAsync(definition);
+            Assert.Equal(ServiceState.Running, started.State);
+
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.StopAsync(definition, cancellation.Token));
+
+            Assert.Equal(ServiceState.Running, manager.GetStatus(definition).State);
+            await manager.StopAsync(definition);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void RuntimeLayout_CreatesExpectedConfigFiles()
     {
         var root = Path.Combine(Path.GetTempPath(), "devbox-tests", Guid.NewGuid().ToString("N"));
