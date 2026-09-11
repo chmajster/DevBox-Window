@@ -12,11 +12,6 @@ on:
           - patch
           - minor
           - major
-      online_php_phpmyadmin:
-        description: 'Keep PHP/phpMyAdmin online-only (PHP is not bundled; phpMyAdmin stays on-demand)'
-        required: true
-        default: true
-        type: boolean
 
 permissions:
   contents: write
@@ -158,23 +153,16 @@ jobs:
             Copy-Item $layout.CliSource (Join-Path $layout.CliDirectory 'devbox.exe') -Force
           }
 
-      - name: Prepare bundled and online runtimes
+      - name: Prepare verified online runtime modules
         shell: pwsh
-        env:
-          ONLINE_PHP_PHPMYADMIN: ${{ inputs.online_php_phpmyadmin }}
         run: |
-          $onlineModules = $env:ONLINE_PHP_PHPMYADMIN -eq 'true'
           & ./packaging/Prepare-BundledRuntimes.ps1 `
             -PublishDirectories "publish/win-x64","publish/win-arm64" `
-            -SkipPhp:$onlineModules
+            -OnlineOnly
 
           "### Module delivery" >> $env:GITHUB_STEP_SUMMARY
-          if ($onlineModules) {
-            "- PHP: downloaded on demand from the verified runtime catalog; not downloaded during release." >> $env:GITHUB_STEP_SUMMARY
-          } else {
-            "- PHP: bundled in the release." >> $env:GITHUB_STEP_SUMMARY
-          }
-          "- phpMyAdmin: downloaded on demand from the verified ADDONS catalog; never downloaded during release." >> $env:GITHUB_STEP_SUMMARY
+          "- PHP, Nginx and MySQL: installed on demand from the release-generated verified runtime catalog; not bundled in the installer." >> $env:GITHUB_STEP_SUMMARY
+          "- phpMyAdmin: downloaded on demand from the verified ADDONS catalog; never bundled in the installer." >> $env:GITHUB_STEP_SUMMARY
 
       - name: Package portable builds
         shell: pwsh
