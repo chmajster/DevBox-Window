@@ -76,11 +76,18 @@ public sealed class RuntimePlatformService : IDisposable
         return statuses;
     }
 
-    public async Task InstallAsync(string key, string version, CancellationToken cancellationToken = default)
+    public Task InstallAsync(string key, string version, CancellationToken cancellationToken = default) =>
+        InstallAsync(key, version, progress: null, cancellationToken);
+
+    public async Task InstallAsync(
+        string key,
+        string version,
+        IProgress<int>? progress,
+        CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         var package = GetPackage(key, version);
-        await _runtimeManager.InstallAsync(package.ToRuntimeDefinition(), cancellationToken).ConfigureAwait(false);
+        await _runtimeManager.InstallAsync(package.ToRuntimeDefinition(), progress, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task ActivateAsync(string key, string version, CancellationToken cancellationToken = default)
