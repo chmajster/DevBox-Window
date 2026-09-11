@@ -206,9 +206,7 @@ jobs:
           SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_BASE64)) {
-            Write-Host 'Authenticode certificate is not configured; release artifacts will remain unsigned.'
-            "enabled=false" >> $env:GITHUB_OUTPUT
-            exit 0
+            throw 'WINDOWS_SIGNING_CERTIFICATE_BASE64 is required. DevBox releases must be Authenticode signed because the self-updater verifies installer signatures.'
           }
 
           $certificatePath = Join-Path $env:RUNNER_TEMP 'devbox-signing.pfx'
