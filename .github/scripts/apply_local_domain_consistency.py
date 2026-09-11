@@ -1,13 +1,17 @@
 from pathlib import Path
 
 
-def replace_once(path: str, old: str, new: str) -> None:
+def replace_exact(path: str, old: str, new: str, expected_count: int = 1) -> None:
     file = Path(path)
     text = file.read_text(encoding='utf-8')
     count = text.count(old)
-    if count != 1:
-        raise RuntimeError(f'{path}: expected one match, got {count}: {old[:120]!r}')
-    file.write_text(text.replace(old, new, 1), encoding='utf-8')
+    if count != expected_count:
+        raise RuntimeError(f'{path}: expected {expected_count} match(es), got {count}: {old[:120]!r}')
+    file.write_text(text.replace(old, new), encoding='utf-8')
+
+
+def replace_once(path: str, old: str, new: str) -> None:
+    replace_exact(path, old, new, 1)
 
 
 def replace_between(path: str, start: str, end: str, replacement: str) -> None:
@@ -29,10 +33,11 @@ replace_once(
     '[GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,62}$", RegexOptions.CultureInvariant)]',
     '[GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,79}$", RegexOptions.CultureInvariant)]')
 
-replace_once(
+replace_exact(
     'src/DevBox.Core/Services/ProjectWorkspaceService.cs',
     '        var rollbackDomain = request.Domain ?? $"{NormalizeProjectDirectoryName(request.Name)}.test";',
-    '        var rollbackDomain = request.Domain ?? LocalDomainName.FromName(NormalizeProjectDirectoryName(request.Name));')
+    '        var rollbackDomain = request.Domain ?? LocalDomainName.FromName(NormalizeProjectDirectoryName(request.Name));',
+    2)
 replace_once(
     'src/DevBox.Core/Services/ProjectWorkspaceService.cs',
     '[GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,62}$", RegexOptions.CultureInvariant)]',
