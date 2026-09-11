@@ -91,20 +91,30 @@ public sealed partial class LocalCertificateAuthorityService : IDisposable
             }
             catch (CryptographicException)
             {
-                // If the PEM is corrupt but a PFX still exists, recover the public
-                // certificate from the PFX. If it is the only remaining CA file, there
-                // is no trustworthy thumbprint to clean from the store; removal may
-                // still safely discard this unusable local material.
-                if (File.Exists(_caPfxPath))
-                    return LoadAuthority();
-                return null;
+                // If the PEM is corrupt, recover from a usable PFX when possible. If the
+                // PFX is also unusable (for example because its DPAPI password was never
+                // persisted), there is no trustworthy thumbprint to clean from the store;
+                // removal may still safely discard the unusable local material.
+                return TryLoadPfxAuthority();
             }
         }
 
-        if (File.Exists(_caPfxPath))
-            return LoadAuthority();
+        return TryLoadPfxAuthority();
+    }
 
-        return null;
+    private X509Certificate2? TryLoadPfxAuthority()
+    {
+        if (!File.Exists(_caPfxPath))
+            return null;
+
+        try
+        {
+            return LoadAuthority();
+        }
+        catch (Exception ex) when (ex is CryptographicException or InvalidDataException)
+        {
+            return null;
+        }
     }
 
     private bool ProbeTrustCurrentUser(X509Certificate2 certificate) =>
