@@ -330,6 +330,12 @@ public sealed class EnvironmentLockService : IDisposable
             }
         }
 
+        if (warnings.Count > 0)
+        {
+            warnings.Add("Project metadata was left unchanged because one or more environment prerequisites failed.");
+            return new EnvironmentApplyResult(desired, applied, warnings);
+        }
+
         var manifest = ReadManifestObject(root);
         UpdateManifestFromLock(manifest, desired);
         AtomicWrite(Path.Combine(root, ProjectWorkspaceService.ManifestFileName), manifest.ToJsonString(JsonOptions));
@@ -358,29 +364,73 @@ public sealed class EnvironmentLockService : IDisposable
             ? Path.Combine(root, "public")
             : root;
         var phpVersion = desired.Runtimes.TryGetValue("php", out var php) ? php : null;
-        var existing = _sites.GetSites().FirstOrDefault(item => item.Name.Equals(desired.ProjectName, StringComparison.OrdinalIgnoreCase));
-        if (existing is null)
-            _ = _sites.Create(desired.ProjectName, desired.Domain, documentRoot);
+        var previous = _sites.GetSites().FirstOrDefault(item => item.Name.Equals(desired.ProjectName, StringComparison.OrdinalIgnoreCase));
+        var tlsRollback = new TlsRollbackStateService(_rootPath);
+        var desiredTlsState = tlsRollback.Capture(desired.Domain);
+        TlsRollbackState? previousTlsState = previous is not null && !previous.Domain.Equals(desired.Domain, StringComparison.OrdinalIgnoreCase)
+            ? tlsRollback.Capture(previous.Domain)
+            : null;
+        var created = false;
 
-        if (desired.Https)
+        try
         {
-            if (OperatingSystem.IsWindows())
+            if (previous is null)
             {
-                using var certificate = new LocalCertificateAuthorityService(_rootPath).IssueSiteCertificate(desired.Domain);
+                _ = _sites.Create(desired.ProjectName, desired.Domain, documentRoot);
+                created = true;
+            }
+
+            if (desired.Https)
+            {
+                if (OperatingSystem.IsWindows())
+                {
+                    using var authority = new LocalCertificateAuthorityService(_rootPath);
+                    using var certificate = authority.IssueSiteCertificate(desired.Domain);
+                }
+                else
+                {
+                    _ = new LocalCertificateManager(_rootPath).Ensure(desired.Domain);
+                }
             }
             else
             {
-                _ = new LocalCertificateManager(_rootPath).Ensure(desired.Domain);
+                new LocalCertificateManager(_rootPath).Delete(desired.Domain);
+            }
+
+            var updated = new SiteDefinition(desired.ProjectName, desired.Domain, documentRoot, "php", phpVersion, desired.Https);
+            _ = _sites.Update(updated);
+
+            if (previous is not null && !previous.Domain.Equals(desired.Domain, StringComparison.OrdinalIgnoreCase))
+            {
+                var oldDomainStillUsed = _sites.GetSites().Any(item =>
+                    !item.Name.Equals(previous.Name, StringComparison.OrdinalIgnoreCase) &&
+                    item.Domain.Equals(previous.Domain, StringComparison.OrdinalIgnoreCase));
+                if (!oldDomainStillUsed)
+                    new LocalCertificateManager(_rootPath).Delete(previous.Domain);
             }
         }
-        else
+        catch
         {
-            try { new LocalCertificateManager(_rootPath).Delete(desired.Domain); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) { }
-        }
+            try
+            {
+                if (created)
+                    _sites.Delete(desired.ProjectName);
+                else if (previous is not null)
+                    _ = _sites.Update(previous);
+            }
+            catch (Exception)
+            {
+            }
 
-        var updated = new SiteDefinition(desired.ProjectName, desired.Domain, documentRoot, "php", phpVersion, desired.Https);
-        _ = _sites.Update(updated);
+            try { tlsRollback.Restore(desiredTlsState); }
+            catch (Exception) { }
+            if (previousTlsState is not null)
+            {
+                try { tlsRollback.Restore(previousTlsState); }
+                catch (Exception) { }
+            }
+            throw;
+        }
     }
 
     private static void UpdateManifestFromLock(JsonObject manifest, EnvironmentLockFile desired)

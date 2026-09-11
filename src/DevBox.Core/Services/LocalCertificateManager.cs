@@ -67,14 +67,60 @@ public sealed partial class LocalCertificateManager
         var notAfter = DateTimeOffset.UtcNow.AddYears(2);
         using var certificate = request.CreateSelfSigned(notBefore, notAfter);
 
-        AtomicWrite(certificatePath, certificate.ExportCertificatePem());
-        AtomicWrite(privateKeyPath, rsa.ExportPkcs8PrivateKeyPem());
+        var previousCertificate = File.Exists(certificatePath) ? File.ReadAllBytes(certificatePath) : null;
+        var previousKey = File.Exists(privateKeyPath) ? File.ReadAllBytes(privateKeyPath) : null;
+        var previousWasTrusted = false;
+        if (OperatingSystem.IsWindows() && !string.IsNullOrWhiteSpace(replacedThumbprint))
+        {
+            try { previousWasTrusted = IsTrustedForCurrentUser(normalizedDomain); }
+            catch (Exception ex) when (ex is CryptographicException or IOException or UnauthorizedAccessException) { }
+        }
 
-        if (!string.IsNullOrWhiteSpace(replacedThumbprint) &&
-            !replacedThumbprint.Equals(certificate.Thumbprint, StringComparison.OrdinalIgnoreCase))
-            RemoveTrustedThumbprint(replacedThumbprint);
+        try
+        {
+            AtomicWrite(certificatePath, certificate.ExportCertificatePem());
+            AtomicWrite(privateKeyPath, rsa.ExportPkcs8PrivateKeyPem());
+
+            if (!string.IsNullOrWhiteSpace(replacedThumbprint) &&
+                !replacedThumbprint.Equals(certificate.Thumbprint, StringComparison.OrdinalIgnoreCase))
+                RemoveTrustedThumbprint(replacedThumbprint);
+        }
+        catch
+        {
+            RestoreBytes(certificatePath, previousCertificate);
+            RestoreBytes(privateKeyPath, previousKey);
+            if (previousWasTrusted && OperatingSystem.IsWindows())
+            {
+                try { TrustForCurrentUser(normalizedDomain); }
+                catch (Exception) { }
+            }
+            throw;
+        }
 
         return ToModel(normalizedDomain, certificatePath, privateKeyPath, certificate);
+    }
+
+    public bool IsMaterialValid(string domain, TimeSpan? minimumRemainingLifetime = null)
+    {
+        var normalizedDomain = NormalizeDomain(domain);
+        var certificatePath = CertificatePath(normalizedDomain);
+        var privateKeyPath = PrivateKeyPath(normalizedDomain);
+        if (!File.Exists(certificatePath) || !File.Exists(privateKeyPath))
+            return false;
+        try
+        {
+            using var certificate = X509Certificate2.CreateFromPemFile(certificatePath, privateKeyPath);
+            var now = DateTime.UtcNow;
+            var minimum = minimumRemainingLifetime ?? TimeSpan.FromMinutes(1);
+            var dnsName = certificate.GetNameInfo(X509NameType.DnsName, forIssuer: false);
+            return certificate.NotBefore.ToUniversalTime() <= now.AddMinutes(5) &&
+                   certificate.NotAfter.ToUniversalTime() > now.Add(minimum) &&
+                   dnsName.Equals(normalizedDomain, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (CryptographicException)
+        {
+            return false;
+        }
     }
 
     public bool IsTrustedForCurrentUser(string domain)
@@ -199,6 +245,29 @@ public sealed partial class LocalCertificateManager
         finally
         {
             DeleteIfExists(tempPath);
+        }
+    }
+
+    private static void RestoreBytes(string path, byte[]? content)
+    {
+        if (content is null)
+        {
+            DeleteIfExists(path);
+            return;
+        }
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temp = path + $".{Guid.NewGuid():N}.rollback";
+        try
+        {
+            File.WriteAllBytes(temp, content);
+            if (File.Exists(path))
+                File.Replace(temp, path, null);
+            else
+                File.Move(temp, path);
+        }
+        finally
+        {
+            DeleteIfExists(temp);
         }
     }
 

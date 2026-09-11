@@ -372,20 +372,7 @@ public sealed partial class DatabaseManager
         }
         finally
         {
-            if (File.Exists(configPath))
-            {
-                try
-                {
-                    File.SetAttributes(configPath, FileAttributes.Normal);
-                    File.Delete(configPath);
-                }
-                catch (IOException)
-                {
-                }
-                catch (UnauthorizedAccessException)
-                {
-                }
-            }
+            SecureDeleteClientConfig(configPath);
         }
     }
 
@@ -477,6 +464,32 @@ public sealed partial class DatabaseManager
         {
             throw new FileNotFoundException("MySQL runtime is not installed or is incomplete.", path);
         }
+    }
+
+    private static void SecureDeleteClientConfig(string path)
+    {
+        if (!File.Exists(path))
+            return;
+        try
+        {
+            File.SetAttributes(path, FileAttributes.Normal);
+            var length = new FileInfo(path).Length;
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.Read))
+            {
+                var zeros = new byte[4096];
+                long remaining = length;
+                while (remaining > 0)
+                {
+                    var count = (int)Math.Min(zeros.Length, remaining);
+                    stream.Write(zeros, 0, count);
+                    remaining -= count;
+                }
+                stream.Flush(flushToDisk: true);
+            }
+            File.Delete(path);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     private static string QuoteOptionValue(string value)

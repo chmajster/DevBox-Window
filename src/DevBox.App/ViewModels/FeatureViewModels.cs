@@ -376,6 +376,7 @@ public sealed class SslWindowViewModel : ObservableObject
         try
         {
             _siteManager.SetHttps(site.Name, false);
+            _certificateManager.Delete(site.Domain);
             await RestartNginxIfRunningAsync();
             Refresh();
         }
@@ -469,7 +470,7 @@ public sealed class SslWindowViewModel : ObservableObject
     }
 
     private static bool IsExpectedSslError(Exception ex) =>
-        ex is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException or FileNotFoundException or Win32Exception or System.Security.Cryptography.CryptographicException;
+        ex is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException or FileNotFoundException or Win32Exception or System.Security.Cryptography.CryptographicException or CertificateTrustStoreException;
 }
 
 public sealed class SetupItemViewModel(EnvironmentReadinessItem item)

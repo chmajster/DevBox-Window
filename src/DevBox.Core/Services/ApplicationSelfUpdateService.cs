@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using DevBox.Core.Models;
@@ -41,7 +42,7 @@ public sealed class ApplicationSelfUpdateService : IDisposable
             throw new InvalidOperationException("No newer stable DevBox release is available.");
 
         var releaseUrl = ValidateGitHubUrl(root.GetProperty("html_url").GetString(), "release URL");
-        var expectedInstallerName = $"DevBox-{version.ToString(3)}-win-x64-setup.exe";
+        var expectedInstallerName = GetExpectedInstallerAssetName(version);
 
         if (!root.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array)
             throw new InvalidDataException("GitHub release does not contain an assets array.");
@@ -92,6 +93,19 @@ public sealed class ApplicationSelfUpdateService : IDisposable
         }
 
         return new SelfUpdatePackage(version, installerPath, expectedInstallerName, expectedSha256, releaseUrl);
+    }
+
+    internal static string GetExpectedInstallerAssetName(Version version, Architecture? architecture = null)
+    {
+        ArgumentNullException.ThrowIfNull(version);
+        var effectiveArchitecture = architecture ?? RuntimeInformation.ProcessArchitecture;
+        var rid = effectiveArchitecture switch
+        {
+            Architecture.X64 => "win-x64",
+            Architecture.Arm64 => "win-arm64",
+            _ => throw new PlatformNotSupportedException($"DevBox self-update does not support {effectiveArchitecture}.")
+        };
+        return $"DevBox-{version.ToString(3)}-{rid}-setup.exe";
     }
 
     internal static string ParseChecksum(string checksumFile, string fileName)

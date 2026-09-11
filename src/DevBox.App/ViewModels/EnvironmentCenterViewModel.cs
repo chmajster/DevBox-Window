@@ -432,7 +432,9 @@ public sealed class EnvironmentCenterViewModel : ObservableObject, IDisposable
         : value.Trim();
 
     private static string DescribeApply(EnvironmentApplyResult result) =>
-        $"Applied environment: {result.Applied.Count} action(s), {result.Warnings.Count} warning(s).";
+        result.Warnings.Count == 0
+            ? $"Applied environment: {result.Applied.Count} action(s)."
+            : $"Environment apply incomplete: {result.Applied.Count} action(s), {result.Warnings.Count} warning(s). Project metadata was not committed.";
 
     private void RunUiAction(Action action)
     {

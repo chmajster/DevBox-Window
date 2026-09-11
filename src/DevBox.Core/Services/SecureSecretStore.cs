@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -9,13 +10,15 @@ namespace DevBox.Core.Services;
 public sealed partial class SecureSecretStore
 {
     private const uint CryptProtectUiForbidden = 0x1;
+    private static readonly ConcurrentDictionary<string, object> StoreLocks = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _storePath;
-    private readonly object _sync = new();
+    private readonly object _sync;
 
     public SecureSecretStore(string rootPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         _storePath = Path.Combine(Path.GetFullPath(rootPath), "config", "secrets.dpapi.json");
+        _sync = StoreLocks.GetOrAdd(_storePath, static _ => new object());
     }
 
     public IReadOnlyList<string> ListKeys()
@@ -24,26 +27,43 @@ public sealed partial class SecureSecretStore
             return Load().Keys.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    public void Set(string key, string value) => SetBytes(key, Encoding.UTF8.GetBytes(value ?? throw new ArgumentNullException(nameof(value))));
+    public void Set(string key, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value ?? throw new ArgumentNullException(nameof(value)));
+        try { SetBytes(key, bytes); }
+        finally { CryptographicZero(bytes); }
+    }
 
     public string? Get(string key)
     {
         var bytes = GetBytes(key);
-        return bytes is null ? null : Encoding.UTF8.GetString(bytes);
+        if (bytes is null)
+            return null;
+        try { return Encoding.UTF8.GetString(bytes); }
+        finally { CryptographicZero(bytes); }
     }
 
     public void SetBytes(string key, ReadOnlySpan<byte> value)
     {
         EnsureWindows();
         ValidateKey(key);
-        var protectedBytes = Protect(value.ToArray());
-        lock (_sync)
+        var plaintext = value.ToArray();
+        byte[] protectedBytes;
+        try { protectedBytes = Protect(plaintext); }
+        finally { CryptographicZero(plaintext); }
+        try
         {
-            var values = Load();
-            values[key.Trim().ToLowerInvariant()] = Convert.ToBase64String(protectedBytes);
-            Save(values);
+            lock (_sync)
+            {
+                var values = Load();
+                values[key.Trim().ToLowerInvariant()] = Convert.ToBase64String(protectedBytes);
+                Save(values);
+            }
         }
-        CryptographicZero(protectedBytes);
+        finally
+        {
+            CryptographicZero(protectedBytes);
+        }
     }
 
     public byte[]? GetBytes(string key)
