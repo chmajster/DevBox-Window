@@ -592,29 +592,48 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         if (parameter is not RuntimeRowViewModel runtime || !runtime.CanDownload) return;
 
+        _definitions.TryGetValue(runtime.Key, out var service);
+        var wasRunning = service is not null && _processManager.GetStatus(service).State == ServiceState.Running;
+
         try
         {
+            if (wasRunning)
+            {
+                await _processManager.StopAsync(service!);
+            }
+
+            // RuntimeManager.InstallAsync verifies SHA-256 and atomically activates the downloaded version.
             await _runtimePlatformService.InstallAsync(runtime.Key, runtime.Version);
 
-            var executableRelativePath = RuntimeExecutable(runtime.Key);
-            var installations = _runtimeManager.GetInstalled(runtime.Key, executableRelativePath);
-            var activated = false;
-            if (!installations.Any(item => item.IsActive))
+            if (wasRunning)
             {
-                await _runtimePlatformService.ActivateAsync(runtime.Key, runtime.Version);
-                activated = true;
+                await _processManager.StartAsync(service!);
             }
 
             RefreshRuntimes();
             RefreshStatuses();
             _dialogs.Info(
                 $"{runtime.Name} downloaded",
-                activated
-                    ? $"{runtime.Name} {runtime.Version} was downloaded, verified and activated."
-                    : $"{runtime.Name} {runtime.Version} was downloaded and verified.");
+                $"{runtime.Name} {runtime.Version} was downloaded, verified and activated.");
         }
-        catch (Exception ex) when (ex is HttpRequestException or InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException or FileNotFoundException)
+        catch (Exception ex) when (ex is HttpRequestException or InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException or FileNotFoundException or Win32Exception)
         {
+            if (wasRunning && service is not null &&
+                _processManager.GetStatus(service).State != ServiceState.Running &&
+                File.Exists(service.ExecutablePath))
+            {
+                try
+                {
+                    await _processManager.StartAsync(service);
+                }
+                catch (Exception recoveryError) when (recoveryError is IOException or UnauthorizedAccessException or InvalidOperationException or FileNotFoundException or Win32Exception)
+                {
+                    _dialogs.Warning(
+                        "Service recovery failed",
+                        $"{runtime.Name} download failed and {service.DisplayName} could not be restarted: {recoveryError.Message}");
+                }
+            }
+
             RefreshRuntimes();
             RefreshStatuses();
             _dialogs.Error($"{runtime.Name} download failed", ex.Message);
