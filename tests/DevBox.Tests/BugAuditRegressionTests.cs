@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using DevBox.Core.Models;
 using DevBox.Core.Services;
 using Xunit;
 
@@ -51,6 +52,39 @@ public sealed class BugAuditRegressionTests
                 service.ExportAsync(project, destinationPath: destination, cancellationToken: cancellation.Token));
 
             Assert.Equal("existing-good-file", await File.ReadAllTextAsync(destination));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task ProjectExport_DuplicateDatabaseBackupNames_AreRejected()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var project = CreateProject(root, "duplicate-db-export");
+            var firstDirectory = Path.Combine(root, "db-a");
+            var secondDirectory = Path.Combine(root, "db-b");
+            Directory.CreateDirectory(firstDirectory);
+            Directory.CreateDirectory(secondDirectory);
+            var first = Path.Combine(firstDirectory, "backup.sql");
+            var second = Path.Combine(secondDirectory, "backup.sql");
+            await File.WriteAllTextAsync(first, "-- first");
+            await File.WriteAllTextAsync(second, "-- second");
+            var destination = Path.Combine(root, "duplicate.devbox-project.zip");
+            var service = new ProjectTransferService(root);
+
+            var error = await Assert.ThrowsAsync<ArgumentException>(() => service.ExportAsync(
+                project,
+                new ProjectSnapshotOptions(IncludeDatabase: true),
+                [first, second],
+                destination));
+
+            Assert.Contains("duplicate file name", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.False(File.Exists(destination));
         }
         finally
         {

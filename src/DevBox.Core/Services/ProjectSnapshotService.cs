@@ -117,6 +117,7 @@ public sealed class ProjectSnapshotService
         string? previous = null;
         string? databaseDestination = null;
         string? databasePrevious = null;
+        var databaseDestinationOwned = false;
         try
         {
             await ExtractSnapshotAsync(source, staging, databaseStaging, cancellationToken).ConfigureAwait(false);
@@ -164,6 +165,7 @@ public sealed class ProjectSnapshotService
                     }
                     Directory.CreateDirectory(Path.GetDirectoryName(databaseDestination)!);
                     Directory.Move(databaseStaging, databaseDestination);
+                    databaseDestinationOwned = true;
                 }
             }
             catch (Exception original)
@@ -185,7 +187,7 @@ public sealed class ProjectSnapshotService
                     rollbackActions.Add(() => tlsRollback.Restore(state));
                 }
 
-                if (databaseDestination is not null)
+                if (databaseDestinationOwned && databaseDestination is not null)
                 {
                     var databasePath = databaseDestination;
                     rollbackActions.Add(() => TryDeleteDirectory(databasePath));

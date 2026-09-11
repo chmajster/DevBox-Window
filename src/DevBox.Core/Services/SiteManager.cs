@@ -54,6 +54,7 @@ public sealed partial class SiteManager
         var sites = GetSites().ToList();
         ValidateNewSite(sites, normalizedName, normalizedDomain);
 
+        var rootExisted = Directory.Exists(root);
         Directory.CreateDirectory(root);
         var indexPath = Path.Combine(root, "index.php");
         var scaffoldedIndex = false;
@@ -72,6 +73,8 @@ public sealed partial class SiteManager
         {
             if (scaffoldedIndex)
                 TryDeleteFile(indexPath);
+            if (!rootExisted)
+                TryDeleteEmptyDirectory(root);
             throw;
         }
     }
@@ -444,6 +447,21 @@ server {
         {
             if (File.Exists(path))
                 File.Delete(path);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static void TryDeleteEmptyDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path) && !Directory.EnumerateFileSystemEntries(path).Any())
+                Directory.Delete(path, recursive: false);
         }
         catch (IOException)
         {

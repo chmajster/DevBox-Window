@@ -61,6 +61,43 @@ public sealed class SnapshotHardeningTests
     }
 
     [Fact]
+    public async Task RestoreAsync_ExistingDatabaseRestoreDirectoryWithoutOverwrite_IsPreserved()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var source = CreateProject(root, "snapshot-db-source");
+            var backup = Path.Combine(root, "database.sql");
+            await File.WriteAllTextAsync(backup, "-- snapshot database payload");
+            var service = new ProjectSnapshotService(root);
+            var snapshot = await service.CreateAsync(
+                source,
+                new ProjectSnapshotOptions(IncludeDatabase: true),
+                [backup]);
+
+            var snapshotKey = new string(Path.GetFileNameWithoutExtension(snapshot.SnapshotPath)
+                .Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' or '.' ? ch : '-')
+                .ToArray());
+            var existingDatabaseDirectory = Path.Combine(
+                root, "backups", "snapshot-restores", "snapshot-db-copy", snapshotKey);
+            Directory.CreateDirectory(existingDatabaseDirectory);
+            var markerFile = Path.Combine(existingDatabaseDirectory, "keep.txt");
+            await File.WriteAllTextAsync(markerFile, "keep-existing-backup");
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                service.RestoreAsync(snapshot.SnapshotPath, "snapshot-db-copy", overwrite: false));
+
+            Assert.True(File.Exists(markerFile));
+            Assert.Equal("keep-existing-backup", await File.ReadAllTextAsync(markerFile));
+            Assert.False(Directory.Exists(Path.Combine(root, "www", "snapshot-db-copy")));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public async Task RestoreAsync_RejectsArchiveWithoutSnapshotMetadata()
     {
         var root = TemporaryRoot();
