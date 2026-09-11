@@ -22,15 +22,8 @@ replace_once(
     '''        if (version.Length > 64 || version.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || version.Contains(Path.DirectorySeparatorChar) || version.Contains(Path.AltDirectorySeparatorChar))\n            throw new ArgumentException("Database runtime version contains unsupported characters.", nameof(version));\n''',
     '''        if (version.Length > 64 || version is "." or ".." || version.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || version.Contains(Path.DirectorySeparatorChar) || version.Contains(Path.AltDirectorySeparatorChar))\n            throw new ArgumentException("Database runtime version contains unsupported characters.", nameof(version));\n''')
 
-# Named mutexes are recursive for the owning thread. Exercise contention from a
-# different thread, matching the real second-process scenario.
 test = Path("tests/DevBox.Tests/StartupRuntimeAuditTests.cs")
 text = test.read_text(encoding="utf-8")
-old = '''    [Fact]\n    public void SingleInstanceGuard_RejectsSecondOwnerForSameRoot()\n    {\n        var root = Path.Combine(Path.GetTempPath(), "devbox-single-instance", Guid.NewGuid().ToString("N"));\n        Directory.CreateDirectory(root);\n        try\n        {\n            using var first = SingleInstanceGuard.TryAcquire(root);\n            var second = SingleInstanceGuard.TryAcquire(root);\n\n            Assert.NotNull(first);\n            Assert.Null(second);\n        }\n        finally\n        {\n            if (Directory.Exists(root)) Directory.Delete(root, true);\n        }\n    }\n'''
-new = '''    [Fact]\n    public async Task SingleInstanceGuard_RejectsSecondOwnerForSameRoot()\n    {\n        var root = Path.Combine(Path.GetTempPath(), "devbox-single-instance", Guid.NewGuid().ToString("N"));\n        Directory.CreateDirectory(root);\n        try\n        {\n            using var first = SingleInstanceGuard.TryAcquire(root);\n            var second = await Task.Run(() => SingleInstanceGuard.TryAcquire(root));\n\n            Assert.NotNull(first);\n            Assert.Null(second);\n        }\n        finally\n        {\n            if (Directory.Exists(root)) Directory.Delete(root, true);\n        }\n    }\n'''
-if text.count(old) != 1:
-    raise RuntimeError("StartupRuntimeAuditTests single-instance test marker mismatch")
-text = text.replace(old, new, 1)
 marker = '''    [Fact]\n    public void RuntimeCatalog_RejectsArchiveRootTraversal()\n'''
 insert = '''    [Fact]\n    public void DatabaseRuntime_RejectsParentDirectoryAsVersion()\n    {\n        var root = Path.Combine(Path.GetTempPath(), "devbox-database-runtime", Guid.NewGuid().ToString("N"));\n        Directory.CreateDirectory(root);\n        try\n        {\n            using var service = new DatabaseRuntimeService(root);\n            Assert.Throws<ArgumentException>(() => service.Register("mysql", ".."));\n        }\n        finally\n        {\n            if (Directory.Exists(root)) Directory.Delete(root, true);\n        }\n    }\n\n'''
 if marker not in text or "DatabaseRuntime_RejectsParentDirectoryAsVersion" in text:
