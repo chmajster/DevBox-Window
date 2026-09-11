@@ -45,38 +45,62 @@ public sealed partial class LocalCertificateAuthorityService
     public X509Certificate2 IssueSiteCertificate(string domain, bool trustAuthority = true)
     {
         EnsureWindows();
-        ValidateDomain(domain);
-        using var authority = EnsureAuthority(trustAuthority);
-        using var key = RSA.Create(2048);
-        var request = new CertificateRequest(
-            new X500DistinguishedName($"CN={domain}"),
-            key,
-            HashAlgorithmName.SHA256,
-            RSASignaturePadding.Pkcs1);
-        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
-        request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, true));
-        request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension([new Oid("1.3.6.1.5.5.7.3.1")], true));
-        var san = new SubjectAlternativeNameBuilder();
-        san.AddDnsName(domain);
-        request.CertificateExtensions.Add(san.Build());
-        request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
+        var normalizedDomain = LocalCertificateManager.NormalizeDomain(domain);
+        var rollbackService = new TlsRollbackStateService(_rootPath);
+        var rollbackState = rollbackService.Capture(normalizedDomain);
+        try
+        {
+            using var authority = EnsureAuthority(trustAuthority);
+            using var key = RSA.Create(2048);
+            var request = new CertificateRequest(
+                new X500DistinguishedName($"CN={normalizedDomain}"),
+                key,
+                HashAlgorithmName.SHA256,
+                RSASignaturePadding.Pkcs1);
+            request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+            request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, true));
+            request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension([new Oid("1.3.6.1.5.5.7.3.1")], true));
+            var san = new SubjectAlternativeNameBuilder();
+            san.AddDnsName(normalizedDomain);
+            request.CertificateExtensions.Add(san.Build());
+            request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
 
-        var serial = RandomNumberGenerator.GetBytes(16);
-        serial[0] &= 0x7f;
-        if (serial.All(value => value == 0))
-            serial[^1] = 1;
-        var notBefore = DateTimeOffset.UtcNow.AddMinutes(-5);
-        var notAfter = DateTimeOffset.UtcNow.AddDays(397);
-        using var signed = request.Create(authority, notBefore, notAfter, serial);
-        using var certificate = signed.CopyWithPrivateKey(key);
+            var serial = RandomNumberGenerator.GetBytes(16);
+            serial[0] &= 0x7f;
+            if (serial.All(value => value == 0))
+                serial[^1] = 1;
+            var notBefore = DateTimeOffset.UtcNow.AddMinutes(-5);
+            var notAfter = DateTimeOffset.UtcNow.AddDays(397);
+            using var signed = request.Create(authority, notBefore, notAfter, serial);
+            using var certificate = signed.CopyWithPrivateKey(key);
 
-        var sitesDirectory = Path.Combine(_rootPath, "config", "ssl", "sites");
-        Directory.CreateDirectory(sitesDirectory);
-        var certPath = Path.Combine(sitesDirectory, $"{domain}.crt.pem");
-        var keyPath = Path.Combine(sitesDirectory, $"{domain}.key.pem");
-        AtomicWrite(certPath, certificate.ExportCertificatePem() + authority.ExportCertificatePem());
-        AtomicWrite(keyPath, key.ExportPkcs8PrivateKeyPem());
-        return new X509Certificate2(certificate.Export(X509ContentType.Cert));
+            var sitesDirectory = Path.Combine(_rootPath, "config", "ssl", "sites");
+            Directory.CreateDirectory(sitesDirectory);
+            var certPath = Path.Combine(sitesDirectory, $"{normalizedDomain}.crt.pem");
+            var keyPath = Path.Combine(sitesDirectory, $"{normalizedDomain}.key.pem");
+
+            if (File.Exists(certPath))
+            {
+                try
+                {
+                    new LocalCertificateManager(_rootPath).UntrustForCurrentUser(normalizedDomain);
+                }
+                catch (CryptographicException)
+                {
+                    // A corrupt previous PEM has no recoverable thumbprint. The raw bytes were
+                    // already captured above, so replacement can proceed and rollback remains safe.
+                }
+            }
+
+            AtomicWrite(certPath, certificate.ExportCertificatePem() + authority.ExportCertificatePem());
+            AtomicWrite(keyPath, key.ExportPkcs8PrivateKeyPem());
+            return new X509Certificate2(certificate.Export(X509ContentType.Cert));
+        }
+        catch
+        {
+            rollbackService.Restore(rollbackState);
+            throw;
+        }
     }
 
     public bool IsTrustedCurrentUser()
@@ -118,12 +142,8 @@ public sealed partial class LocalCertificateAuthorityService
     public void RotateAuthority()
     {
         EnsureWindows();
-        if (Exists)
-            _ = RemoveTrustCurrentUser();
-        TryDeleteFile(_caPfxPath);
-        TryDeleteFile(_caPemPath);
-        _secrets.Delete(PasswordSecretKey);
-        _ = EnsureAuthority(trustCurrentUser: true);
+        RemoveAuthority();
+        using var replacement = EnsureAuthority(trustCurrentUser: true);
     }
 
     private void CreateAuthority()
@@ -165,7 +185,7 @@ public sealed partial class LocalCertificateAuthorityService
     private X509Certificate2 LoadAuthority(bool publicOnly = false)
     {
         if (publicOnly)
-            return X509Certificate2.CreateFromPemFile(_caPemPath);
+            return LocalCertificateManager.LoadPublicCertificate(_caPemPath);
         var password = _secrets.Get(PasswordSecretKey)
             ?? throw new InvalidDataException("The local CA private-key password is missing from the DPAPI secret store.");
         try

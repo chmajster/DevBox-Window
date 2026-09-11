@@ -5,6 +5,14 @@ using DevBox.Core.Models;
 
 namespace DevBox.Core.Services;
 
+public sealed class CertificateTrustStoreException : Exception
+{
+    public CertificateTrustStoreException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
 public sealed partial class LocalCertificateManager
 {
     private readonly string _certificateRoot;
@@ -17,7 +25,7 @@ public sealed partial class LocalCertificateManager
 
     public LocalCertificate Ensure(string domain)
     {
-        var normalizedDomain = ValidateDomain(domain);
+        var normalizedDomain = NormalizeDomain(domain);
         Directory.CreateDirectory(_certificateRoot);
         var certificatePath = CertificatePath(normalizedDomain);
         var privateKeyPath = PrivateKeyPath(normalizedDomain);
@@ -29,9 +37,7 @@ public sealed partial class LocalCertificateManager
             {
                 using var existing = X509Certificate2.CreateFromPemFile(certificatePath, privateKeyPath);
                 if (existing.NotAfter.ToUniversalTime() > DateTime.UtcNow.AddDays(7))
-                {
                     return ToModel(normalizedDomain, certificatePath, privateKeyPath, existing);
-                }
                 replacedThumbprint = existing.Thumbprint;
             }
             catch (CryptographicException)
@@ -66,22 +72,18 @@ public sealed partial class LocalCertificateManager
 
         if (!string.IsNullOrWhiteSpace(replacedThumbprint) &&
             !replacedThumbprint.Equals(certificate.Thumbprint, StringComparison.OrdinalIgnoreCase))
-        {
             RemoveTrustedThumbprint(replacedThumbprint);
-        }
 
         return ToModel(normalizedDomain, certificatePath, privateKeyPath, certificate);
     }
 
     public bool IsTrustedForCurrentUser(string domain)
     {
-        var certificatePath = CertificatePath(ValidateDomain(domain));
+        var certificatePath = CertificatePath(NormalizeDomain(domain));
         if (!File.Exists(certificatePath))
-        {
             return false;
-        }
 
-        using var certificate = X509Certificate2.CreateFromPemFile(certificatePath);
+        using var certificate = LoadPublicCertificate(certificatePath);
         using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
         store.Open(OpenFlags.ReadOnly);
         return store.Certificates.Find(X509FindType.FindByThumbprint, certificate.Thumbprint, validOnly: false).Count > 0;
@@ -90,33 +92,62 @@ public sealed partial class LocalCertificateManager
     public void TrustForCurrentUser(string domain)
     {
         var certificate = Ensure(domain);
-        using var publicCertificate = X509Certificate2.CreateFromPemFile(certificate.CertificatePath);
+        using var publicCertificate = LoadPublicCertificate(certificate.CertificatePath);
         using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
         store.Open(OpenFlags.ReadWrite);
         if (store.Certificates.Find(X509FindType.FindByThumbprint, publicCertificate.Thumbprint, validOnly: false).Count == 0)
-        {
             store.Add(publicCertificate);
-        }
     }
 
     public void UntrustForCurrentUser(string domain)
     {
-        var certificatePath = CertificatePath(ValidateDomain(domain));
+        var certificatePath = CertificatePath(NormalizeDomain(domain));
         if (!File.Exists(certificatePath))
-        {
             return;
-        }
 
-        using var certificate = X509Certificate2.CreateFromPemFile(certificatePath);
+        using var certificate = LoadPublicCertificate(certificatePath);
         RemoveTrustedThumbprint(certificate.Thumbprint);
     }
 
     public void Delete(string domain)
     {
-        var normalizedDomain = ValidateDomain(domain);
-        UntrustForCurrentUser(normalizedDomain);
-        DeleteIfExists(CertificatePath(normalizedDomain));
-        DeleteIfExists(PrivateKeyPath(normalizedDomain));
+        var normalizedDomain = NormalizeDomain(domain);
+        var certificatePath = CertificatePath(normalizedDomain);
+        var privateKeyPath = PrivateKeyPath(normalizedDomain);
+        string? thumbprint = null;
+
+        if (File.Exists(certificatePath))
+        {
+            try
+            {
+                using var certificate = LoadPublicCertificate(certificatePath);
+                thumbprint = certificate.Thumbprint;
+            }
+            catch (CryptographicException)
+            {
+                // Corrupt PEM: no trustworthy thumbprint can be recovered. The local
+                // material itself is unusable, so it may be removed below.
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(thumbprint))
+        {
+            try
+            {
+                RemoveTrustedThumbprint(thumbprint);
+            }
+            catch (Exception ex) when (ex is CryptographicException or IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                // Keep cert/key files intact when the trust store cannot be updated.
+                // Callers can retry later and still have the leaf thumbprint available.
+                throw new CertificateTrustStoreException(
+                    $"Could not remove certificate trust for '{normalizedDomain}'. TLS files were preserved.",
+                    ex);
+            }
+        }
+
+        DeleteIfExists(certificatePath);
+        DeleteIfExists(privateKeyPath);
     }
 
     private static void RemoveTrustedThumbprint(string thumbprint)
@@ -124,9 +155,7 @@ public sealed partial class LocalCertificateManager
         using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
         store.Open(OpenFlags.ReadWrite);
         foreach (var match in store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, validOnly: false))
-        {
             store.Remove(match);
-        }
     }
 
     private string CertificatePath(string domain) => Path.Combine(_certificateRoot, $"{domain}.crt.pem");
@@ -141,14 +170,18 @@ public sealed partial class LocalCertificateManager
             certificate.NotBefore.ToUniversalTime(),
             certificate.NotAfter.ToUniversalTime());
 
-    private static string ValidateDomain(string domain)
+    internal static X509Certificate2 LoadPublicCertificate(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        return X509Certificate2.CreateFromPem(File.ReadAllText(path));
+    }
+
+    internal static string NormalizeDomain(string domain)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
         var normalized = domain.Trim().TrimEnd('.').ToLowerInvariant();
         if (!normalized.EndsWith(".test", StringComparison.OrdinalIgnoreCase) || !DomainRegex().IsMatch(normalized))
-        {
             throw new ArgumentException("Local certificate domains must be valid .test names.", nameof(domain));
-        }
         return normalized;
     }
 
@@ -159,13 +192,9 @@ public sealed partial class LocalCertificateManager
         {
             File.WriteAllText(tempPath, content);
             if (File.Exists(path))
-            {
                 File.Replace(tempPath, path, null);
-            }
             else
-            {
                 File.Move(tempPath, path);
-            }
         }
         finally
         {
@@ -176,9 +205,7 @@ public sealed partial class LocalCertificateManager
     private static void DeleteIfExists(string path)
     {
         if (File.Exists(path))
-        {
             File.Delete(path);
-        }
     }
 
     [GeneratedRegex("^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+test$", RegexOptions.CultureInvariant)]

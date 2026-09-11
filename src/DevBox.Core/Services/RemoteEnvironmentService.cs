@@ -39,7 +39,7 @@ public sealed class RemoteEnvironmentService
             Addons = lockFile.Addons,
             Services = lockFile.Services,
             Actions = lockFile.Actions,
-            Description = $"Portable environment definition exported from {lockFile.ProjectName}. Database name and sensitive authentication material are intentionally excluded."
+            Description = $"Portable environment definition exported from {lockFile.ProjectName}. Database name, project actions and sensitive authentication material are intentionally excluded."
         };
         return Export(profile, $"project-{lockFile.ProjectName}", destinationPath);
     }
@@ -78,6 +78,7 @@ public sealed class RemoteEnvironmentService
         var sanitized = profile with
         {
             Database = profile.Database with { DatabaseName = null },
+            Actions = Array.Empty<ProjectActionDefinition>(),
             Description = profile.Description
         };
         var bundle = new EnvironmentShareBundle
@@ -87,7 +88,8 @@ public sealed class RemoteEnvironmentService
             Metadata = new Dictionary<string, string>
             {
                 ["format"] = "DevBox Environment Share",
-                ["sanitized"] = "true"
+                ["sanitized"] = "true",
+                ["actionsOmitted"] = profile.Actions.Count > 0 ? "true" : "false"
             }
         };
         var content = JsonSerializer.Serialize(bundle, JsonOptions);
@@ -115,6 +117,8 @@ public sealed class RemoteEnvironmentService
         if (string.IsNullOrWhiteSpace(bundle.Name) || bundle.Name.Length > 160)
             throw new InvalidDataException("Environment share name is invalid.");
         ArgumentNullException.ThrowIfNull(bundle.Profile);
+        if (bundle.Profile.Actions.Count > 0)
+            throw new InvalidDataException("Portable environment shares must not contain project actions because action arguments may contain sensitive values.");
     }
 
     private static void EnsureNoSensitiveMaterial(string json)
