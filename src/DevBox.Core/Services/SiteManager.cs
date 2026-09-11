@@ -21,23 +21,17 @@ public sealed partial class SiteManager
     public IReadOnlyList<SiteDefinition> GetSites()
     {
         if (!File.Exists(_sitesMetadataPath))
-        {
             return Array.Empty<SiteDefinition>();
-        }
 
         try
         {
             var json = File.ReadAllText(_sitesMetadataPath);
             if (string.IsNullOrWhiteSpace(json))
-            {
                 return Array.Empty<SiteDefinition>();
-            }
 
             var sites = JsonSerializer.Deserialize<List<SiteDefinition>>(json, JsonOptions) ?? new List<SiteDefinition>();
             foreach (var site in sites)
-            {
                 ValidateLoadedSite(site);
-            }
             ValidateLoadedCollection(sites);
             return sites;
         }
@@ -107,21 +101,12 @@ public sealed partial class SiteManager
         var sites = GetSites().ToList();
         var index = sites.FindIndex(item => item.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase));
         if (index < 0)
-        {
             throw new InvalidOperationException($"Site '{normalizedName}' does not exist.");
-        }
         if (sites.Where((_, itemIndex) => itemIndex != index)
             .Any(item => item.Domain.Equals(normalizedDomain, StringComparison.OrdinalIgnoreCase)))
-        {
             throw new InvalidOperationException($"Domain '{normalizedDomain}' is already assigned to another site.");
-        }
 
         var previous = sites[index];
-        if (!previous.Domain.Equals(normalizedDomain, StringComparison.OrdinalIgnoreCase))
-        {
-            DeleteNginxConfig(previous.Domain);
-        }
-
         var updated = site with
         {
             Name = normalizedName,
@@ -129,10 +114,7 @@ public sealed partial class SiteManager
             DocumentRoot = documentRoot,
             PhpVersion = phpVersion
         };
-        WriteNginxConfig(updated);
-        sites[index] = updated;
-        SaveSites(sites);
-        return updated;
+        return PersistUpdatedSite(previous, updated, sites, index);
     }
 
     public SiteDefinition SetHttps(string name, bool enabled)
@@ -141,15 +123,11 @@ public sealed partial class SiteManager
         var sites = GetSites().ToList();
         var index = sites.FindIndex(site => site.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase));
         if (index < 0)
-        {
             throw new InvalidOperationException($"Site '{normalizedName}' does not exist.");
-        }
 
-        var updated = sites[index] with { HttpsEnabled = enabled };
-        WriteNginxConfig(updated);
-        sites[index] = updated;
-        SaveSites(sites);
-        return updated;
+        var previous = sites[index];
+        var updated = previous with { HttpsEnabled = enabled };
+        return PersistUpdatedSite(previous, updated, sites, index);
     }
 
     public SiteDefinition SetPhpVersion(string name, string? version)
@@ -159,9 +137,7 @@ public sealed partial class SiteManager
         var sites = GetSites().ToList();
         var index = sites.FindIndex(site => site.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase));
         if (index < 0)
-        {
             throw new InvalidOperationException($"Site '{normalizedName}' does not exist.");
-        }
 
         if (normalizedVersion is not null)
         {
@@ -172,17 +148,13 @@ public sealed partial class SiteManager
                 .Where(existing => !string.IsNullOrWhiteSpace(existing) && !existing.Equals(normalizedVersion, StringComparison.OrdinalIgnoreCase))
                 .FirstOrDefault(existing => PhpRuntimePoolManager.GetPort(existing!) == requestedPort);
             if (collision is not null)
-            {
                 throw new InvalidOperationException(
                     $"PHP {normalizedVersion} conflicts with PHP {collision} on FastCGI port {requestedPort}. Choose a different runtime version.");
-            }
         }
 
-        var updated = sites[index] with { PhpVersion = normalizedVersion };
-        WriteNginxConfig(updated);
-        sites[index] = updated;
-        SaveSites(sites);
-        return updated;
+        var previous = sites[index];
+        var updated = previous with { PhpVersion = normalizedVersion };
+        return PersistUpdatedSite(previous, updated, sites, index);
     }
 
     public void Delete(string name, bool deleteDocumentRoot = false)
@@ -191,13 +163,21 @@ public sealed partial class SiteManager
         var sites = GetSites().ToList();
         var site = sites.FirstOrDefault(item => item.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase));
         if (site is null)
-        {
             return;
-        }
 
-        DeleteNginxConfig(site.Domain);
+        var configPath = GetNginxConfigPath(site.Domain);
+        var configState = CaptureFile(configPath);
         sites.Remove(site);
-        SaveSites(sites);
+        try
+        {
+            DeleteNginxConfig(site.Domain);
+            SaveSites(sites);
+        }
+        catch
+        {
+            RestoreFile(configPath, configState);
+            throw;
+        }
 
         if (deleteDocumentRoot && Directory.Exists(site.DocumentRoot))
         {
@@ -221,6 +201,78 @@ public sealed partial class SiteManager
         catch
         {
             TryDeleteNginxConfig(site.Domain);
+            throw;
+        }
+    }
+
+    private SiteDefinition PersistUpdatedSite(
+        SiteDefinition previous,
+        SiteDefinition updated,
+        List<SiteDefinition> sites,
+        int index)
+    {
+        var previousPath = GetNginxConfigPath(previous.Domain);
+        var updatedPath = GetNginxConfigPath(updated.Domain);
+        var sameConfigPath = previousPath.Equals(updatedPath, StringComparison.OrdinalIgnoreCase);
+        var previousConfig = CaptureFile(previousPath);
+        var updatedConfig = sameConfigPath ? previousConfig : CaptureFile(updatedPath);
+        var metadataSaved = false;
+
+        try
+        {
+            WriteNginxConfig(updated);
+            sites[index] = updated;
+            SaveSites(sites);
+            metadataSaved = true;
+
+            if (!sameConfigPath)
+                DeleteNginxConfig(previous.Domain);
+
+            return updated;
+        }
+        catch (Exception original)
+        {
+            var rollbackErrors = new List<Exception>();
+            sites[index] = previous;
+
+            if (metadataSaved)
+            {
+                try
+                {
+                    SaveSites(sites);
+                }
+                catch (Exception rollbackMetadataError)
+                {
+                    rollbackErrors.Add(rollbackMetadataError);
+                }
+            }
+
+            try
+            {
+                RestoreFile(updatedPath, updatedConfig);
+            }
+            catch (Exception rollbackUpdatedConfigError)
+            {
+                rollbackErrors.Add(rollbackUpdatedConfigError);
+            }
+
+            if (!sameConfigPath)
+            {
+                try
+                {
+                    RestoreFile(previousPath, previousConfig);
+                }
+                catch (Exception rollbackPreviousConfigError)
+                {
+                    rollbackErrors.Add(rollbackPreviousConfigError);
+                }
+            }
+
+            if (rollbackErrors.Count > 0)
+                throw new AggregateException(
+                    "Site update failed and one or more rollback operations also failed.",
+                    new[] { original }.Concat(rollbackErrors));
+
             throw;
         }
     }
@@ -295,9 +347,7 @@ server {
     {
         var configPath = GetNginxConfigPath(domain);
         if (File.Exists(configPath))
-        {
             File.Delete(configPath);
-        }
     }
 
     private void TryDeleteNginxConfig(string domain)
@@ -322,20 +372,44 @@ server {
         {
             File.WriteAllText(tempPath, JsonSerializer.Serialize(sites.OrderBy(site => site.Name), JsonOptions));
             if (File.Exists(_sitesMetadataPath))
-            {
                 File.Replace(tempPath, _sitesMetadataPath, null);
-            }
             else
-            {
                 File.Move(tempPath, _sitesMetadataPath);
-            }
         }
         finally
         {
             if (File.Exists(tempPath))
-            {
                 File.Delete(tempPath);
-            }
+        }
+    }
+
+    private static byte[]? CaptureFile(string path) =>
+        File.Exists(path) ? File.ReadAllBytes(path) : null;
+
+    private static void RestoreFile(string path, byte[]? content)
+    {
+        if (content is null)
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+            return;
+        }
+
+        var directory = Path.GetDirectoryName(path)!;
+        Directory.CreateDirectory(directory);
+        var tempPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.rollback.tmp");
+        try
+        {
+            File.WriteAllBytes(tempPath, content);
+            if (File.Exists(path))
+                File.Replace(tempPath, path, null);
+            else
+                File.Move(tempPath, path);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+                File.Delete(tempPath);
         }
     }
 
@@ -348,20 +422,14 @@ server {
         {
             File.WriteAllText(tempPath, content);
             if (File.Exists(path))
-            {
                 File.Replace(tempPath, path, null);
-            }
             else
-            {
                 File.Move(tempPath, path);
-            }
         }
         finally
         {
             if (File.Exists(tempPath))
-            {
                 File.Delete(tempPath);
-            }
         }
     }
 
@@ -383,18 +451,14 @@ server {
     private void ValidateLoadedSite(SiteDefinition? site)
     {
         if (site is null)
-        {
             throw new InvalidDataException("Site metadata contains a null entry.");
-        }
 
         _ = NormalizeName(site.Name);
         _ = NormalizeDomain(site.Domain);
         _ = EnsureDocumentRootUnderWww(site.DocumentRoot);
         _ = NormalizePhpVersion(site.PhpVersion);
         if (!string.Equals(site.PhpRuntimeKey, "php", StringComparison.OrdinalIgnoreCase))
-        {
             throw new InvalidDataException("Site metadata contains an unsupported PHP runtime key.");
-        }
     }
 
     private static void ValidateLoadedCollection(IReadOnlyCollection<SiteDefinition> sites)
@@ -403,17 +467,13 @@ server {
             .GroupBy(site => site.Name, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault(group => group.Count() > 1);
         if (duplicateName is not null)
-        {
             throw new InvalidDataException($"Site metadata contains duplicate site name '{duplicateName.Key}'.");
-        }
 
         var duplicateDomain = sites
             .GroupBy(site => site.Domain, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault(group => group.Count() > 1);
         if (duplicateDomain is not null)
-        {
             throw new InvalidDataException($"Site metadata contains duplicate domain '{duplicateDomain.Key}'.");
-        }
 
         var portCollision = sites
             .Where(site => !string.IsNullOrWhiteSpace(site.PhpVersion))
@@ -436,9 +496,7 @@ server {
     private void QuarantineInvalidSitesMetadata()
     {
         if (!File.Exists(_sitesMetadataPath))
-        {
             return;
-        }
 
         var quarantinePath = $"{_sitesMetadataPath}.invalid-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{Guid.NewGuid():N}.bak";
         try
@@ -456,9 +514,7 @@ server {
         var fullWwwRoot = _wwwRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         var fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         if (!fullPath.StartsWith(fullWwwRoot, StringComparison.OrdinalIgnoreCase))
-        {
             throw new InvalidOperationException("Site document root must be inside the DevBox www directory.");
-        }
         return fullPath;
     }
 
@@ -467,9 +523,7 @@ server {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         var normalized = name.Trim().ToLowerInvariant();
         if (!SafeNameRegex().IsMatch(normalized))
-        {
             throw new ArgumentException("Site name may contain only letters, digits, dots, hyphens and underscores.", nameof(name));
-        }
         return normalized;
     }
 
@@ -478,27 +532,19 @@ server {
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
         var normalized = domain.Trim().TrimEnd('.').ToLowerInvariant();
         if (!normalized.EndsWith(".test", StringComparison.OrdinalIgnoreCase))
-        {
             throw new ArgumentException("DevBox local domains must end with .test.", nameof(domain));
-        }
         if (!DomainRegex().IsMatch(normalized))
-        {
             throw new ArgumentException("Invalid local domain.", nameof(domain));
-        }
         return normalized;
     }
 
     private static string? NormalizePhpVersion(string? version)
     {
         if (string.IsNullOrWhiteSpace(version))
-        {
             return null;
-        }
         var normalized = version.Trim();
         if (!PhpVersionRegex().IsMatch(normalized))
-        {
             throw new ArgumentException("PHP version must use MAJOR.MINOR.PATCH format.", nameof(version));
-        }
         return normalized;
     }
 
