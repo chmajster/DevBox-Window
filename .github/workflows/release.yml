@@ -329,7 +329,11 @@ jobs:
           git add src/DevBox.App/DevBox.App.csproj installer/DevBox.iss README.md
           git commit -m "release: $env:DEVBOX_RELEASE_TAG"
           git tag -a $env:DEVBOX_RELEASE_TAG -m "DevBox $env:DEVBOX_VERSION"
-          git push --atomic origin HEAD:refs/heads/main "refs/tags/$env:DEVBOX_RELEASE_TAG:refs/tags/$env:DEVBOX_RELEASE_TAG"
+          $tagRef = "refs/tags/$env:DEVBOX_RELEASE_TAG"
+          git push --atomic origin HEAD:refs/heads/main "${tagRef}:${tagRef}"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Atomic push of main and $tagRef failed with exit code $LASTEXITCODE"
+          }
 
       - name: Upload release build artifact
         uses: actions/upload-artifact@v7
