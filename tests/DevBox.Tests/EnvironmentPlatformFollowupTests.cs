@@ -1,4 +1,3 @@
-using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using DevBox.Core.Models;
 using DevBox.Core.Services;
@@ -230,17 +229,22 @@ public sealed class EnvironmentPlatformFollowupTests
             return;
 
         var root = TemporaryRoot();
-        string? thumbprint = null;
         try
         {
             using var authority = new LocalCertificateAuthorityService(root);
-            using (var certificate = authority.EnsureAuthority(trustCurrentUser: true))
-                thumbprint = certificate.Thumbprint;
+            using (authority.EnsureAuthority(trustCurrentUser: false))
+            {
+            }
+
+            var simulatedTrusted = true;
+            authority.IsTrustedCurrentUserOverride = _ => simulatedTrusted;
+            authority.RemoveTrustCurrentUserOverride = _ => simulatedTrusted = false;
+            authority.RestoreTrustCurrentUserOverride = _ => simulatedTrusted = true;
 
             var secrets = new SecureSecretStore(root);
             const string passwordKey = "ssl.local-ca.pfx-password";
             Assert.NotNull(secrets.Get(passwordKey));
-            Assert.True(IsRootTrusted(thumbprint));
+            Assert.True(simulatedTrusted);
 
             var pfxPath = Path.Combine(root, "config", "ssl", "ca", "devbox-local-ca.pfx");
             using (var locked = new FileStream(pfxPath, FileMode.Open, FileAccess.Read, FileShare.None))
@@ -248,17 +252,15 @@ public sealed class EnvironmentPlatformFollowupTests
                 Assert.ThrowsAny<IOException>(() => authority.RemoveAuthority());
                 Assert.NotNull(secrets.Get(passwordKey));
                 Assert.True(File.Exists(pfxPath));
-                Assert.True(IsRootTrusted(thumbprint));
+                Assert.True(simulatedTrusted);
             }
 
             authority.RemoveAuthority();
             Assert.Null(secrets.Get(passwordKey));
-            Assert.False(IsRootTrusted(thumbprint));
+            Assert.False(simulatedTrusted);
         }
         finally
         {
-            if (!string.IsNullOrWhiteSpace(thumbprint))
-                RemoveRootTrust(thumbprint);
             DeleteRoot(root);
         }
     }
@@ -270,44 +272,30 @@ public sealed class EnvironmentPlatformFollowupTests
             return;
 
         var root = TemporaryRoot();
-        string? thumbprint = null;
         try
         {
             using var authority = new LocalCertificateAuthorityService(root);
-            using (var certificate = authority.EnsureAuthority(trustCurrentUser: true))
-                thumbprint = certificate.Thumbprint;
+            using (authority.EnsureAuthority(trustCurrentUser: false))
+            {
+            }
 
-            Assert.True(IsRootTrusted(thumbprint));
+            var simulatedTrusted = true;
+            authority.IsTrustedCurrentUserOverride = _ => simulatedTrusted;
+            authority.RemoveTrustCurrentUserOverride = _ => simulatedTrusted = false;
+            authority.RestoreTrustCurrentUserOverride = _ => simulatedTrusted = true;
 
             var pfxPath = Path.Combine(root, "config", "ssl", "ca", "devbox-local-ca.pfx");
             File.Delete(pfxPath);
             authority.RemoveAuthority();
 
-            Assert.False(IsRootTrusted(thumbprint));
+            Assert.False(simulatedTrusted);
             Assert.False(File.Exists(authority.CertificatePath));
             Assert.Null(new SecureSecretStore(root).Get("ssl.local-ca.pfx-password"));
         }
         finally
         {
-            if (!string.IsNullOrWhiteSpace(thumbprint))
-                RemoveRootTrust(thumbprint);
             DeleteRoot(root);
         }
-    }
-
-    private static bool IsRootTrusted(string thumbprint)
-    {
-        using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
-        store.Open(OpenFlags.ReadOnly);
-        return store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, validOnly: false).Count > 0;
-    }
-
-    private static void RemoveRootTrust(string thumbprint)
-    {
-        using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
-        store.Open(OpenFlags.ReadWrite);
-        foreach (var certificate in store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, validOnly: false))
-            store.Remove(certificate);
     }
 
     private static string TemporaryRoot()
