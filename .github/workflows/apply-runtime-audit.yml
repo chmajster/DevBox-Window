@@ -27,13 +27,6 @@ jobs:
           python .github/scripts/apply-runtime-audit-followup.py
           python .github/scripts/apply-runtime-audit-testfix.py
 
-      - name: Validate
-        shell: pwsh
-        run: |
-          git diff --check
-          dotnet build DevBox.sln --configuration Release
-          dotnet test DevBox.sln --configuration Release --no-build
-
       - name: Commit fixes
         shell: pwsh
         run: |
@@ -44,3 +37,10 @@ jobs:
             git commit -m "fix: harden runtime startup and recovery"
             git push origin HEAD:fix/startup-runtime-lifecycle-audit
           }
+
+      - name: Validate
+        shell: pwsh
+        run: |
+          git diff --check
+          dotnet build DevBox.sln --configuration Release
+          dotnet test DevBox.sln --configuration Release --no-build
