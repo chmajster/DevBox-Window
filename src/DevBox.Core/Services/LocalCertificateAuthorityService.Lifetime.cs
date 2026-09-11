@@ -89,9 +89,15 @@ public sealed partial class LocalCertificateAuthorityService : IDisposable
             {
                 return LocalCertificateManager.LoadPublicCertificate(_caPemPath);
             }
-            catch (CryptographicException) when (File.Exists(_caPfxPath))
+            catch (CryptographicException)
             {
-                return LoadAuthority();
+                // If the PEM is corrupt but a PFX still exists, recover the public
+                // certificate from the PFX. If it is the only remaining CA file, there
+                // is no trustworthy thumbprint to clean from the store; removal may
+                // still safely discard this unusable local material.
+                if (File.Exists(_caPfxPath))
+                    return LoadAuthority();
+                return null;
             }
         }
 
@@ -176,11 +182,9 @@ public sealed partial class LocalCertificateAuthorityService : IDisposable
             }
             catch (IOException)
             {
-                // Continue to the strict restore below so the rollback failure is visible.
             }
             catch (UnauthorizedAccessException)
             {
-                // Continue to the strict restore below so the rollback failure is visible.
             }
         }
 
