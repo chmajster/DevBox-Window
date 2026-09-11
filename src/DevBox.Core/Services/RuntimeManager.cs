@@ -57,16 +57,26 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
             .ToArray();
     }
 
-    public async Task InstallAsync(RuntimeDefinition definition, CancellationToken cancellationToken = default)
+    public Task InstallAsync(RuntimeDefinition definition, CancellationToken cancellationToken = default) =>
+        InstallAsync(definition, progress: null, cancellationToken);
+
+    public async Task InstallAsync(
+        RuntimeDefinition definition,
+        IProgress<int>? progress,
+        CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(definition);
         ValidateDefinition(definition);
+        progress?.Report(0);
         using var runtimeLock = await AcquireRuntimeLockAsync(definition.Key, cancellationToken).ConfigureAwait(false);
-        await InstallUnderLockAsync(definition, cancellationToken).ConfigureAwait(false);
+        await InstallUnderLockAsync(definition, progress, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task InstallUnderLockAsync(RuntimeDefinition definition, CancellationToken cancellationToken)
+    private async Task InstallUnderLockAsync(
+        RuntimeDefinition definition,
+        IProgress<int>? progress,
+        CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(definition);
@@ -75,12 +85,15 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         var bundledPath = VersionPath(definition.Key, definition.Version);
         if (Directory.Exists(bundledPath))
         {
+            progress?.Report(85);
             ValidateRuntimeExecutable(bundledPath, definition.ExecutableRelativePath);
+            progress?.Report(95);
             await ActivateUnderLockAsync(
                 definition.Key,
                 definition.Version,
                 definition.ExecutableRelativePath,
                 cancellationToken).ConfigureAwait(false);
+            progress?.Report(100);
             return;
         }
 
@@ -98,8 +111,16 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
 
         try
         {
-            await DownloadAsync(definition.DownloadUrl!, archivePath, cancellationToken).ConfigureAwait(false);
+            progress?.Report(5);
+            IProgress<int>? downloadProgress = progress is null
+                ? null
+                : new Progress<int>(value => progress.Report(5 + (int)Math.Round(Math.Clamp(value, 0, 100) * 0.60)));
+            await DownloadAsync(definition.DownloadUrl!, archivePath, downloadProgress, cancellationToken).ConfigureAwait(false);
+
+            progress?.Report(68);
             VerifySha256(archivePath, definition.Sha256!);
+
+            progress?.Report(74);
             ExtractZipSafely(archivePath, extractPath);
 
             var sourcePath = string.IsNullOrWhiteSpace(definition.ArchiveRootDirectory)
@@ -111,13 +132,18 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
                 throw new InvalidDataException($"Archive root '{definition.ArchiveRootDirectory}' was not found.");
             }
 
+            progress?.Report(82);
             CopyDirectory(sourcePath, stagingPath, cancellationToken);
             ValidateRuntimeExecutable(stagingPath, definition.ExecutableRelativePath);
             File.WriteAllText(Path.Combine(stagingPath, VersionMarker), definition.Version);
 
+            progress?.Report(90);
             var installPath = VersionPath(definition.Key, definition.Version);
             ReplaceDirectory(stagingPath, installPath);
+
+            progress?.Report(95);
             await ActivateUnderLockAsync(definition.Key, definition.Version, definition.ExecutableRelativePath, cancellationToken).ConfigureAwait(false);
+            progress?.Report(100);
         }
         finally
         {
@@ -234,7 +260,11 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
             MaximumRuntimeArchiveEntries,
             "Runtime");
 
-    private async Task DownloadAsync(string url, string destination, CancellationToken cancellationToken)
+    private async Task DownloadAsync(
+        string url,
+        string destination,
+        IProgress<int>? progress,
+        CancellationToken cancellationToken)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
         {
@@ -247,7 +277,8 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
             destination,
             MaximumRuntimeDownloadBytes,
             "Runtime",
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            progress).ConfigureAwait(false);
     }
 
     internal Task<FileStream> AcquireRuntimeLockAsync(string runtimeKey, CancellationToken cancellationToken)
