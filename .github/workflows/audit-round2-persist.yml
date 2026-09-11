@@ -1,0 +1,40 @@
+name: Persist audit round 2 repairs
+
+on:
+  push:
+    branches:
+      - fix/post-merge-audit-round2-2026-09-11
+    paths:
+      - .github/workflows/audit-round2-persist.yml
+
+permissions:
+  contents: write
+
+jobs:
+  persist:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+      - name: Fix repair script matcher
+        run: python .github/scripts/audit_round2_fixup.py
+      - name: Apply audit fixes
+        run: python .github/scripts/audit_round2_repair.py
+      - name: Update TLS rollback regression expectation
+        run: python .github/scripts/audit_round2_test_fixup.py
+      - name: Verify tests
+        run: |
+          dotnet restore DevBox.sln
+          dotnet test DevBox.sln --configuration Release --no-restore
+      - name: Commit product changes only
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests installer
+          git commit -m "fix: harden cross-process lifecycle and release architecture"
+          git push origin HEAD:${GITHUB_REF_NAME}
