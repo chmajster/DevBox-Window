@@ -95,7 +95,7 @@ public sealed partial class ProjectWorkspaceService
         if (projectRootExisted && Directory.EnumerateFileSystemEntries(projectRoot).Any())
             throw new InvalidOperationException($"Project destination is not empty: {projectRoot}");
 
-        var rollbackDomain = request.Domain ?? $"{NormalizeProjectDirectoryName(request.Name)}.test";
+        var rollbackDomain = request.Domain ?? LocalDomainName.FromName(NormalizeProjectDirectoryName(request.Name));
         var tlsRollback = new TlsRollbackStateService(_rootPath);
         var tlsState = tlsRollback.Capture(rollbackDomain);
         var siteCreated = false;
@@ -162,7 +162,7 @@ public sealed partial class ProjectWorkspaceService
 
         var manifestPath = Path.Combine(projectRoot, ManifestFileName);
         var previousManifest = !request.CopyIntoDevBox && File.Exists(manifestPath) ? File.ReadAllBytes(manifestPath) : null;
-        var rollbackDomain = request.Domain ?? $"{NormalizeProjectDirectoryName(request.Name)}.test";
+        var rollbackDomain = request.Domain ?? LocalDomainName.FromName(NormalizeProjectDirectoryName(request.Name));
         var tlsRollback = new TlsRollbackStateService(_rootPath);
         var tlsState = tlsRollback.Capture(rollbackDomain);
         var siteCreated = false;
@@ -666,7 +666,7 @@ public sealed partial class ProjectWorkspaceService
         Converters = { new JsonStringEnumConverter() }
     };
 
-    [GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,62}$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,79}$", RegexOptions.CultureInvariant)]
     private static partial Regex SafeProjectNameRegex();
 
     [GeneratedRegex("^[A-Za-z0-9_-]{1,64}$", RegexOptions.CultureInvariant)]

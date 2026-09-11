@@ -26,7 +26,7 @@ public sealed class GitProjectBootstrapService
         var repository = ValidateRepositoryUrl(request.RepositoryUrl);
         var projectName = NormalizeProjectName(request.ProjectName);
         var branch = NormalizeBranch(request.Branch);
-        var domain = NormalizeDomain(request.Domain ?? $"{projectName}.test");
+        var domain = NormalizeDomain(request.Domain ?? LocalDomainName.FromName(projectName));
         var tlsRollback = new TlsRollbackStateService(_rootPath);
         var tlsState = tlsRollback.Capture(domain);
         Directory.CreateDirectory(_wwwRoot);
