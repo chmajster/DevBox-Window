@@ -428,7 +428,8 @@ public sealed class EnvironmentPlatformFollowupTests
             File.WriteAllText(certificatePath, "newly-created-material");
 
             using var locked = new FileStream(certificatePath, FileMode.Open, FileAccess.Read, FileShare.None);
-            Assert.ThrowsAny<IOException>(() => rollback.Restore(state));
+            var aggregate = Assert.Throws<AggregateException>(() => rollback.Restore(state));
+            Assert.Contains(aggregate.InnerExceptions, ex => ex is IOException);
             Assert.True(File.Exists(certificatePath));
         }
         finally

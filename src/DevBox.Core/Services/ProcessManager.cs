@@ -23,6 +23,7 @@ public sealed class ProcessManager : IProcessManager
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            using var processLock = await CrossProcessFileLock.AcquireAsync(ProcessLockPath(definition), cancellationToken).ConfigureAwait(false);
             if (_processes.TryGetValue(definition.Key, out var existing) && !existing.Process.HasExited)
             {
                 return Snapshot(existing, ServiceState.Running);
@@ -109,6 +110,7 @@ public sealed class ProcessManager : IProcessManager
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            using var processLock = await CrossProcessFileLock.AcquireAsync(ProcessLockPath(definition), cancellationToken).ConfigureAwait(false);
             ManagedProcess? managed = null;
             if (_processes.TryGetValue(definition.Key, out var existing) && !existing.Process.HasExited)
             {
@@ -432,6 +434,9 @@ public sealed class ProcessManager : IProcessManager
 
     private static string PidMarkerPath(ServiceDefinition definition) =>
         Path.Combine(definition.WorkingDirectory, "tmp", "services", $"{definition.Key}.pid");
+
+    private static string ProcessLockPath(ServiceDefinition definition) =>
+        Path.Combine(definition.WorkingDirectory, "tmp", "services", $"{definition.Key}.lock");
 
     private static void WritePidMarker(ManagedProcess managed)
     {

@@ -211,13 +211,8 @@ public sealed class EnvironmentLockService : IDisposable
         if (!ActionsEqual(currentActions, desired.Actions))
             drift.Add("Project actions differ from devbox.lock.json.");
 
-        if (desired.Https)
-        {
-            var certificate = Path.Combine(_rootPath, "config", "ssl", "sites", $"{desired.Domain}.crt.pem");
-            var key = Path.Combine(_rootPath, "config", "ssl", "sites", $"{desired.Domain}.key.pem");
-            if (!File.Exists(certificate) || !File.Exists(key))
-                drift.Add($"HTTPS certificate files are missing for {desired.Domain}.");
-        }
+        if (desired.Https && !new LocalCertificateManager(_rootPath).IsMaterialValid(desired.Domain))
+            drift.Add($"HTTPS certificate material is missing, invalid, expired, mismatched, or issued for another domain: {desired.Domain}.");
 
         return drift;
     }
@@ -336,25 +331,44 @@ public sealed class EnvironmentLockService : IDisposable
             return new EnvironmentApplyResult(desired, applied, warnings);
         }
 
-        var manifest = ReadManifestObject(root);
-        UpdateManifestFromLock(manifest, desired);
-        AtomicWrite(Path.Combine(root, ProjectWorkspaceService.ManifestFileName), manifest.ToJsonString(JsonOptions));
-        applied.Add("Synchronized devbox.json with devbox.lock.json.");
-
-        _actions.SetActions(root, desired.Actions);
-        applied.Add($"Synchronized {desired.Actions.Count} project action(s).");
+        var manifestPath = Path.Combine(root, ProjectWorkspaceService.ManifestFileName);
+        var previousManifestBytes = File.ReadAllBytes(manifestPath);
+        var previousActions = _actions.GetActions(root);
+        var previousSite = _sites.GetSites().FirstOrDefault(item => item.Name.Equals(desired.ProjectName, StringComparison.OrdinalIgnoreCase));
+        var tlsRollback = new TlsRollbackStateService(_rootPath);
+        var desiredTlsState = tlsRollback.Capture(desired.Domain);
+        TlsRollbackState? previousTlsState = previousSite is not null && !previousSite.Domain.Equals(desired.Domain, StringComparison.OrdinalIgnoreCase)
+            ? tlsRollback.Capture(previousSite.Domain)
+            : null;
 
         try
         {
             SynchronizeSite(root, desired);
             applied.Add($"Synchronized Site {desired.Domain}.");
-        }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or ArgumentException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException or PlatformNotSupportedException)
-        {
-            warnings.Add($"Site/TLS: {ex.Message}");
-        }
 
-        return new EnvironmentApplyResult(desired, applied, warnings);
+            var manifest = ReadManifestObject(root);
+            UpdateManifestFromLock(manifest, desired);
+            AtomicWrite(manifestPath, manifest.ToJsonString(JsonOptions));
+            applied.Add("Synchronized devbox.json with devbox.lock.json.");
+
+            _actions.SetActions(root, desired.Actions);
+            applied.Add($"Synchronized {desired.Actions.Count} project action(s).");
+            return new EnvironmentApplyResult(desired, applied, warnings);
+        }
+        catch (Exception original)
+        {
+            var rollbackActions = new List<Action>
+            {
+                () => RestoreBytes(manifestPath, previousManifestBytes),
+                () => _actions.SetActions(root, previousActions),
+                () => RestoreSite(previousSite, desired.ProjectName),
+                () => tlsRollback.Restore(desiredTlsState)
+            };
+            if (previousTlsState is not null)
+                rollbackActions.Add(() => tlsRollback.Restore(previousTlsState));
+            RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
+            throw new InvalidOperationException("Environment rollback executor returned unexpectedly.");
+        }
     }
 
     private void SynchronizeSite(string root, EnvironmentLockFile desired)
@@ -365,71 +379,71 @@ public sealed class EnvironmentLockService : IDisposable
             : root;
         var phpVersion = desired.Runtimes.TryGetValue("php", out var php) ? php : null;
         var previous = _sites.GetSites().FirstOrDefault(item => item.Name.Equals(desired.ProjectName, StringComparison.OrdinalIgnoreCase));
-        var tlsRollback = new TlsRollbackStateService(_rootPath);
-        var desiredTlsState = tlsRollback.Capture(desired.Domain);
-        TlsRollbackState? previousTlsState = previous is not null && !previous.Domain.Equals(desired.Domain, StringComparison.OrdinalIgnoreCase)
-            ? tlsRollback.Capture(previous.Domain)
-            : null;
-        var created = false;
 
-        try
+        if (previous is null)
+            _ = _sites.Create(desired.ProjectName, desired.Domain, documentRoot);
+
+        if (desired.Https)
         {
-            if (previous is null)
+            if (OperatingSystem.IsWindows())
             {
-                _ = _sites.Create(desired.ProjectName, desired.Domain, documentRoot);
-                created = true;
-            }
-
-            if (desired.Https)
-            {
-                if (OperatingSystem.IsWindows())
-                {
-                    using var authority = new LocalCertificateAuthorityService(_rootPath);
-                    using var certificate = authority.IssueSiteCertificate(desired.Domain);
-                }
-                else
-                {
-                    _ = new LocalCertificateManager(_rootPath).Ensure(desired.Domain);
-                }
+                using var authority = new LocalCertificateAuthorityService(_rootPath);
+                using var certificate = authority.IssueSiteCertificate(desired.Domain);
             }
             else
             {
-                new LocalCertificateManager(_rootPath).Delete(desired.Domain);
-            }
-
-            var updated = new SiteDefinition(desired.ProjectName, desired.Domain, documentRoot, "php", phpVersion, desired.Https);
-            _ = _sites.Update(updated);
-
-            if (previous is not null && !previous.Domain.Equals(desired.Domain, StringComparison.OrdinalIgnoreCase))
-            {
-                var oldDomainStillUsed = _sites.GetSites().Any(item =>
-                    !item.Name.Equals(previous.Name, StringComparison.OrdinalIgnoreCase) &&
-                    item.Domain.Equals(previous.Domain, StringComparison.OrdinalIgnoreCase));
-                if (!oldDomainStillUsed)
-                    new LocalCertificateManager(_rootPath).Delete(previous.Domain);
+                _ = new LocalCertificateManager(_rootPath).Ensure(desired.Domain);
             }
         }
-        catch
+        else
         {
-            try
-            {
-                if (created)
-                    _sites.Delete(desired.ProjectName);
-                else if (previous is not null)
-                    _ = _sites.Update(previous);
-            }
-            catch (Exception)
-            {
-            }
+            new LocalCertificateManager(_rootPath).Delete(desired.Domain);
+        }
 
-            try { tlsRollback.Restore(desiredTlsState); }
-            catch (Exception) { }
-            if (previousTlsState is not null)
-            {
-                try { tlsRollback.Restore(previousTlsState); }
-                catch (Exception) { }
-            }
-            throw;
+        var updated = new SiteDefinition(desired.ProjectName, desired.Domain, documentRoot, "php", phpVersion, desired.Https);
+        _ = _sites.Update(updated);
+
+        if (previous is not null && !previous.Domain.Equals(desired.Domain, StringComparison.OrdinalIgnoreCase))
+        {
+            var oldDomainStillUsed = _sites.GetSites().Any(item =>
+                !item.Name.Equals(previous.Name, StringComparison.OrdinalIgnoreCase) &&
+                item.Domain.Equals(previous.Domain, StringComparison.OrdinalIgnoreCase));
+            if (!oldDomainStillUsed)
+                new LocalCertificateManager(_rootPath).Delete(previous.Domain);
+        }
+    }
+
+    private void RestoreSite(SiteDefinition? previous, string projectName)
+    {
+        var current = _sites.GetSites().FirstOrDefault(item => item.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase));
+        if (previous is null)
+        {
+            if (current is not null)
+                _sites.Delete(projectName);
+            return;
+        }
+
+        if (current is null)
+            _ = _sites.Create(previous.Name, previous.Domain, previous.DocumentRoot);
+        _ = _sites.Update(previous);
+    }
+
+    private static void RestoreBytes(string path, byte[] content)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temp = path + $".{Guid.NewGuid():N}.rollback";
+        try
+        {
+            File.WriteAllBytes(temp, content);
+            if (File.Exists(path))
+                File.Replace(temp, path, null);
+            else
+                File.Move(temp, path);
+        }
+        finally
+        {
+            if (File.Exists(temp))
+                File.Delete(temp);
         }
     }
 
