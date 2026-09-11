@@ -167,22 +167,42 @@ begin
     Result := Candidate;
 end;
 
-procedure RemoveGeneratedModules(const BaseDir: String);
+function RemoveGeneratedModules(const BaseDir: String): Boolean;
 var
   ModuleRoot: String;
+  RootPrefix: String;
 begin
+  Result := True;
   if BaseDir = '' then
     Exit;
 
   ModuleRoot := RemoveBackslashUnlessRoot(BaseDir);
+  RootPrefix := AddBackslash(ModuleRoot);
   Log('Removing generated DevBox modules from: ' + ModuleRoot);
 
-  DelTree(AddBackslash(ModuleRoot) + 'runtime', True, True, True);
-  DelTree(AddBackslash(ModuleRoot) + 'tmp\runtimes', True, True, True);
-  DelTree(AddBackslash(ModuleRoot) + 'tmp\runtime-imports', True, True, True);
-  DelTree(AddBackslash(ModuleRoot) + 'tmp\addons', True, True, True);
-  DelTree(AddBackslash(ModuleRoot) + 'www\phpmyadmin', True, True, True);
-  DeleteFile(AddBackslash(ModuleRoot) + 'config\nginx\sites-enabled\phpmyadmin.test.conf');
+  DelTree(RootPrefix + 'runtime', True, True, True);
+  DelTree(RootPrefix + 'tmp\runtimes', True, True, True);
+  DelTree(RootPrefix + 'tmp\runtime-imports', True, True, True);
+  DelTree(RootPrefix + 'tmp\addons', True, True, True);
+  DelTree(RootPrefix + 'www\phpmyadmin', True, True, True);
+  DeleteFile(RootPrefix + 'config\nginx\sites-enabled\phpmyadmin.test.conf');
+
+  Result :=
+    not DirExists(RootPrefix + 'runtime') and
+    not DirExists(RootPrefix + 'tmp\runtimes') and
+    not DirExists(RootPrefix + 'tmp\runtime-imports') and
+    not DirExists(RootPrefix + 'tmp\addons') and
+    not DirExists(RootPrefix + 'www\phpmyadmin') and
+    not FileExists(RootPrefix + 'config\nginx\sites-enabled\phpmyadmin.test.conf');
+
+  if not Result then
+  begin
+    Log('Generated module cleanup is incomplete. One or more managed module paths still exist.');
+    MsgBox(
+      'DevBox could not remove all downloaded modules.' + #13#10 +
+      'Close processes that may still be using PHP, Nginx, MySQL or phpMyAdmin files, then run Setup again.',
+      mbError, MB_OK);
+  end;
 end;
 
 function RunExistingUninstaller(const SilentMode: Boolean): Boolean;
@@ -293,9 +313,14 @@ begin
           Exit;
         end;
 
-        // The old uninstaller may predate [UninstallDelete], therefore perform
-        // explicit cleanup here as well so the first reinstall also removes modules.
-        RemoveGeneratedModules(PreviousInstallLocation);
+        { The old uninstaller may predate [UninstallDelete], therefore perform
+          explicit cleanup here as well so the first reinstall also removes modules. }
+        if not RemoveGeneratedModules(PreviousInstallLocation) then
+        begin
+          Result := False;
+          Exit;
+        end;
+
         ExistingInstallation := False;
         Log('Existing installation and generated modules removed successfully; continuing with reinstall.');
       end;
@@ -318,7 +343,14 @@ begin
           Exit;
         end;
 
-        RemoveGeneratedModules(PreviousInstallLocation);
+        if not RemoveGeneratedModules(PreviousInstallLocation) then
+        begin
+          MaintenanceExit := True;
+          PostMessage(WizardForm.Handle, WM_CLOSE, 0, 0);
+          Result := False;
+          Exit;
+        end;
+
         MaintenanceExit := True;
         MsgBox('DevBox and downloaded modules were uninstalled successfully.', mbInformation, MB_OK);
         PostMessage(WizardForm.Handle, WM_CLOSE, 0, 0);
