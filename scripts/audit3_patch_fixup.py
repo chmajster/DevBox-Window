@@ -29,16 +29,12 @@ if start < 0 or end < 0:
 text = text[:start] + text[end:]
 
 # Any legacy \1/\2/\3 escape in a normal Python replacement literal becomes an ASCII
-# control character before re.sub sees it. Harden regex_once centrally so all current
-# and future generator replacements expand capture groups safely at runtime.
+# control character before re.sub sees it. Harden regex_once centrally.
 old_helper = """def regex_once(path, pattern, replacement, flags=re.S):\n    text = read(path)\n    updated, count = re.subn(pattern, replacement, text, count=1, flags=flags)\n    if count != 1:\n        raise RuntimeError(f'{path}: expected exactly one regex match for {pattern!r}, got {count}')\n    write(path, updated)\n"""
 new_helper = """def regex_once(path, pattern, replacement, flags=re.S):\n    text = read(path)\n    replacement = (replacement\n                   .replace(chr(1), r'\\g<1>')\n                   .replace(chr(2), r'\\g<2>')\n                   .replace(chr(3), r'\\g<3>'))\n    updated, count = re.subn(pattern, replacement, text, count=1, flags=flags)\n    if count != 1:\n        raise RuntimeError(f'{path}: expected exactly one regex match for {pattern!r}, got {count}')\n    write(path, updated)\n"""
 if old_helper not in text:
     raise RuntimeError('regex_once helper was not found in audit3_patch.py')
 text = text.replace(old_helper, new_helper, 1)
-
-# Do not rewrite the backreference source literals themselves; regex_once now handles
-# their parsed control-character form deterministically.
 
 # Duplicate validation in the private RuntimeManager method is harmless.
 start = text.find('# Strip duplicated guards from moved Install body.')
@@ -48,8 +44,6 @@ if start < 0 or end < 0:
 text = text[:start] + text[end:]
 
 # ProjectSnapshotService contains two CopyTo calls that need async/cancellation-aware copies.
-# Replace both C# occurrences in one deterministic operation, then remove every later
-# generator matcher that would try to patch an already-replaced CopyTo call again.
 first_stmt = "replace_once(snapshot, '''                input.CopyTo(output);''', '''                await input.CopyToAsync(output, 81920, cancellationToken).ConfigureAwait(false);''')"
 if first_stmt not in text:
     raise RuntimeError('Primary snapshot CopyTo patch statement was not found.')
@@ -62,13 +56,39 @@ text, removed = re.subn(
 if removed < 1:
     raise RuntimeError('No redundant snapshot CopyTo patch statement was found.')
 
-# ProjectTransferService currently names the AddFile source parameter `source`, not
-# `sourcePath`. Match the actual method but keep the generated async method name/body.
+# ProjectTransferService currently names the AddFile source parameter `source`.
 old_transfer_match = r'''private static void AddFile\(ZipArchive archive, string sourcePath, string entryName\)'''
 new_transfer_match = r'''private static void AddFile\(ZipArchive archive, string source, string entryName\)'''
 if old_transfer_match not in text:
     raise RuntimeError('ProjectTransferService AddFile matcher was not found in audit3_patch.py')
 text = text.replace(old_transfer_match, new_transfer_match, 1)
 
+# ProjectDatabaseProvisioner: retain the existing RunAsync implementation while removing
+# only the temporary credential wrappers. The previous broad regex deleted RunAsync too.
+db_start = text.find('# Remove legacy temp credential helpers and add environment-based helpers.')
+db_end = text.find('# 8. Provisioning tracks whether it created the database', db_start)
+if db_start < 0 or db_end < 0:
+    raise RuntimeError('ProjectDatabaseProvisioner helper replacement block was not found.')
+db_block = text[db_start:db_end]
+old_pattern = r'''    private async Task WithMariaDbConfigAsync\(.*?\n    private static void EnsureFile'''
+new_pattern = r'''    private async Task WithMariaDbConfigAsync\(.*?\n    private static async Task<string> RunAsync'''
+if old_pattern not in db_block:
+    raise RuntimeError('ProjectDatabaseProvisioner broad helper regex was not found.')
+db_block = db_block.replace(old_pattern, new_pattern, 1)
+old_tail = '''    private static void EnsureFile''')'''
+new_tail = '''    private static async Task<string> RunAsync''')'''
+if old_tail not in db_block:
+    raise RuntimeError('ProjectDatabaseProvisioner replacement tail was not found.')
+db_block = db_block.replace(old_tail, new_tail, 1)
+text = text[:db_start] + db_block + text[db_end:]
+
+# Avoid ambiguous collection-expression overload resolution for string.Split.
+text, split_count = re.subn(
+    r"output\.Split\(\[(.*?)\], StringSplitOptions",
+    r"output.Split(new[] { \1 }, StringSplitOptions",
+    text)
+if split_count != 2:
+    raise RuntimeError(f'Expected two ProjectDatabaseProvisioner Split rewrites, got {split_count}.')
+
 path.write_text(text, encoding='utf-8', newline='')
-print(f'Fixed regex backreferences, TLS/runtime/transfer matchers and snapshot async transformation; removed {removed} redundant CopyTo matcher(s).')
+print(f'Fixed regex captures, DB process runner, transfer matcher and snapshot async transformation; removed {removed} redundant CopyTo matcher(s).')
