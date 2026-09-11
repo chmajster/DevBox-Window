@@ -189,7 +189,13 @@ public sealed class RuntimeRowViewModel : ObservableObject
 
     public void SetInstallProgress(int percentage)
     {
-        ProgressPercent = Math.Clamp(percentage, 0, 100);
+        var normalized = Math.Clamp(percentage, 0, 100);
+        if (normalized < ProgressPercent)
+        {
+            return;
+        }
+
+        ProgressPercent = normalized;
         Status = ProgressPercent switch
         {
             < 5 => "Preparing installation...",
