@@ -1,4 +1,4 @@
-name: Apply audit round 5
+name: Validate audit round 5
 
 on:
   push:
@@ -7,11 +7,8 @@ on:
     paths:
       - .github/audit-round5-trigger
 
-permissions:
-  contents: write
-
 jobs:
-  apply:
+  validate:
     runs-on: windows-2025
     steps:
       - name: Checkout branch
@@ -19,21 +16,6 @@ jobs:
         with:
           ref: fix/post-merge-audit-round5
           fetch-depth: 0
-
-      - name: Apply fixes and tests
-        shell: pwsh
-        run: python .github/scripts/apply-audit-round5.py
-
-      - name: Commit fixes
-        shell: pwsh
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src tests
-          if (-not (git diff --cached --quiet)) {
-            git commit -m "fix: preserve data during snapshot and addon rollback"
-            git push origin HEAD:fix/post-merge-audit-round5
-          }
 
       - name: Validate
         shell: pwsh
