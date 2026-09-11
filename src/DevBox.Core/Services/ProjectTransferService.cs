@@ -39,7 +39,7 @@ public sealed class ProjectTransferService
         var root = EnsureProjectRoot(projectPath);
         var projectName = Path.GetFileName(root);
         var manifestObject = ReadManifest(root);
-        var domain = GetString(manifestObject, "Domain") ?? $"{projectName}.test";
+        var domain = GetString(manifestObject, "Domain") ?? LocalDomainName.FromName(projectName);
         var dbFiles = databaseBackups?.Where(File.Exists).Select(Path.GetFullPath).ToArray() ?? Array.Empty<string>();
         Directory.CreateDirectory(_exportRoot);
         var destination = string.IsNullOrWhiteSpace(destinationPath)
@@ -139,7 +139,7 @@ public sealed class ProjectTransferService
                 throw new InvalidDataException($"Unsupported project transfer schema version: {transfer.SchemaVersion}.");
 
             var name = NormalizeProjectName(targetProjectName ?? transfer.ProjectName);
-            var domain = NormalizeDomain(targetDomain ?? (name.Equals(transfer.ProjectName, StringComparison.OrdinalIgnoreCase) ? transfer.Domain : $"{name}.test"));
+            var domain = NormalizeDomain(targetDomain ?? (name.Equals(transfer.ProjectName, StringComparison.OrdinalIgnoreCase) ? transfer.Domain : LocalDomainName.FromName(name)));
             var stagedProject = Path.Combine(tempRoot, "project");
             if (!Directory.Exists(stagedProject) || !File.Exists(Path.Combine(stagedProject, ProjectWorkspaceService.ManifestFileName)))
                 throw new InvalidDataException("Project archive does not contain a valid project/devbox.json payload.");

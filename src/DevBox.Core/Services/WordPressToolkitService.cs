@@ -57,7 +57,7 @@ public sealed class WordPressToolkitService
         var databaseName = string.IsNullOrWhiteSpace(request.DatabaseName) ? SafeDatabaseName(request.Name) : SafeDatabaseName(request.DatabaseName);
         var databaseOptions = request.DatabaseOptions ?? ResolveDatabaseOptions(request.DatabaseEngine);
         var tlsRollback = new TlsRollbackStateService(_rootPath);
-        var tlsState = tlsRollback.Capture(request.Domain ?? $"{request.Name.Trim().ToLowerInvariant()}.test");
+        var tlsState = tlsRollback.Capture(request.Domain ?? LocalDomainName.FromName(request.Name));
         var databaseManager = new DatabaseManager(_rootPath);
         var projectDatabases = new ProjectDatabaseProvisioner(_rootPath, databaseManager);
         var provisioning = new ProjectProvisioningService(

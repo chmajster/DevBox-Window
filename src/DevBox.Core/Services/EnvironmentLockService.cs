@@ -42,7 +42,7 @@ public sealed class EnvironmentLockService : IDisposable
         var manifest = ReadManifestObject(root);
         var profile = string.IsNullOrWhiteSpace(profileKey) ? null : _profiles.GetProfile(profileKey);
         var projectName = GetString(manifest, "Name") ?? Path.GetFileName(root);
-        var domain = GetString(manifest, "Domain") ?? $"{projectName}.test";
+        var domain = GetString(manifest, "Domain") ?? LocalDomainName.FromName(projectName);
 
         var runtimes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (profile is not null)
@@ -106,7 +106,7 @@ public sealed class EnvironmentLockService : IDisposable
         var profile = _profiles.GetProfile(profileKey);
         var manifest = ReadManifestObject(root);
         var projectName = GetString(manifest, "Name") ?? Path.GetFileName(root);
-        var domain = GetString(manifest, "Domain") ?? $"{projectName}.test";
+        var domain = GetString(manifest, "Domain") ?? LocalDomainName.FromName(projectName);
         var databaseName = profile.Database.Engine.Equals("none", StringComparison.OrdinalIgnoreCase)
             ? null
             : GetString(manifest, "DatabaseName") ?? profile.Database.DatabaseName ?? SafeDatabaseName(projectName);
