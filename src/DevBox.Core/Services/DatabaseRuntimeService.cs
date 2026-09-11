@@ -66,6 +66,8 @@ public sealed class DatabaseRuntimeService : IDisposable
             throw new ArgumentOutOfRangeException(nameof(port), "Database port must be between 1 and 65535.");
         if (registrations.Any(item => item.Port == selectedPort && !(item.Engine.Equals(normalizedEngine, StringComparison.OrdinalIgnoreCase) && item.Version.Equals(version, StringComparison.OrdinalIgnoreCase))))
             throw new InvalidOperationException($"Port {selectedPort} is already assigned to another DevBox database runtime.");
+        if (port.HasValue && (existing is null || existing.Port != selectedPort) && IsTcpPortInUse(selectedPort))
+            throw new InvalidOperationException($"Port {selectedPort} is already in use by another process.");
 
         var registration = new DatabaseRuntimeRegistration(normalizedEngine, version, selectedPort);
         if (index >= 0)
@@ -430,8 +432,6 @@ public sealed class DatabaseRuntimeService : IDisposable
                 registrations.Add(new DatabaseRuntimeRegistration(engine, version, ChooseAvailablePort(kind, registrations)));
             }
         }
-        if (registrations.Count > 0)
-            SaveRegistrations(registrations);
         return registrations;
     }
 
@@ -440,6 +440,9 @@ public sealed class DatabaseRuntimeService : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(_registrationsPath)!);
         AtomicWrite(_registrationsPath, JsonSerializer.Serialize(registrations, JsonOptions));
     }
+
+    private static bool IsTcpPortInUse(int port) =>
+        IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Any(endpoint => endpoint.Port == port);
 
     private int ChooseAvailablePort(DatabaseEngineKind kind, IReadOnlyList<DatabaseRuntimeRegistration> registrations)
     {

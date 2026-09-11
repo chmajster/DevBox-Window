@@ -142,8 +142,37 @@ public sealed class ApplicationSelfUpdateService : IDisposable
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("Authenticode verification requires Windows.");
+        VerifyWinTrust(path);
+
+        var currentPath = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(currentPath) || !File.Exists(currentPath))
+            throw new InvalidDataException("DevBox could not determine the running executable for publisher verification.");
+        VerifyWinTrust(currentPath);
+
+        using var downloadedSigner = GetSignerCertificate(path);
+        using var currentSigner = GetSignerCertificate(currentPath);
+        if (!downloadedSigner.SubjectName.RawData.AsSpan().SequenceEqual(currentSigner.SubjectName.RawData))
+            throw new InvalidDataException(
+                $"Downloaded installer publisher '{downloadedSigner.Subject}' does not match the running DevBox publisher '{currentSigner.Subject}'.");
+    }
+
+    private static X509Certificate2 GetSignerCertificate(string path)
+    {
+        try
+        {
+            using var certificate = X509Certificate.CreateFromSignedFile(path);
+            return new X509Certificate2(certificate);
+        }
+        catch (CryptographicException ex)
+        {
+            throw new InvalidDataException($"Unable to read the Authenticode signer certificate from '{Path.GetFileName(path)}'.", ex);
+        }
+    }
+
+    private static void VerifyWinTrust(string path)
+    {
         if (!File.Exists(path))
-            throw new FileNotFoundException("Downloaded installer was not found for signature verification.", path);
+            throw new FileNotFoundException("Signed file was not found for Authenticode verification.", path);
 
         var filePathPtr = Marshal.StringToCoTaskMemUni(Path.GetFullPath(path));
         var fileInfo = new WinTrustFileInfo
@@ -157,23 +186,23 @@ public sealed class ApplicationSelfUpdateService : IDisposable
         {
             StructSize = (uint)Marshal.SizeOf<WinTrustData>(),
             UiChoice = 2,
-            RevocationChecks = 0,
+            RevocationChecks = 1,
             UnionChoice = 1,
             FileInfo = fileInfoPtr,
             StateAction = 1,
             ProviderFlags = 0
         };
+        var action = new Guid("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
         try
         {
-            var action = new Guid("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
             var status = WinVerifyTrust(IntPtr.Zero, action, ref trustData);
             if (status != 0)
-                throw new InvalidDataException($"Downloaded DevBox installer does not have a valid trusted Authenticode signature (0x{status:X8}).");
-            trustData.StateAction = 2;
-            _ = WinVerifyTrust(IntPtr.Zero, action, ref trustData);
+                throw new InvalidDataException($"DevBox file does not have a valid trusted Authenticode signature (0x{status:X8}).");
         }
         finally
         {
+            trustData.StateAction = 2;
+            _ = WinVerifyTrust(IntPtr.Zero, action, ref trustData);
             Marshal.DestroyStructure<WinTrustFileInfo>(fileInfoPtr);
             Marshal.FreeHGlobal(fileInfoPtr);
             Marshal.FreeCoTaskMem(filePathPtr);

@@ -111,7 +111,7 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
                 throw new InvalidDataException($"Archive root '{definition.ArchiveRootDirectory}' was not found.");
             }
 
-            CopyDirectory(sourcePath, stagingPath);
+            CopyDirectory(sourcePath, stagingPath, cancellationToken);
             ValidateRuntimeExecutable(stagingPath, definition.ExecutableRelativePath);
             File.WriteAllText(Path.Combine(stagingPath, VersionMarker), definition.Version);
 
@@ -151,7 +151,7 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         var runtimeRoot = RuntimeRoot(runtimeKey);
         Directory.CreateDirectory(runtimeRoot);
         var stagingPath = Path.Combine(runtimeRoot, $".current-{Guid.NewGuid():N}");
-        CopyDirectory(sourcePath, stagingPath);
+        CopyDirectory(sourcePath, stagingPath, cancellationToken);
         File.WriteAllText(Path.Combine(stagingPath, VersionMarker), version);
         ReplaceDirectory(stagingPath, Path.Combine(runtimeRoot, "current"));
         return Task.CompletedTask;
@@ -324,17 +324,20 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         return File.Exists(marker) ? File.ReadAllText(marker).Trim() : null;
     }
 
-    private static void CopyDirectory(string sourcePath, string destinationPath)
+    private static void CopyDirectory(string sourcePath, string destinationPath, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(destinationPath);
         foreach (var directory in Directory.GetDirectories(sourcePath, "*", SearchOption.AllDirectories))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var relative = Path.GetRelativePath(sourcePath, directory);
             Directory.CreateDirectory(Path.Combine(destinationPath, relative));
         }
 
         foreach (var file in Directory.GetFiles(sourcePath, "*", SearchOption.AllDirectories))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var relative = Path.GetRelativePath(sourcePath, file);
             var target = Path.Combine(destinationPath, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);

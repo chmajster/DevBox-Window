@@ -80,6 +80,12 @@ public sealed partial class ManagedServiceCatalog
     {
         ArgumentNullException.ThrowIfNull(manifests);
         ValidateAll(manifests);
+        using var mutationLock = CrossProcessFileLock.Acquire(_manifestPath + ".lock", TimeSpan.FromSeconds(15));
+        SaveUnderLock(manifests);
+    }
+
+    private void SaveUnderLock(IReadOnlyCollection<ManagedServiceManifest> manifests)
+    {
         Directory.CreateDirectory(Path.GetDirectoryName(_manifestPath)!);
         AtomicWrite(_manifestPath, JsonSerializer.Serialize(manifests.OrderBy(item => item.Key), JsonOptions));
     }
@@ -88,6 +94,7 @@ public sealed partial class ManagedServiceCatalog
     {
         ArgumentNullException.ThrowIfNull(manifest);
         Validate(manifest);
+        using var mutationLock = CrossProcessFileLock.Acquire(_manifestPath + ".lock", TimeSpan.FromSeconds(15));
         var manifests = GetManifests().ToList();
         var index = manifests.FindIndex(item => item.Key.Equals(manifest.Key, StringComparison.OrdinalIgnoreCase));
         if (index >= 0)
@@ -98,17 +105,18 @@ public sealed partial class ManagedServiceCatalog
         {
             manifests.Add(manifest);
         }
-        Save(manifests);
+        SaveUnderLock(manifests);
     }
 
     public bool Remove(string key)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        using var mutationLock = CrossProcessFileLock.Acquire(_manifestPath + ".lock", TimeSpan.FromSeconds(15));
         var manifests = GetManifests().ToList();
         var removed = manifests.RemoveAll(item => item.Key.Equals(key, StringComparison.OrdinalIgnoreCase)) > 0;
         if (removed)
         {
-            Save(manifests);
+            SaveUnderLock(manifests);
         }
         return removed;
     }
@@ -171,7 +179,7 @@ public sealed partial class ManagedServiceCatalog
         {
             throw new InvalidDataException("Managed service display name is invalid.");
         }
-        if (manifest.Port is < 1 or > 65535 || manifest.Port is 80 or 3306 or 9084)
+        if (manifest.Port is < 1 or > 65535 || IsReservedCorePort(manifest.Port))
         {
             throw new InvalidDataException($"Managed service port {manifest.Port} is invalid or reserved by a core DevBox service.");
         }
@@ -197,6 +205,33 @@ public sealed partial class ManagedServiceCatalog
         if (!string.IsNullOrWhiteSpace(manifest.LogRelativePath))
         {
             _ = ResolveRelativeFile(manifest.LogRelativePath, nameof(manifest.LogRelativePath));
+        }
+    }
+
+    private bool IsReservedCorePort(int port)
+    {
+        if (port is 80 or 443 or 3306 or 3316 or 5432 or 9084)
+            return true;
+
+        var databaseRegistrations = Path.Combine(_rootPath, "config", "database-runtimes.json");
+        if (!File.Exists(databaseRegistrations))
+            return false;
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(databaseRegistrations));
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+                return false;
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                if ((item.TryGetProperty("Port", out var value) || item.TryGetProperty("port", out value)) &&
+                    value.TryGetInt32(out var registeredPort) && registeredPort == port)
+                    return true;
+            }
+            return false;
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException("config/database-runtimes.json contains invalid JSON.", ex);
         }
     }
 

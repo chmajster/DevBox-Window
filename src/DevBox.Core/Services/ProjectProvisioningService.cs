@@ -39,6 +39,9 @@ public sealed class ProjectProvisioningService
 
         var expectedProjectRoot = Path.Combine(_rootPath, "www", request.Name.Trim().ToLowerInvariant());
         var projectRootExisted = Directory.Exists(expectedProjectRoot);
+        var rollbackDomain = request.Domain ?? $"{request.Name.Trim().ToLowerInvariant()}.test";
+        var tlsRollback = new TlsRollbackStateService(_rootPath);
+        var tlsState = tlsRollback.Capture(rollbackDomain);
         var site = _workspace.Create(request);
         actions.Add($"Created Site {site.Domain}.");
 
@@ -131,6 +134,7 @@ public sealed class ProjectProvisioningService
                     if (current is not null)
                         _sites.Delete(current.Name);
                 });
+            rollbackActions.Add(() => tlsRollback.Restore(tlsState));
             rollbackActions.Add(() => RollbackProjectDirectory(projectRoot, projectRootExisted));
             RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
             throw new InvalidOperationException("Project provisioning rollback executor returned unexpectedly.");

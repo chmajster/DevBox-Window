@@ -27,6 +27,8 @@ public sealed class GitProjectBootstrapService
         var projectName = NormalizeProjectName(request.ProjectName);
         var branch = NormalizeBranch(request.Branch);
         var domain = NormalizeDomain(request.Domain ?? $"{projectName}.test");
+        var tlsRollback = new TlsRollbackStateService(_rootPath);
+        var tlsState = tlsRollback.Capture(domain);
         Directory.CreateDirectory(_wwwRoot);
         var destination = Path.Combine(_wwwRoot, projectName);
         var destinationExisted = Directory.Exists(destination);
@@ -109,6 +111,11 @@ public sealed class GitProjectBootstrapService
                 }
                 catch (Exception) { }
                 TryRollbackDestination(destination, destinationExisted);
+            }
+            try { tlsRollback.Restore(tlsState); }
+            catch (Exception rollbackError)
+            {
+                throw new AggregateException("Git bootstrap failed and TLS rollback was incomplete.", rollbackError);
             }
             throw;
         }

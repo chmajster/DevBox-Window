@@ -40,6 +40,7 @@ public sealed partial class EnvironmentProfileService
     {
         ArgumentNullException.ThrowIfNull(profile);
         Validate(profile);
+        using var mutationLock = CrossProcessFileLock.Acquire(_profilesPath + ".lock", TimeSpan.FromSeconds(15));
 
         var custom = LoadCustomProfiles().ToList();
         var index = custom.FindIndex(item => item.Key.Equals(profile.Key, StringComparison.OrdinalIgnoreCase));
@@ -55,6 +56,7 @@ public sealed partial class EnvironmentProfileService
     public bool RemoveCustomProfile(string key)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        using var mutationLock = CrossProcessFileLock.Acquire(_profilesPath + ".lock", TimeSpan.FromSeconds(15));
         var custom = LoadCustomProfiles().ToList();
         var removed = custom.RemoveAll(item => item.Key.Equals(key, StringComparison.OrdinalIgnoreCase)) > 0;
         if (!removed)
