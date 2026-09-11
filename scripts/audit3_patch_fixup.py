@@ -75,8 +75,8 @@ new_pattern = r'''    private async Task WithMariaDbConfigAsync\(.*?\n    privat
 if old_pattern not in db_block:
     raise RuntimeError('ProjectDatabaseProvisioner broad helper regex was not found.')
 db_block = db_block.replace(old_pattern, new_pattern, 1)
-old_tail = '''    private static void EnsureFile''')'''
-new_tail = '''    private static async Task<string> RunAsync''')'''
+old_tail = "    private static void EnsureFile''')"
+new_tail = "    private static async Task<string> RunAsync''')"
 if old_tail not in db_block:
     raise RuntimeError('ProjectDatabaseProvisioner replacement tail was not found.')
 db_block = db_block.replace(old_tail, new_tail, 1)
