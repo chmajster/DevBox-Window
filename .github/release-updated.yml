@@ -1,0 +1,347 @@
+name: Manual Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version increment'
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+concurrency:
+  group: devbox-manual-release
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Validate release branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require main branch
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "Manual releases must be started from the main branch."
+            exit 1
+          fi
+
+  tests:
+    name: Run release validation
+    needs: guard
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: Bump version and publish
+    needs: tests
+    runs-on: windows-2025
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: Resolve next version
+        shell: pwsh
+        env:
+          VERSION_BUMP: ${{ inputs.bump }}
+        run: |
+          $projectPath = 'src/DevBox.App/DevBox.App.csproj'
+          $projectText = Get-Content $projectPath -Raw
+          $match = [regex]::Match($projectText, '<Version>(?<version>\d+\.\d+\.\d+)</Version>')
+          if (-not $match.Success) {
+            throw "Could not read the current semantic version from $projectPath"
+          }
+
+          $sourceVersion = $match.Groups['version'].Value
+          git fetch origin --tags --force
+          $latestTag = git tag --list 'v*' --sort=-v:refname | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | Select-Object -First 1
+          $currentText = if ([string]::IsNullOrWhiteSpace($latestTag)) { '0.0.0' } else { $latestTag.Substring(1) }
+          $parts = $currentText.Split('.')
+          $major = [int]$parts[0]
+          $minor = [int]$parts[1]
+          $patch = [int]$parts[2]
+
+          switch ($env:VERSION_BUMP) {
+            'major' {
+              $major++
+              $minor = 0
+              $patch = 0
+            }
+            'minor' {
+              $minor++
+              $patch = 0
+            }
+            'patch' {
+              $patch++
+            }
+            default {
+              throw "Unsupported version increment: $env:VERSION_BUMP"
+            }
+          }
+
+          $nextVersion = "$major.$minor.$patch"
+          $releaseTag = "v$nextVersion"
+
+          $existingTag = git tag --list $releaseTag
+          if (-not [string]::IsNullOrWhiteSpace($existingTag)) {
+            throw "Tag $releaseTag already exists."
+          }
+
+          "DEVBOX_CURRENT_VERSION=$currentText" >> $env:GITHUB_ENV
+          "DEVBOX_VERSION=$nextVersion" >> $env:GITHUB_ENV
+          "DEVBOX_RELEASE_TAG=$releaseTag" >> $env:GITHUB_ENV
+
+          "### Manual release" >> $env:GITHUB_STEP_SUMMARY
+          "- Latest published version: ``$currentText``" >> $env:GITHUB_STEP_SUMMARY
+          "- Source development version: ``$sourceVersion``" >> $env:GITHUB_STEP_SUMMARY
+          "- Increment: ``$env:VERSION_BUMP``" >> $env:GITHUB_STEP_SUMMARY
+          "- New version: ``$nextVersion``" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Update version metadata
+        shell: pwsh
+        run: |
+          $projectPath = 'src/DevBox.App/DevBox.App.csproj'
+          $project = Get-Content $projectPath -Raw
+          $project = [regex]::Replace($project, '<Version>\d+\.\d+\.\d+</Version>', "<Version>$env:DEVBOX_VERSION</Version>")
+          $project = [regex]::Replace($project, '<AssemblyVersion>\d+\.\d+\.\d+\.\d+</AssemblyVersion>', "<AssemblyVersion>$env:DEVBOX_VERSION.0</AssemblyVersion>")
+          $project = [regex]::Replace($project, '<FileVersion>\d+\.\d+\.\d+\.\d+</FileVersion>', "<FileVersion>$env:DEVBOX_VERSION.0</FileVersion>")
+          Set-Content $projectPath $project -Encoding utf8 -NoNewline
+
+          $installerPath = 'installer/DevBox.iss'
+          $installer = Get-Content $installerPath -Raw
+          $installer = [regex]::Replace(
+            $installer,
+            '#define MyAppVersion "\d+\.\d+\.\d+"',
+            "#define MyAppVersion `"$env:DEVBOX_VERSION`"",
+            1)
+          Set-Content $installerPath $installer -Encoding utf8 -NoNewline
+
+          $readmePath = 'README.md'
+          $readme = Get-Content $readmePath -Raw
+          $readme = [regex]::Replace(
+            $readme,
+            'Current application version: `\d+\.\d+\.\d+`(?: \(development; latest published release remains `\d+\.\d+\.\d+`\))?\.',
+            ('Current application version: `' + $env:DEVBOX_VERSION + '`.'),
+            1)
+          Set-Content $readmePath $readme -Encoding utf8 -NoNewline
+
+          git diff --check
+          git diff -- src/DevBox.App/DevBox.App.csproj installer/DevBox.iss README.md
+
+      - name: Publish GUI win-x64
+        run: dotnet publish src/DevBox.App/DevBox.App.csproj --configuration Release --runtime win-x64 --self-contained true --output publish/win-x64 /p:Version=${{ env.DEVBOX_VERSION }}
+
+      - name: Publish GUI win-arm64
+        run: dotnet publish src/DevBox.App/DevBox.App.csproj --configuration Release --runtime win-arm64 --self-contained true --output publish/win-arm64 /p:Version=${{ env.DEVBOX_VERSION }}
+
+      - name: Publish CLI win-x64
+        run: dotnet publish src/DevBox.Cli/DevBox.Cli.csproj --configuration Release --runtime win-x64 --self-contained true --output publish/cli-win-x64 /p:Version=${{ env.DEVBOX_VERSION }} /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true
+
+      - name: Publish CLI win-arm64
+        run: dotnet publish src/DevBox.Cli/DevBox.Cli.csproj --configuration Release --runtime win-arm64 --self-contained true --output publish/cli-win-arm64 /p:Version=${{ env.DEVBOX_VERSION }} /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true
+
+      - name: Add CLI to application layouts without replacing GUI
+        shell: pwsh
+        run: |
+          $layouts = @(
+            @{
+              Gui = 'publish/win-x64/DevBox.exe'
+              CliSource = 'publish/cli-win-x64/devbox.exe'
+              CliDirectory = 'publish/win-x64/cli'
+            },
+            @{
+              Gui = 'publish/win-arm64/DevBox.exe'
+              CliSource = 'publish/cli-win-arm64/devbox.exe'
+              CliDirectory = 'publish/win-arm64/cli'
+            }
+          )
+
+          foreach ($layout in $layouts) {
+            if (-not (Test-Path $layout.Gui)) {
+              throw "GUI publish did not produce $($layout.Gui)"
+            }
+            if (-not (Test-Path $layout.CliSource)) {
+              throw "CLI publish did not produce $($layout.CliSource)"
+            }
+
+            $guiHashBefore = (Get-FileHash $layout.Gui -Algorithm SHA256).Hash
+            New-Item -ItemType Directory -Force $layout.CliDirectory | Out-Null
+            $cliTarget = Join-Path $layout.CliDirectory 'devbox.exe'
+            Copy-Item $layout.CliSource $cliTarget -Force
+            $guiHashAfter = (Get-FileHash $layout.Gui -Algorithm SHA256).Hash
+
+            if ($guiHashBefore -ne $guiHashAfter) {
+              throw "GUI executable changed while adding CLI to $($layout.CliDirectory)"
+            }
+            if (-not (Test-Path $cliTarget)) {
+              throw "CLI was not added to $($layout.CliDirectory)"
+            }
+          }
+
+      - name: Prepare Authenticode certificate
+        id: signing
+        shell: pwsh
+        env:
+          SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_BASE64)) {
+            Write-Host 'Authenticode certificate is not configured; release artifacts will remain unsigned.'
+            "enabled=false" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'devbox-signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE_BASE64))
+          } catch {
+            throw 'WINDOWS_SIGNING_CERTIFICATE_BASE64 is not valid base64.'
+          }
+          "enabled=true" >> $env:GITHUB_OUTPUT
+          "certificate=$certificatePath" >> $env:GITHUB_OUTPUT
+
+      - name: Sign DevBox application binaries
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          SIGNING_CERTIFICATE_PATH: ${{ steps.signing.outputs.certificate }}
+        run: |
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if ($null -eq $signtool) { throw 'signtool.exe was not found on the runner.' }
+
+          $targets = @(
+            'publish/win-x64/DevBox.exe',
+            'publish/win-x64/DevBox.dll',
+            'publish/win-x64/DevBox.Core.dll',
+            'publish/win-x64/cli/devbox.exe',
+            'publish/win-arm64/DevBox.exe',
+            'publish/win-arm64/DevBox.dll',
+            'publish/win-arm64/DevBox.Core.dll',
+            'publish/win-arm64/cli/devbox.exe'
+          )
+          foreach ($target in $targets) {
+            if (-not (Test-Path $target)) { throw "Signing target not found: $target" }
+            & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $env:SIGNING_CERTIFICATE_PATH /p $env:SIGNING_CERTIFICATE_PASSWORD $target
+            if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed for $target" }
+          }
+
+      - name: Bundle Nginx, PHP and MySQL runtimes
+        shell: pwsh
+        run: |
+          & ./packaging/Prepare-BundledRuntimes.ps1 -PublishDirectories "publish/win-x64","publish/win-arm64"
+
+      - name: Package portable builds
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Compress-Archive -Path publish/win-x64/* -DestinationPath "artifacts/DevBox-$env:DEVBOX_VERSION-win-x64-portable.zip" -CompressionLevel Optimal
+          Compress-Archive -Path publish/win-arm64/* -DestinationPath "artifacts/DevBox-$env:DEVBOX_VERSION-win-arm64-portable.zip" -CompressionLevel Optimal
+
+      - name: Ensure Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --yes --no-progress
+          }
+          if (-not (Test-Path $iscc)) {
+            throw "Inno Setup compiler not found after installation: $iscc"
+          }
+
+      - name: Build installers
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DMyAppVersion=$env:DEVBOX_VERSION" "/DMyAppRid=win-x64" "/DMyArchitecturesAllowed=x64compatible" "/DMyArchitecturesInstallMode=x64compatible" "/DPublishDir=$pwd\publish\win-x64" "/DOutputDir=$pwd\artifacts" "installer\DevBox.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup x64 build failed with exit code $LASTEXITCODE" }
+          & $iscc "/DMyAppVersion=$env:DEVBOX_VERSION" "/DMyAppRid=win-arm64" "/DMyArchitecturesAllowed=arm64" "/DMyArchitecturesInstallMode=arm64" "/DPublishDir=$pwd\publish\win-arm64" "/DOutputDir=$pwd\artifacts" "installer\DevBox.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup ARM64 build failed with exit code $LASTEXITCODE" }
+
+      - name: Sign installer
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          SIGNING_CERTIFICATE_PATH: ${{ steps.signing.outputs.certificate }}
+        run: |
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if ($null -eq $signtool) { throw 'signtool.exe was not found on the runner.' }
+          $installers = @(
+            "artifacts/DevBox-$env:DEVBOX_VERSION-win-x64-setup.exe",
+            "artifacts/DevBox-$env:DEVBOX_VERSION-win-arm64-setup.exe"
+          )
+          foreach ($installer in $installers) {
+            & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $env:SIGNING_CERTIFICATE_PATH /p $env:SIGNING_CERTIFICATE_PASSWORD $installer
+            if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed for $installer" }
+          }
+
+      - name: Remove signing certificate
+        if: always() && steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          SIGNING_CERTIFICATE_PATH: ${{ steps.signing.outputs.certificate }}
+        run: |
+          if (Test-Path $env:SIGNING_CERTIFICATE_PATH) {
+            Remove-Item $env:SIGNING_CERTIFICATE_PATH -Force
+          }
+
+      - name: Generate SHA-256 checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem artifacts -File | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content artifacts/SHA256SUMS.txt -Encoding ascii
+
+      - name: Commit version bump and create tag
+        shell: pwsh
+        run: |
+          git fetch origin main --tags
+          $remoteMain = (git rev-parse origin/main).Trim()
+          $localBase = (git rev-parse HEAD).Trim()
+          if ($remoteMain -ne $localBase) {
+            throw 'main changed while the release was being built. Run Manual Release again from the latest main.'
+          }
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/DevBox.App/DevBox.App.csproj installer/DevBox.iss README.md
+          git commit -m "release: $env:DEVBOX_RELEASE_TAG"
+          git tag -a $env:DEVBOX_RELEASE_TAG -m "DevBox $env:DEVBOX_VERSION"
+          git push --atomic origin HEAD:refs/heads/main "refs/tags/$env:DEVBOX_RELEASE_TAG:refs/tags/$env:DEVBOX_RELEASE_TAG"
+
+      - name: Upload release build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: DevBox-release-${{ env.DEVBOX_VERSION }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:DEVBOX_RELEASE_TAG artifacts/* --repo $env:GITHUB_REPOSITORY --verify-tag --generate-notes --title "DevBox $env:DEVBOX_VERSION"
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub Release creation failed with exit code $LASTEXITCODE"
+          }
