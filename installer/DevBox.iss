@@ -7,6 +7,15 @@
 #ifndef OutputDir
   #define OutputDir "..\artifacts"
 #endif
+#ifndef MyAppRid
+  #define MyAppRid "win-x64"
+#endif
+#ifndef MyArchitecturesAllowed
+  #define MyArchitecturesAllowed "x64compatible"
+#endif
+#ifndef MyArchitecturesInstallMode
+  #define MyArchitecturesInstallMode "x64compatible"
+#endif
 
 #define MyAppName "DevBox Windows"
 #define MyAppPublisher "DevBox"
@@ -25,13 +34,13 @@ UsePreviousAppDir=yes
 UsePreviousTasks=yes
 PrivilegesRequired=lowest
 OutputDir={#OutputDir}
-OutputBaseFilename=DevBox-{#MyAppVersion}-win-x64-setup
+OutputBaseFilename=DevBox-{#MyAppVersion}-{#MyAppRid}-setup
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 SetupIconFile=..\src\DevBox.App\Assets\DevBox.ico
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed={#MyArchitecturesAllowed}
+ArchitecturesInstallIn64BitMode={#MyArchitecturesInstallMode}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 CloseApplications=yes
 RestartApplications=no

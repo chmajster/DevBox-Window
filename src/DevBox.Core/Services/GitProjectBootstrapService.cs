@@ -29,7 +29,8 @@ public sealed class GitProjectBootstrapService
         var domain = NormalizeDomain(request.Domain ?? $"{projectName}.test");
         Directory.CreateDirectory(_wwwRoot);
         var destination = Path.Combine(_wwwRoot, projectName);
-        if (Directory.Exists(destination) && Directory.EnumerateFileSystemEntries(destination).Any())
+        var destinationExisted = Directory.Exists(destination);
+        if (destinationExisted && Directory.EnumerateFileSystemEntries(destination).Any())
             throw new InvalidOperationException($"Project destination is not empty: {destination}");
 
         var git = DeveloperToolsService.ResolveCommand(["git.exe", "git.cmd", "git"])
@@ -101,7 +102,7 @@ public sealed class GitProjectBootstrapService
                         _sites.Delete(site.Name);
                 }
                 catch (Exception) { }
-                TryDeleteDirectory(destination);
+                TryRollbackDestination(destination, destinationExisted);
             }
             throw;
         }
@@ -213,6 +214,26 @@ public sealed class GitProjectBootstrapService
         try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
         catch (InvalidOperationException) { }
         catch (Win32Exception) { }
+    }
+
+    private static void TryRollbackDestination(string path, bool existedBefore)
+    {
+        try
+        {
+            if (!Directory.Exists(path))
+                return;
+            if (!existedBefore)
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            foreach (var file in Directory.EnumerateFiles(path))
+                File.Delete(file);
+            foreach (var directory in Directory.EnumerateDirectories(path))
+                Directory.Delete(directory, recursive: true);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     private static void TryDeleteDirectory(string path)

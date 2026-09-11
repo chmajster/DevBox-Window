@@ -36,7 +36,7 @@ public sealed partial class LocalCertificateManager
             try
             {
                 using var existing = X509Certificate2.CreateFromPemFile(certificatePath, privateKeyPath);
-                if (existing.NotAfter.ToUniversalTime() > DateTime.UtcNow.AddDays(7))
+                if (IsCertificateValidForDomain(existing, normalizedDomain, TimeSpan.FromDays(7)))
                     return ToModel(normalizedDomain, certificatePath, privateKeyPath, existing);
                 replacedThumbprint = existing.Thumbprint;
             }
@@ -110,12 +110,7 @@ public sealed partial class LocalCertificateManager
         try
         {
             using var certificate = X509Certificate2.CreateFromPemFile(certificatePath, privateKeyPath);
-            var now = DateTime.UtcNow;
-            var minimum = minimumRemainingLifetime ?? TimeSpan.FromMinutes(1);
-            var dnsName = certificate.GetNameInfo(X509NameType.DnsName, forIssuer: false);
-            return certificate.NotBefore.ToUniversalTime() <= now.AddMinutes(5) &&
-                   certificate.NotAfter.ToUniversalTime() > now.Add(minimum) &&
-                   dnsName.Equals(normalizedDomain, StringComparison.OrdinalIgnoreCase);
+            return IsCertificateValidForDomain(certificate, normalizedDomain, minimumRemainingLifetime ?? TimeSpan.FromMinutes(1));
         }
         catch (CryptographicException)
         {
@@ -206,6 +201,15 @@ public sealed partial class LocalCertificateManager
 
     private string CertificatePath(string domain) => Path.Combine(_certificateRoot, $"{domain}.crt.pem");
     private string PrivateKeyPath(string domain) => Path.Combine(_certificateRoot, $"{domain}.key.pem");
+
+    private static bool IsCertificateValidForDomain(X509Certificate2 certificate, string domain, TimeSpan minimumRemainingLifetime)
+    {
+        var now = DateTime.UtcNow;
+        var dnsName = certificate.GetNameInfo(X509NameType.DnsName, forIssuer: false);
+        return certificate.NotBefore.ToUniversalTime() <= now.AddMinutes(5) &&
+               certificate.NotAfter.ToUniversalTime() > now.Add(minimumRemainingLifetime) &&
+               dnsName.Equals(domain, StringComparison.OrdinalIgnoreCase);
+    }
 
     private static LocalCertificate ToModel(string domain, string certificatePath, string privateKeyPath, X509Certificate2 certificate) =>
         new(

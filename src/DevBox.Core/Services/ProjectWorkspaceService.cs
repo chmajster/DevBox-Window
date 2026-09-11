@@ -131,17 +131,15 @@ public sealed partial class ProjectWorkspaceService
 
             return site;
         }
-        catch
+        catch (Exception original)
         {
+            var rollbackActions = new List<Action>();
             if (siteCreated)
-            {
-                try { _siteManager.Delete(request.Name); }
-                catch (Exception) { }
-            }
-            try { tlsRollback.Restore(tlsState); }
-            catch (Exception) { }
-            RollbackOwnedProjectDirectory(projectRoot, projectRootExisted);
-            throw;
+                rollbackActions.Add(() => _siteManager.Delete(request.Name));
+            rollbackActions.Add(() => tlsRollback.Restore(tlsState));
+            rollbackActions.Add(() => RollbackOwnedProjectDirectory(projectRoot, projectRootExisted));
+            RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
+            throw new InvalidOperationException("Project create rollback executor returned unexpectedly.");
         }
     }
 
@@ -198,21 +196,17 @@ public sealed partial class ProjectWorkspaceService
 
             return site;
         }
-        catch
+        catch (Exception original)
         {
+            var rollbackActions = new List<Action>();
             if (siteCreated)
-            {
-                try { _siteManager.Delete(request.Name); }
-                catch (Exception) { }
-            }
-            try { tlsRollback.Restore(tlsState); }
-            catch (Exception) { }
-
-            if (request.CopyIntoDevBox)
-                RollbackOwnedProjectDirectory(projectRoot, projectRootExisted);
-            else
-                RestoreManifest(manifestPath, previousManifest);
-            throw;
+                rollbackActions.Add(() => _siteManager.Delete(request.Name));
+            rollbackActions.Add(() => tlsRollback.Restore(tlsState));
+            rollbackActions.Add(request.CopyIntoDevBox
+                ? () => RollbackOwnedProjectDirectory(projectRoot, projectRootExisted)
+                : () => RestoreManifest(manifestPath, previousManifest));
+            RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
+            throw new InvalidOperationException("Project import rollback executor returned unexpectedly.");
         }
     }
 
@@ -399,32 +393,30 @@ public sealed partial class ProjectWorkspaceService
 
     private static void RollbackOwnedProjectDirectory(string projectRoot, bool existedBefore)
     {
-        try
+        if (!Directory.Exists(projectRoot))
+            return;
+        if (!existedBefore)
         {
-            if (Directory.Exists(projectRoot))
-                Directory.Delete(projectRoot, recursive: true);
-            if (existedBefore)
-                Directory.CreateDirectory(projectRoot);
+            Directory.Delete(projectRoot, recursive: true);
+            return;
         }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+
+        foreach (var file in Directory.EnumerateFiles(projectRoot))
+            File.Delete(file);
+        foreach (var directory in Directory.EnumerateDirectories(projectRoot))
+            Directory.Delete(directory, recursive: true);
     }
 
     private static void RestoreManifest(string path, byte[]? previous)
     {
-        try
+        if (previous is null)
         {
-            if (previous is null)
-            {
-                if (File.Exists(path))
-                    File.Delete(path);
-                return;
-            }
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllBytes(path, previous);
+            if (File.Exists(path))
+                File.Delete(path);
+            return;
         }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, previous);
     }
 
     private static bool UsesPublicDocumentRoot(ProjectKind kind) =>

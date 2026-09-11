@@ -12,19 +12,24 @@ public sealed partial class SecureSecretStore
     private const uint CryptProtectUiForbidden = 0x1;
     private static readonly ConcurrentDictionary<string, object> StoreLocks = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _storePath;
+    private readonly string _processLockPath;
     private readonly object _sync;
 
     public SecureSecretStore(string rootPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         _storePath = Path.Combine(Path.GetFullPath(rootPath), "config", "secrets.dpapi.json");
+        _processLockPath = _storePath + ".lock";
         _sync = StoreLocks.GetOrAdd(_storePath, static _ => new object());
     }
 
     public IReadOnlyList<string> ListKeys()
     {
         lock (_sync)
+        {
+            using var processLock = CrossProcessFileLock.Acquire(_processLockPath);
             return Load().Keys.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray();
+        }
     }
 
     public void Set(string key, string value)
@@ -55,6 +60,7 @@ public sealed partial class SecureSecretStore
         {
             lock (_sync)
             {
+                using var processLock = CrossProcessFileLock.Acquire(_processLockPath);
                 var values = Load();
                 values[key.Trim().ToLowerInvariant()] = Convert.ToBase64String(protectedBytes);
                 Save(values);
@@ -72,6 +78,7 @@ public sealed partial class SecureSecretStore
         ValidateKey(key);
         lock (_sync)
         {
+            using var processLock = CrossProcessFileLock.Acquire(_processLockPath);
             var values = Load();
             if (!values.TryGetValue(key.Trim().ToLowerInvariant(), out var encoded))
                 return null;
@@ -100,6 +107,7 @@ public sealed partial class SecureSecretStore
         ValidateKey(key);
         lock (_sync)
         {
+            using var processLock = CrossProcessFileLock.Acquire(_processLockPath);
             var values = Load();
             var removed = values.Remove(key.Trim().ToLowerInvariant());
             if (removed)

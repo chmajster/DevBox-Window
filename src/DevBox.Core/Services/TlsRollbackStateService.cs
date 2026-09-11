@@ -67,39 +67,36 @@ internal sealed class TlsRollbackStateService
         var normalizedDomain = LocalCertificateManager.NormalizeDomain(state.Domain);
         var certificatePath = CertificatePath(normalizedDomain);
         var privateKeyPath = PrivateKeyPath(normalizedDomain);
+        var errors = new List<Exception>();
+
+        void Attempt(Action action)
+        {
+            try { action(); }
+            catch (Exception ex) { errors.Add(ex); }
+        }
 
         if (OperatingSystem.IsWindows() && File.Exists(certificatePath))
+            Attempt(() => _certificates.UntrustForCurrentUser(normalizedDomain));
+
+        Attempt(() => RestoreBytes(certificatePath, state.Certificate));
+        Attempt(() => RestoreBytes(privateKeyPath, state.PrivateKey));
+
+        if (OperatingSystem.IsWindows())
         {
-            try
-            {
-                _certificates.UntrustForCurrentUser(normalizedDomain);
-            }
-            catch (CryptographicException)
-            {
-            }
+            if (state.Certificate is not null && state.LeafTrusted)
+                Attempt(() => TrustLeaf(certificatePath));
+            else if (state.Certificate is not null)
+                Attempt(() => _certificates.UntrustForCurrentUser(normalizedDomain));
+
+            Attempt(() => RestoreAuthorityState(state));
         }
 
-        RestoreBytes(certificatePath, state.Certificate);
-        RestoreBytes(privateKeyPath, state.PrivateKey);
+        if (errors.Count > 0)
+            throw new AggregateException($"TLS rollback for '{normalizedDomain}' was incomplete.", errors);
+    }
 
-        if (!OperatingSystem.IsWindows())
-            return;
-
-        if (state.Certificate is not null && state.LeafTrusted)
-        {
-            TrustLeaf(certificatePath);
-        }
-        else if (state.Certificate is not null)
-        {
-            try
-            {
-                _certificates.UntrustForCurrentUser(normalizedDomain);
-            }
-            catch (CryptographicException)
-            {
-            }
-        }
-
+    private void RestoreAuthorityState(TlsRollbackState state)
+    {
         using var authority = new LocalCertificateAuthorityService(_rootPath);
         if (!state.LocalCaExisted)
         {

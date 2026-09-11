@@ -89,6 +89,10 @@ public sealed class DatabaseRuntimeService : IDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            using var initializationLock = await CrossProcessFileLock.AcquireAsync(
+                InitializationLockPath(instance.Engine, version),
+                cancellationToken,
+                TimeSpan.FromSeconds(30)).ConfigureAwait(false);
             if (IsInitialized(instance.Engine, version))
                 return ToCurrentInstance(instance);
 
@@ -384,23 +388,11 @@ public sealed class DatabaseRuntimeService : IDisposable
         }
     }
 
-    private FileStream AcquireRegistrationLock()
-    {
-        var lockPath = _registrationsPath + ".lock";
-        Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (true)
-        {
-            try
-            {
-                return new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-            }
-            catch (IOException) when (DateTime.UtcNow < deadline)
-            {
-                Thread.Sleep(25);
-            }
-        }
-    }
+    private FileStream AcquireRegistrationLock() =>
+        CrossProcessFileLock.Acquire(_registrationsPath + ".lock", TimeSpan.FromSeconds(10));
+
+    private string InitializationLockPath(DatabaseEngineKind engine, string version) =>
+        Path.Combine(_rootPath, "tmp", "locks", $"database-init-{SafeServiceSegment(NormalizeEngine(engine))}-{SafeServiceSegment(version)}.lock");
 
     private DatabaseRuntimeRegistration GetRegistration(string engine, string version)
     {
