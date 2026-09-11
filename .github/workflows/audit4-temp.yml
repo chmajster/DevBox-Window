@@ -64,3 +64,5 @@ jobs:
           if (git diff --cached --quiet) { throw 'Audit round 4 produced no product changes.' }
           git commit -m 'fix: harden CA transactions, cross-process catalogs and rollback safety'
           git push origin HEAD:fix/audit-round4
+
+# retry 3
