@@ -22,7 +22,9 @@ jobs:
 
       - name: Apply remaining fixes
         shell: pwsh
-        run: python .github/scripts/apply-runtime-audit.py
+        run: |
+          python .github/scripts/apply-runtime-audit.py
+          python .github/scripts/apply-runtime-audit-followup.py
 
       - name: Validate
         shell: pwsh
