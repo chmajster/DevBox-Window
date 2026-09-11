@@ -20,12 +20,9 @@ jobs:
           ref: fix/startup-runtime-lifecycle-audit
           fetch-depth: 0
 
-      - name: Apply remaining fixes
+      - name: Apply final fixes
         shell: pwsh
-        run: |
-          python .github/scripts/apply-runtime-audit.py
-          python .github/scripts/apply-runtime-audit-followup.py
-          python .github/scripts/apply-runtime-audit-testfix.py
+        run: python .github/scripts/finalize-runtime-audit.py
 
       - name: Commit fixes
         shell: pwsh
@@ -34,7 +31,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src tests
           if (-not (git diff --cached --quiet)) {
-            git commit -m "fix: harden runtime startup and recovery"
+            git commit -m "fix: preserve service cancellation and PHP pool cleanup"
             git push origin HEAD:fix/startup-runtime-lifecycle-audit
           }
 
