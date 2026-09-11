@@ -336,7 +336,7 @@ server {
     {
         var directory = Path.GetDirectoryName(path)!;
         Directory.CreateDirectory(directory);
-        var tempPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp";
+        var tempPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
         try
         {
             File.WriteAllText(tempPath, content);
@@ -346,7 +346,7 @@ server {
             }
             else
             {
-                File.Move(tempPath, markerPath: null);
+                File.Move(tempPath, path);
             }
         }
         finally
