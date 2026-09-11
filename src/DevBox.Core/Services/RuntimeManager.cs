@@ -114,7 +114,7 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
             progress?.Report(5);
             IProgress<int>? downloadProgress = progress is null
                 ? null
-                : new Progress<int>(value => progress.Report(5 + (int)Math.Round(Math.Clamp(value, 0, 100) * 0.60)));
+                : new MappedProgress(progress, 5, 60);
             await DownloadAsync(definition.DownloadUrl!, archivePath, downloadProgress, cancellationToken).ConfigureAwait(false);
 
             progress?.Report(68);
@@ -427,4 +427,13 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
+
+    private sealed class MappedProgress(IProgress<int> target, int start, int span) : IProgress<int>
+    {
+        public void Report(int value)
+        {
+            var normalized = Math.Clamp(value, 0, 100);
+            target.Report(start + (int)Math.Round(normalized * (span / 100d)));
+        }
+    }
 }
