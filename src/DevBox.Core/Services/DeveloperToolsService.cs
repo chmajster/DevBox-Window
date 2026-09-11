@@ -218,7 +218,15 @@ public sealed class DeveloperToolsService : IDisposable
 
         var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            TryKill(process);
+            throw;
+        }
         var output = await outputTask.ConfigureAwait(false);
         var error = await errorTask.ConfigureAwait(false);
         if (process.ExitCode != 0)
@@ -228,6 +236,21 @@ public sealed class DeveloperToolsService : IDisposable
                 : error.Trim());
         }
         return string.IsNullOrWhiteSpace(output) ? error : output;
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(3000);
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+        }
     }
 
     internal static ProcessStartInfo BuildStartInfo(string executable, IReadOnlyList<string> arguments)

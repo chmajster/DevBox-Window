@@ -155,7 +155,7 @@ public sealed class ProcessManager : IProcessManager
             {
                 AppendLog(managed, "APP", "Graceful shutdown was unavailable or timed out; killing managed process tree.");
                 managed.Process.Kill(entireProcessTree: true);
-                await managed.Process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+                await managed.Process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
             }
 
             AppendLog(managed, "APP", "Stopped.");
@@ -275,16 +275,21 @@ public sealed class ProcessManager : IProcessManager
 
         var outputTask = stopProcess.StandardOutput.ReadToEndAsync(cancellationToken);
         var errorTask = stopProcess.StandardError.ReadToEndAsync(cancellationToken);
-        var exited = await WaitForExitAsync(stopProcess, timeout, cancellationToken).ConfigureAwait(false);
+        bool exited;
+        try
+        {
+            exited = await WaitForExitAsync(stopProcess, timeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            TryTerminateStartedProcess(stopProcess);
+            throw;
+        }
         if (!exited)
         {
-            try
-            {
-                stopProcess.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException)
-            {
-            }
+            TryTerminateStartedProcess(stopProcess);
+            _ = await outputTask.ConfigureAwait(false);
+            _ = await errorTask.ConfigureAwait(false);
             return false;
         }
 
@@ -293,17 +298,20 @@ public sealed class ProcessManager : IProcessManager
         return stopProcess.ExitCode == 0;
     }
 
-    private static async Task<bool> WaitForExitAsync(Process process, TimeSpan timeout, CancellationToken cancellationToken)
+    internal static async Task<bool> WaitForExitAsync(Process process, TimeSpan timeout, CancellationToken cancellationToken)
     {
         if (process.HasExited)
-        {
             return true;
-        }
 
         var exitTask = process.WaitForExitAsync(cancellationToken);
-        var delayTask = Task.Delay(timeout, cancellationToken);
+        var delayTask = Task.Delay(timeout, CancellationToken.None);
         var completed = await Task.WhenAny(exitTask, delayTask).ConfigureAwait(false);
-        return completed == exitTask && process.HasExited;
+        cancellationToken.ThrowIfCancellationRequested();
+        if (completed != exitTask)
+            return false;
+
+        await exitTask.ConfigureAwait(false);
+        return process.HasExited;
     }
 
     private static bool IsPortAvailable(int port)
@@ -583,7 +591,15 @@ public sealed class ProcessManager : IProcessManager
 
         var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            TryTerminateStartedProcess(process);
+            throw;
+        }
         var output = await outputTask.ConfigureAwait(false);
         var error = await errorTask.ConfigureAwait(false);
 

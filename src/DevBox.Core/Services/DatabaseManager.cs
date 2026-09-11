@@ -118,14 +118,19 @@ public sealed partial class DatabaseManager
             await BackupAsync(source, backupPath, options, cancellationToken).ConfigureAwait(false);
             await RestoreAsync(destination, backupPath, options, cancellationToken).ConfigureAwait(false);
         }
-        catch
+        catch (Exception original)
         {
             try
             {
-                await DropDatabaseAsync(destination, options, cancellationToken).ConfigureAwait(false);
+                using var rollbackTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                await DropDatabaseAsync(destination, options, rollbackTimeout.Token).ConfigureAwait(false);
             }
-            catch
+            catch (Exception rollbackError)
             {
+                throw new AggregateException(
+                    $"Database clone failed and rollback of '{destination}' also failed.",
+                    original,
+                    rollbackError);
             }
             throw;
         }
@@ -215,7 +220,11 @@ public sealed partial class DatabaseManager
         EnsureExecutable(_mysqlDumpExecutable);
 
         var backupPath = ResolveBackupPath(safeName, destinationPath);
-        Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
+        var backupDirectory = Path.GetDirectoryName(backupPath)!;
+        Directory.CreateDirectory(backupDirectory);
+        var temporaryBackupPath = Path.Combine(
+            backupDirectory,
+            $".{Path.GetFileName(backupPath)}.{Guid.NewGuid():N}.tmp");
 
         try
         {
@@ -223,18 +232,15 @@ public sealed partial class DatabaseManager
                 _mysqlDumpExecutable,
                 configPath,
                 ["--single-transaction", "--routines", "--events", "--triggers", "--set-gtid-purged=OFF", safeName],
-                backupPath,
+                temporaryBackupPath,
                 null,
                 cancellationToken)).ConfigureAwait(false);
+            File.Move(temporaryBackupPath, backupPath, overwrite: true);
             return backupPath;
         }
-        catch
+        finally
         {
-            if (File.Exists(backupPath))
-            {
-                File.Delete(backupPath);
-            }
-            throw;
+            TryDeleteFile(temporaryBackupPath);
         }
     }
 
@@ -428,34 +434,68 @@ public sealed partial class DatabaseManager
             ? process.StandardOutput.ReadToEndAsync(cancellationToken)
             : null;
 
-        if (standardOutputPath is not null)
+        try
         {
-            await using var output = new FileStream(standardOutputPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
-            var outputCopyTask = process.StandardOutput.BaseStream.CopyToAsync(output, cancellationToken);
-            await Task.WhenAll(process.WaitForExitAsync(cancellationToken), outputCopyTask).ConfigureAwait(false);
-        }
-        else if (standardInputPath is not null)
-        {
-            await using var input = new FileStream(standardInputPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
-            await input.CopyToAsync(process.StandardInput.BaseStream, cancellationToken).ConfigureAwait(false);
-            process.StandardInput.Close();
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-        }
+            if (standardOutputPath is not null)
+            {
+                await using var output = new FileStream(standardOutputPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+                var outputCopyTask = process.StandardOutput.BaseStream.CopyToAsync(output, cancellationToken);
+                await Task.WhenAll(process.WaitForExitAsync(cancellationToken), outputCopyTask).ConfigureAwait(false);
+            }
+            else if (standardInputPath is not null)
+            {
+                await using var input = new FileStream(standardInputPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
+                await input.CopyToAsync(process.StandardInput.BaseStream, cancellationToken).ConfigureAwait(false);
+                process.StandardInput.Close();
+                await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            }
 
-        var error = await errorTask.ConfigureAwait(false);
-        var outputText = outputTask is null ? string.Empty : await outputTask.ConfigureAwait(false);
-        if (process.ExitCode != 0)
-        {
-            throw new InvalidOperationException(string.IsNullOrWhiteSpace(error)
-                ? $"{Path.GetFileName(executable)} exited with code {process.ExitCode}."
-                : error.Trim());
-        }
+            var error = await errorTask.ConfigureAwait(false);
+            var outputText = outputTask is null ? string.Empty : await outputTask.ConfigureAwait(false);
+            if (process.ExitCode != 0)
+            {
+                throw new InvalidOperationException(string.IsNullOrWhiteSpace(error)
+                    ? $"{Path.GetFileName(executable)} exited with code {process.ExitCode}."
+                    : error.Trim());
+            }
 
-        return new ProcessResult(outputText);
+            return new ProcessResult(outputText);
+        }
+        catch
+        {
+            TryKill(process);
+            throw;
+        }
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(3000);
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+        {
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     private static void EnsureExecutable(string path)

@@ -8,6 +8,7 @@ namespace DevBox.Core.Services;
 public sealed partial class ApplicationUpdateService : IDisposable
 {
     private const string LatestReleaseUrl = "https://api.github.com/repos/chmajster/DevBox-Window/releases/latest";
+    private const long MaximumReleaseMetadataBytes = 2L * 1024 * 1024;
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
     private readonly Version _currentVersion;
@@ -27,11 +28,25 @@ public sealed partial class ApplicationUpdateService : IDisposable
     public async Task<UpdateCheckResult> CheckAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        using var response = await _httpClient.GetAsync(LatestReleaseUrl, cancellationToken).ConfigureAwait(false);
+        using var response = await _httpClient.GetAsync(LatestReleaseUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var payload = await ArchiveSafety.ReadContentBytesWithLimitAsync(
+            response,
+            MaximumReleaseMetadataBytes,
+            "GitHub release metadata",
+            cancellationToken).ConfigureAwait(false);
 
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(payload);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException("GitHub release response contains invalid JSON.", ex);
+        }
+        using (document)
+        {
         var root = document.RootElement;
         if (!root.TryGetProperty("tag_name", out var tagElement) ||
             !root.TryGetProperty("html_url", out var urlElement))
@@ -53,6 +68,7 @@ public sealed partial class ApplicationUpdateService : IDisposable
             latestVersion,
             latestVersion > _currentVersion,
             releaseUri.AbsoluteUri);
+        }
     }
 
     internal static Version ParseReleaseVersion(string? tag)

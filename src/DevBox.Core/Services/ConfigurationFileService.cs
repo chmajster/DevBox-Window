@@ -261,6 +261,11 @@ public sealed class ConfigurationFileService
             TryKill(process);
             return (false, "Configuration validator exceeded the 15 second timeout.");
         }
+        catch (OperationCanceledException)
+        {
+            TryKill(process);
+            throw;
+        }
         var output = (await stdout.ConfigureAwait(false) + Environment.NewLine + await stderr.ConfigureAwait(false)).Trim();
         if (output.Length > 4000)
             output = output[..4000];

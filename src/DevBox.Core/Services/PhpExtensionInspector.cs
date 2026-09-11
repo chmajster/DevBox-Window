@@ -69,6 +69,11 @@ public sealed class PhpExtensionInspector
             TryKill(process);
             return new PhpExtensionCheckResult(true, Array.Empty<string>(), required, "PHP extension check timed out.");
         }
+        catch (OperationCanceledException)
+        {
+            TryKill(process);
+            throw;
+        }
 
         var output = await outputTask.ConfigureAwait(false);
         var error = await errorTask.ConfigureAwait(false);
@@ -184,7 +189,7 @@ public sealed class PhpExtensionInspector
                 process.Kill(entireProcessTree: true);
             }
         }
-        catch (InvalidOperationException)
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
         {
         }
     }
