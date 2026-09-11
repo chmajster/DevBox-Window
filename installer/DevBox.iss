@@ -60,14 +60,14 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDi
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait; Tasks: launchafterinstall
 
-; DevBox modules are downloaded/generated after Setup, so they are not automatically
-; tracked by Inno Setup. Remove only managed module paths; keep user projects in www.
+; Runtime modules and temporary package data are always DevBox-owned.
+; Addon project directories are removed conditionally from [Code] only when ownership
+; can be established, so an unrelated www\phpmyadmin project is never deleted by name alone.
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\runtime"
 Type: filesandordirs; Name: "{app}\tmp\runtimes"
 Type: filesandordirs; Name: "{app}\tmp\runtime-imports"
 Type: filesandordirs; Name: "{app}\tmp\addons"
-Type: filesandordirs; Name: "{app}\www\phpmyadmin"
 Type: files; Name: "{app}\config\nginx\sites-enabled\phpmyadmin.test.conf"
 
 [Code]
@@ -171,6 +171,10 @@ function RemoveGeneratedModules(const BaseDir: String): Boolean;
 var
   ModuleRoot: String;
   RootPrefix: String;
+  PhpMyAdminPath: String;
+  PhpMyAdminVhost: String;
+  PhpMyAdminMarker: String;
+  ManagedPhpMyAdmin: Boolean;
 begin
   Result := True;
   if BaseDir = '' then
@@ -178,22 +182,32 @@ begin
 
   ModuleRoot := RemoveBackslashUnlessRoot(BaseDir);
   RootPrefix := AddBackslash(ModuleRoot);
+  PhpMyAdminPath := RootPrefix + 'www\phpmyadmin';
+  PhpMyAdminVhost := RootPrefix + 'config\nginx\sites-enabled\phpmyadmin.test.conf';
+  PhpMyAdminMarker := PhpMyAdminPath + '\.devbox-addon';
+  ManagedPhpMyAdmin := FileExists(PhpMyAdminMarker) or FileExists(PhpMyAdminVhost);
+
   Log('Removing generated DevBox modules from: ' + ModuleRoot);
 
   DelTree(RootPrefix + 'runtime', True, True, True);
   DelTree(RootPrefix + 'tmp\runtimes', True, True, True);
   DelTree(RootPrefix + 'tmp\runtime-imports', True, True, True);
   DelTree(RootPrefix + 'tmp\addons', True, True, True);
-  DelTree(RootPrefix + 'www\phpmyadmin', True, True, True);
-  DeleteFile(RootPrefix + 'config\nginx\sites-enabled\phpmyadmin.test.conf');
+  if ManagedPhpMyAdmin then
+    DelTree(PhpMyAdminPath, True, True, True)
+  else if DirExists(PhpMyAdminPath) then
+    Log('Preserving www\phpmyadmin because no DevBox ownership marker or legacy DevBox vhost was found.');
+  DeleteFile(PhpMyAdminVhost);
 
   Result :=
     not DirExists(RootPrefix + 'runtime') and
     not DirExists(RootPrefix + 'tmp\runtimes') and
     not DirExists(RootPrefix + 'tmp\runtime-imports') and
     not DirExists(RootPrefix + 'tmp\addons') and
-    not DirExists(RootPrefix + 'www\phpmyadmin') and
-    not FileExists(RootPrefix + 'config\nginx\sites-enabled\phpmyadmin.test.conf');
+    not FileExists(PhpMyAdminVhost);
+
+  if ManagedPhpMyAdmin then
+    Result := Result and not DirExists(PhpMyAdminPath);
 
   if not Result then
   begin
@@ -362,6 +376,12 @@ begin
       Result := False;
     end;
   end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    RemoveGeneratedModules(ExpandConstant('{app}'));
 end;
 
 procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
