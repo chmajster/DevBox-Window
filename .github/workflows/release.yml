@@ -68,7 +68,10 @@ jobs:
             throw "Could not read the current semantic version from $projectPath"
           }
 
-          $currentText = $match.Groups['version'].Value
+          $sourceVersion = $match.Groups['version'].Value
+          git fetch origin --tags --force
+          $latestTag = git tag --list 'v*' --sort=-v:refname | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | Select-Object -First 1
+          $currentText = if ([string]::IsNullOrWhiteSpace($latestTag)) { '0.0.0' } else { $latestTag.Substring(1) }
           $parts = $currentText.Split('.')
           $major = [int]$parts[0]
           $minor = [int]$parts[1]
@@ -95,7 +98,6 @@ jobs:
           $nextVersion = "$major.$minor.$patch"
           $releaseTag = "v$nextVersion"
 
-          git fetch origin --tags --force
           $existingTag = git tag --list $releaseTag
           if (-not [string]::IsNullOrWhiteSpace($existingTag)) {
             throw "Tag $releaseTag already exists."
@@ -106,7 +108,8 @@ jobs:
           "DEVBOX_RELEASE_TAG=$releaseTag" >> $env:GITHUB_ENV
 
           "### Manual release" >> $env:GITHUB_STEP_SUMMARY
-          "- Current version: ``$currentText``" >> $env:GITHUB_STEP_SUMMARY
+          "- Latest published version: ``$currentText``" >> $env:GITHUB_STEP_SUMMARY
+          "- Source development version: ``$sourceVersion``" >> $env:GITHUB_STEP_SUMMARY
           "- Increment: ``$env:VERSION_BUMP``" >> $env:GITHUB_STEP_SUMMARY
           "- New version: ``$nextVersion``" >> $env:GITHUB_STEP_SUMMARY
 
@@ -133,7 +136,7 @@ jobs:
           $readme = Get-Content $readmePath -Raw
           $readme = [regex]::Replace(
             $readme,
-            'Current application version: `\d+\.\d+\.\d+`\.',
+            'Current application version: `\d+\.\d+\.\d+`(?: \(development; latest published release remains `\d+\.\d+\.\d+`\))?\.',
             ('Current application version: `' + $env:DEVBOX_VERSION + '`.'),
             1)
           Set-Content $readmePath $readme -Encoding utf8 -NoNewline
@@ -262,14 +265,14 @@ jobs:
             throw "Inno Setup compiler not found after installation: $iscc"
           }
 
-      - name: Build installer
+      - name: Build installers
         shell: pwsh
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          & $iscc "/DMyAppVersion=$env:DEVBOX_VERSION" "/DPublishDir=$pwd\publish\win-x64" "/DOutputDir=$pwd\artifacts" "installer\DevBox.iss"
-          if ($LASTEXITCODE -ne 0) {
-            throw "Inno Setup failed with exit code $LASTEXITCODE"
-          }
+          & $iscc "/DMyAppVersion=$env:DEVBOX_VERSION" "/DMyAppRid=win-x64" "/DMyArchitecturesAllowed=x64compatible" "/DMyArchitecturesInstallMode=x64compatible" "/DPublishDir=$pwd\publish\win-x64" "/DOutputDir=$pwd\artifacts" "installer\DevBox.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup x64 build failed with exit code $LASTEXITCODE" }
+          & $iscc "/DMyAppVersion=$env:DEVBOX_VERSION" "/DMyAppRid=win-arm64" "/DMyArchitecturesAllowed=arm64" "/DMyArchitecturesInstallMode=arm64" "/DPublishDir=$pwd\publish\win-arm64" "/DOutputDir=$pwd\artifacts" "installer\DevBox.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup ARM64 build failed with exit code $LASTEXITCODE" }
 
       - name: Sign installer
         if: steps.signing.outputs.enabled == 'true'
@@ -281,9 +284,14 @@ jobs:
           $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
             Sort-Object FullName -Descending | Select-Object -First 1
           if ($null -eq $signtool) { throw 'signtool.exe was not found on the runner.' }
-          $installer = "artifacts/DevBox-$env:DEVBOX_VERSION-win-x64-setup.exe"
-          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $env:SIGNING_CERTIFICATE_PATH /p $env:SIGNING_CERTIFICATE_PASSWORD $installer
-          if ($LASTEXITCODE -ne 0) { throw 'Authenticode signing failed for installer.' }
+          $installers = @(
+            "artifacts/DevBox-$env:DEVBOX_VERSION-win-x64-setup.exe",
+            "artifacts/DevBox-$env:DEVBOX_VERSION-win-arm64-setup.exe"
+          )
+          foreach ($installer in $installers) {
+            & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $env:SIGNING_CERTIFICATE_PATH /p $env:SIGNING_CERTIFICATE_PASSWORD $installer
+            if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed for $installer" }
+          }
 
       - name: Remove signing certificate
         if: always() && steps.signing.outputs.enabled == 'true'
