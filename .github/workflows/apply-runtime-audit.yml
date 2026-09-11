@@ -25,6 +25,7 @@ jobs:
         run: |
           python .github/scripts/apply-runtime-audit.py
           python .github/scripts/apply-runtime-audit-followup.py
+          python .github/scripts/apply-runtime-audit-testfix.py
 
       - name: Validate
         shell: pwsh
