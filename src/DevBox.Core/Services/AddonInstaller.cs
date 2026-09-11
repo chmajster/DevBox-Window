@@ -28,6 +28,12 @@ public sealed class AddonInstaller : IDisposable
         EnsureInstallPathIsSafe(addon);
         using var addonLock = await CrossProcessFileLock.AcquireAsync(AddonLockPath(addon), cancellationToken, TimeSpan.FromSeconds(30)).ConfigureAwait(false);
 
+        if (Directory.Exists(addon.InstallPath) && !AddonOwnership.IsOwned(_rootPath, addon))
+        {
+            throw new InvalidOperationException(
+                $"Refusing to install {addon.DisplayName} over '{addon.InstallPath}' because that directory is not owned by DevBox.");
+        }
+
         var tempRoot = Path.Combine(_rootPath, "tmp", "addons", addon.Key, Guid.NewGuid().ToString("N"));
         var archivePath = Path.Combine(tempRoot, "package.zip");
         var extractPath = Path.Combine(tempRoot, "extract");
