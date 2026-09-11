@@ -13,7 +13,7 @@ public sealed class ProcessManager : IProcessManager
 {
     private static readonly TimeSpan ProcessIdentityTolerance = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan StartupProbeTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan ProcessOnlyStartupDelay = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan ProcessOnlyStartupDelay = TimeSpan.FromSeconds(1);
     private readonly ConcurrentDictionary<string, ManagedProcess> _processes = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new(StringComparer.OrdinalIgnoreCase);
     private bool _disposed;

@@ -42,7 +42,7 @@ public partial class App : System.Windows.Application
             _singleInstanceGuard = SingleInstanceGuard.TryAcquire(DevBoxRoot);
             if (_singleInstanceGuard is null)
             {
-                MessageBox.Show(
+                System.Windows.MessageBox.Show(
                     "DevBox is already running for this installation. Check the notification area if the main window is hidden.",
                     "DevBox Windows",
                     MessageBoxButton.OK,
@@ -57,7 +57,7 @@ public partial class App : System.Windows.Application
         catch (Exception ex)
         {
             TryWriteStartupLog($"Fatal startup failure: {ex}");
-            MessageBox.Show(
+            System.Windows.MessageBox.Show(
                 $"DevBox could not start.\n\n{ex.Message}\n\nSee logs/devbox-error.log for details.",
                 "DevBox startup failed",
                 MessageBoxButton.OK,
@@ -322,7 +322,7 @@ public partial class App : System.Windows.Application
     {
         TryWriteStartupLog($"Unhandled UI exception: {e.Exception}");
         e.Handled = true;
-        MessageBox.Show(
+        System.Windows.MessageBox.Show(
             $"DevBox encountered an unexpected error and must close.\n\n{e.Exception.Message}",
             "DevBox error",
             MessageBoxButton.OK,
@@ -380,7 +380,7 @@ public partial class App : System.Windows.Application
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
         {
-            MessageBox.Show(ex.Message, "DevBox hosts update failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            System.Windows.MessageBox.Show(ex.Message, "DevBox hosts update failed", MessageBoxButton.OK, MessageBoxImage.Error);
             return 1;
         }
     }

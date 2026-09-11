@@ -66,6 +66,22 @@ public sealed class StartupRuntimeAuditTests
     }
 
     [Fact]
+    public void DatabaseRuntime_RejectsParentDirectoryAsVersion()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "devbox-database-runtime", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            using var service = new DatabaseRuntimeService(root);
+            Assert.Throws<ArgumentException>(() => service.Register("mysql", ".."));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void RuntimeCatalog_RejectsArchiveRootTraversal()
     {
         var root = Path.Combine(Path.GetTempPath(), "devbox-runtime-catalog", Guid.NewGuid().ToString("N"));

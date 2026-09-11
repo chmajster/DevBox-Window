@@ -302,19 +302,38 @@ public sealed class RuntimePlatformService : IDisposable
 
     private static void ValidatePackage(RuntimePackageEntry package)
     {
-        if (string.IsNullOrWhiteSpace(package.Key) || package.Key.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || package.Key.Contains(Path.DirectorySeparatorChar) || package.Key.Contains(Path.AltDirectorySeparatorChar))
+        if (!IsSafePathSegment(package.Key))
             throw new InvalidDataException("Runtime key is invalid.");
-        if (string.IsNullOrWhiteSpace(package.Version) || package.Version.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || package.Version.Contains(Path.DirectorySeparatorChar) || package.Version.Contains(Path.AltDirectorySeparatorChar))
+        if (!IsSafePathSegment(package.Version))
             throw new InvalidDataException("Runtime version is invalid.");
-        if (string.IsNullOrWhiteSpace(package.ExecutableRelativePath) || Path.IsPathRooted(package.ExecutableRelativePath))
-            throw new InvalidDataException("Runtime executable path must be relative.");
+        ValidateRelativePackagePath(package.ExecutableRelativePath, "Runtime executable path");
+        if (!string.IsNullOrWhiteSpace(package.ArchiveRootDirectory))
+            ValidateRelativePackagePath(package.ArchiveRootDirectory, "Runtime archive root");
+        if (string.IsNullOrWhiteSpace(package.Architecture) || package.Architecture.Length > 32)
+            throw new InvalidDataException("Runtime architecture is invalid.");
         if (!string.IsNullOrWhiteSpace(package.DownloadUrl))
         {
             if (!Uri.TryCreate(package.DownloadUrl, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
                 throw new InvalidDataException("Runtime catalog download URL must use HTTPS.");
-            if (string.IsNullOrWhiteSpace(package.Sha256) || package.Sha256.Trim().Length != 64)
-                throw new InvalidDataException("Remote runtime catalog entries require a pinned SHA-256 digest.");
+            if (string.IsNullOrWhiteSpace(package.Sha256) || package.Sha256.Trim().Length != 64 || !package.Sha256.Trim().All(Uri.IsHexDigit))
+                throw new InvalidDataException("Remote runtime catalog entries require a valid pinned SHA-256 digest.");
         }
+    }
+
+    private static bool IsSafePathSegment(string value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value is not "." and not ".." &&
+        value.IndexOfAny(Path.GetInvalidFileNameChars()) < 0 &&
+        !value.Contains(Path.DirectorySeparatorChar) &&
+        !value.Contains(Path.AltDirectorySeparatorChar);
+
+    private static void ValidateRelativePackagePath(string value, string description)
+    {
+        if (string.IsNullOrWhiteSpace(value) || Path.IsPathRooted(value))
+            throw new InvalidDataException($"{description} must be relative.");
+        var normalized = value.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+        if (normalized.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries).Any(segment => segment == ".."))
+            throw new InvalidDataException($"{description} cannot contain parent traversal.");
     }
 
     private static void VerifySha256(string path, string expected)
