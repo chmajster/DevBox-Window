@@ -1,6 +1,8 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string[]] $PublishDirectories
+    [string[]] $PublishDirectories,
+
+    [switch] $SkipPhp
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,6 +40,11 @@ $packages = @(
         ExecutableRelativePath = 'bin\mysqld.exe'
     }
 )
+
+if ($SkipPhp) {
+    Write-Host 'PHP will be delivered on demand and will not be downloaded or bundled by this release.'
+    $packages = @($packages | Where-Object { $_.Key -ne 'php' })
+}
 
 foreach ($publishDirectory in $PublishDirectories) {
     if (-not (Test-Path -LiteralPath $publishDirectory -PathType Container)) {

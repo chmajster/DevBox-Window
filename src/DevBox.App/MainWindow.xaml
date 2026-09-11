@@ -166,7 +166,7 @@
 
             <Grid Visibility="{Binding RuntimesVisibility}">
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-                <StackPanel Grid.Row="0" Margin="0,0,0,20"><TextBlock Text="Runtimes" FontSize="27" FontWeight="SemiBold"/><TextBlock Text="Versioned PHP, Nginx and MySQL installations with atomic current-version switching." Foreground="#6B7280" Margin="0,5,0,0"/></StackPanel>
+                <StackPanel Grid.Row="0" Margin="0,0,0,20"><TextBlock Text="Runtimes" FontSize="27" FontWeight="SemiBold"/><TextBlock Text="Download verified PHP/Nginx packages on demand or manage installed runtime versions." Foreground="#6B7280" Margin="0,5,0,0"/></StackPanel>
                 <Border Grid.Row="1" Background="#EFF6FF" BorderBrush="#BFDBFE" BorderThickness="1" Padding="13" Margin="0,0,0,18" CornerRadius="6"><TextBlock Text="Runtime packages are accepted only through the verified runtime lifecycle: HTTPS + pinned SHA-256 + safe extraction." Foreground="#1E40AF" TextWrapping="Wrap"/></Border>
                 <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
                     <ItemsControl ItemsSource="{Binding Runtimes}">
@@ -179,7 +179,11 @@
                                         <TextBlock Grid.Column="1" Text="{Binding Version}"/>
                                         <TextBlock Grid.Column="2" Text="{Binding Status}" FontWeight="SemiBold"/>
                                         <TextBlock Grid.Column="3" Text="{Binding InstallPath}" TextTrimming="CharacterEllipsis" Foreground="#6B7280"/>
-                                        <StackPanel Grid.Column="4" Orientation="Horizontal"><Button Content="Activate" Style="{StaticResource PrimaryButton}" Command="{Binding DataContext.ActivateRuntimeCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}"/><Button Content="Remove" Style="{StaticResource DangerButton}" Command="{Binding DataContext.RemoveRuntimeCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}"/></StackPanel>
+                                        <StackPanel Grid.Column="4" Orientation="Horizontal">
+                                            <Button Content="Download" Style="{StaticResource PrimaryButton}" IsEnabled="{Binding CanDownload}" Command="{Binding DataContext.DownloadRuntimeCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}"/>
+                                            <Button Content="Activate" IsEnabled="{Binding CanActivate}" Command="{Binding DataContext.ActivateRuntimeCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}"/>
+                                            <Button Content="Remove" IsEnabled="{Binding CanRemove}" Style="{StaticResource DangerButton}" Command="{Binding DataContext.RemoveRuntimeCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}"/>
+                                        </StackPanel>
                                     </Grid>
                                 </Border>
                             </DataTemplate>
