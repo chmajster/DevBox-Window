@@ -398,7 +398,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             {
                 _dialogs.Warning(
                     $"{addon.DisplayName} downloaded",
-                    $"{addon.DisplayName} {addon.Version} was downloaded and configured, but PHP is not installed. Open Runtimes and click Download for PHP.");
+                    $"{addon.DisplayName} {addon.Version} was downloaded and configured, but PHP is not installed. Open Modules and click Install for PHP.");
             }
             else
             {
@@ -592,6 +592,8 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         if (parameter is not RuntimeRowViewModel runtime || !runtime.CanDownload) return;
 
+        runtime.BeginInstall();
+        var progress = new Progress<int>(runtime.SetInstallProgress);
         _definitions.TryGetValue(runtime.Key, out var service);
         var wasRunning = service is not null && _processManager.GetStatus(service).State == ServiceState.Running;
 
@@ -602,19 +604,21 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                 await _processManager.StopAsync(service!);
             }
 
-            // RuntimeManager.InstallAsync verifies SHA-256 and atomically activates the downloaded version.
-            await _runtimePlatformService.InstallAsync(runtime.Key, runtime.Version);
+            // RuntimeManager verifies SHA-256, installs atomically and reports each installation stage.
+            await _runtimePlatformService.InstallAsync(runtime.Key, runtime.Version, progress);
 
             if (wasRunning)
             {
                 await _processManager.StartAsync(service!);
             }
 
+            runtime.SetInstallProgress(100);
             RefreshRuntimes();
             RefreshStatuses();
+            RefreshDiagnostics();
             _dialogs.Info(
-                $"{runtime.Name} downloaded",
-                $"{runtime.Name} {runtime.Version} was downloaded, verified and activated.");
+                $"{runtime.Name} installed",
+                $"{runtime.Name} {runtime.Version} was downloaded, verified, installed and activated.");
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException or FileNotFoundException or Win32Exception)
         {
@@ -630,13 +634,14 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                 {
                     _dialogs.Warning(
                         "Service recovery failed",
-                        $"{runtime.Name} download failed and {service.DisplayName} could not be restarted: {recoveryError.Message}");
+                        $"{runtime.Name} installation failed and {service.DisplayName} could not be restarted: {recoveryError.Message}");
                 }
             }
 
-            RefreshRuntimes();
+            runtime.SetInstallFailed();
             RefreshStatuses();
-            _dialogs.Error($"{runtime.Name} download failed", ex.Message);
+            RefreshDiagnostics();
+            _dialogs.Error($"{runtime.Name} installation failed", ex.Message);
         }
     }
 
