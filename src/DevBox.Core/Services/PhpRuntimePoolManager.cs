@@ -58,6 +58,7 @@ public sealed partial class PhpRuntimePoolManager : IDisposable
     public async Task StopAllAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        Exception? firstFailure = null;
         foreach (var version in GetKnownVersions())
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -69,7 +70,14 @@ public sealed partial class PhpRuntimePoolManager : IDisposable
             {
                 RemoveKnownVersion(version);
             }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or ObjectDisposedException)
+            {
+                firstFailure ??= ex;
+            }
         }
+
+        if (firstFailure is not null)
+            throw new InvalidOperationException("One or more versioned PHP pools could not be stopped.", firstFailure);
     }
 
     public static int GetPort(string version)

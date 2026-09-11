@@ -154,14 +154,6 @@ public sealed class ProcessManager : IProcessManager
                     await managed.Process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
                 }
             }
-            catch (OperationCanceledException)
-            {
-                AppendLog(managed, "APP", "Shutdown was cancelled; terminating the managed process tree to avoid leaving an orphaned service.");
-                TryTerminateStartedProcess(managed.Process);
-                CleanupStoppedProcess(definition, managed);
-                throw;
-            }
-
             AppendLog(managed, "APP", "Stopped.");
             CleanupStoppedProcess(definition, managed);
             return Stopped(definition);
