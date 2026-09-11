@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using DevBox.Core.Models;
 using DevBox.Core.Services;
 using Xunit;
 
@@ -81,6 +82,84 @@ public sealed class BugAuditRegressionTests
             var service = new ProjectTransferService(root);
             var error = await Assert.ThrowsAsync<InvalidDataException>(() => service.ImportAsync(archivePath));
             Assert.Contains("metadata limit", error.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task ProjectSnapshot_PreCancelledCreate_LeavesNoPartialArchive()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var project = CreateProject(root, "cancel-snapshot");
+            File.WriteAllText(Path.Combine(project, "large.bin"), new string('x', 64 * 1024));
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            var service = new ProjectSnapshotService(root);
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                service.CreateAsync(project, cancellationToken: cancellation.Token));
+
+            var snapshotRoot = Path.Combine(root, "backups", "projects");
+            Assert.False(Directory.Exists(snapshotRoot) && Directory.EnumerateFiles(snapshotRoot).Any());
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task ProjectSnapshot_MetadataDoesNotClaimExcludedDatabaseBackup()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var project = CreateProject(root, "snapshot-metadata");
+            var databaseBackup = Path.Combine(root, "database.sql");
+            File.WriteAllText(databaseBackup, "SELECT 1;");
+            var service = new ProjectSnapshotService(root);
+
+            var result = await service.CreateAsync(
+                project,
+                new ProjectSnapshotOptions(IncludeDatabase: false),
+                [databaseBackup]);
+
+            using var archive = ZipFile.OpenRead(result.SnapshotPath);
+            Assert.DoesNotContain(archive.Entries, entry => entry.FullName.StartsWith("database/", StringComparison.OrdinalIgnoreCase));
+            var metadata = Assert.Single(archive.Entries.Where(entry => entry.FullName == "snapshot.json"));
+            using var reader = new StreamReader(metadata.Open());
+            using var document = JsonDocument.Parse(await reader.ReadToEndAsync());
+            Assert.Empty(document.RootElement.GetProperty("DatabaseBackups").EnumerateArray());
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task ProjectSnapshot_RestoreRejectsArchiveWithoutSnapshotMetadata()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var archivePath = Path.Combine(root, "not-a-snapshot.zip");
+            using (var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create))
+            {
+                var manifest = archive.CreateEntry("project/devbox.json");
+                await using var stream = manifest.Open();
+                await using var writer = new StreamWriter(stream);
+                await writer.WriteAsync("{\"Name\":\"x\",\"Domain\":\"x.test\",\"DatabaseEngine\":\"none\",\"Https\":false}");
+            }
+
+            var service = new ProjectSnapshotService(root);
+            await Assert.ThrowsAsync<InvalidDataException>(() => service.RestoreAsync(archivePath, "restored"));
+            Assert.False(Directory.Exists(Path.Combine(root, "www", "restored")));
         }
         finally
         {
