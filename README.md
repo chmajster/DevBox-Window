@@ -2,7 +2,7 @@
 
 DevBox Windows is a native Windows local-development environment built with .NET 8 and WPF. It manages Nginx, PHP FastCGI, MySQL/MariaDB/PostgreSQL, Node.js and optional local services without Docker. The WPF application and the self-contained `cli\devbox.exe` CLI share the same `DevBox.Core` implementation.
 
-Current application version: `0.2.3` (development; latest published release remains `0.2.2`).
+Current application version: `0.2.3`.
 
 ## Main capabilities
 
