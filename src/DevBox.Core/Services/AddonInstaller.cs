@@ -117,9 +117,10 @@ public sealed class AddonInstaller : IDisposable
         EnsureInstallPathIsSafe(addon);
         using var addonLock = CrossProcessFileLock.Acquire(AddonLockPath(addon), TimeSpan.FromSeconds(30));
 
+        var owned = AddonOwnership.IsOwned(_rootPath, addon);
         if (Directory.Exists(addon.InstallPath))
         {
-            if (!AddonOwnership.IsOwned(_rootPath, addon))
+            if (!owned)
             {
                 throw new InvalidOperationException(
                     $"Refusing to remove '{addon.InstallPath}' because it is not recognized as a DevBox-managed addon directory.");
@@ -132,7 +133,10 @@ public sealed class AddonInstaller : IDisposable
             Directory.Delete(trashPath, recursive: true);
         }
 
-        DeleteAddonNginxConfig(addon);
+        if (owned)
+        {
+            DeleteAddonNginxConfig(addon);
+        }
         return Task.CompletedTask;
     }
 
