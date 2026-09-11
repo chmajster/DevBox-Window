@@ -67,6 +67,53 @@ public sealed class AddonInstallerTests
     }
 
     [Fact]
+    public async Task InstallAsync_UnownedNonEmptyDirectory_IsRefusedAndPreserved()
+    {
+        var root = TempRoot();
+        try
+        {
+            var archive = CreateArchive(("package/index.php", "managed"));
+            var hash = Convert.ToHexString(SHA256.HashData(archive)).ToLowerInvariant();
+            var addon = Definition(root, hash);
+            Directory.CreateDirectory(addon.InstallPath);
+            File.WriteAllText(addon.EntryPointPath, "user-owned");
+            using var installer = new AddonInstaller(root, new HttpClient(new StaticResponseHandler(archive)));
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => installer.InstallAsync(addon));
+
+            Assert.Equal("user-owned", File.ReadAllText(addon.EntryPointPath));
+            Assert.False(File.Exists(AddonOwnership.MarkerPath(addon)));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task InstallAsync_EmptyPlaceholderDirectory_DoesNotBlockInstallation()
+    {
+        var root = TempRoot();
+        try
+        {
+            var archive = CreateArchive(("package/index.php", "managed"));
+            var hash = Convert.ToHexString(SHA256.HashData(archive)).ToLowerInvariant();
+            var addon = Definition(root, hash);
+            Directory.CreateDirectory(addon.InstallPath);
+            using var installer = new AddonInstaller(root, new HttpClient(new StaticResponseHandler(archive)));
+
+            await installer.InstallAsync(addon);
+
+            Assert.Equal("managed", File.ReadAllText(addon.EntryPointPath));
+            Assert.True(AddonOwnership.IsOwned(root, addon, allowLegacyVhost: false));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public void VerifySha256_ValidHashWithWhitespace_IsAccepted()
     {
         var root = TempRoot();
