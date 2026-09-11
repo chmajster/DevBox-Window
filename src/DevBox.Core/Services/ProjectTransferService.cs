@@ -137,17 +137,32 @@ public sealed class ProjectTransferService
                 RegisterImportedSite(destination, name, domain);
                 MoveDatabaseBackups(tempRoot, name, movedDatabaseBackups);
             }
-            catch
+            catch (Exception original)
             {
+                var rollbackActions = new List<Action>();
+
                 foreach (var path in movedDatabaseBackups)
-                    TryDeleteFile(path);
-                TryDeleteDirectory(destination);
-                if (previous is not null && Directory.Exists(previous))
-                    Directory.Move(previous, destination);
-                RestoreSiteState(name, siteRollback);
+                {
+                    var movedPath = path;
+                    rollbackActions.Add(() => TryDeleteFile(movedPath));
+                }
+
+                rollbackActions.Add(() => TryDeleteDirectory(destination));
+                rollbackActions.Add(() =>
+                {
+                    if (previous is not null && Directory.Exists(previous) && !Directory.Exists(destination))
+                        Directory.Move(previous, destination);
+                });
+                rollbackActions.Add(() => RestoreSiteState(name, siteRollback));
+
                 foreach (var tlsState in tlsStates.Reverse())
-                    tlsRollback.Restore(tlsState);
-                throw;
+                {
+                    var state = tlsState;
+                    rollbackActions.Add(() => tlsRollback.Restore(state));
+                }
+
+                RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
+                throw new InvalidOperationException("Rollback executor returned unexpectedly.");
             }
 
             if (previous is not null)
