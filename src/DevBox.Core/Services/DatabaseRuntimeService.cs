@@ -206,22 +206,15 @@ public sealed class DatabaseRuntimeService : IDisposable
                 var runtime = RuntimePath(registration.Engine, version);
                 var executable = FirstExisting(Path.Combine(runtime, "bin", "mysqldump.exe"), Path.Combine(runtime, "bin", "mariadb-dump.exe"))
                     ?? throw new FileNotFoundException($"{DisplayEngine(kind)} dump client was not found.");
-                var defaults = CreateMySqlDefaultsFile(options);
-                try
-                {
-                    var result = await RunProcessAsync(
-                        executable,
-                        [$"--defaults-extra-file={defaults}", "--single-transaction", "--routines", "--events", "--triggers", databaseName],
-                        runtime,
-                        null,
-                        temporaryDestination,
-                        cancellationToken).ConfigureAwait(false);
-                    EnsureSuccess(result, $"{DisplayEngine(kind)} backup");
-                }
-                finally
-                {
-                    TryDeleteFile(defaults);
-                }
+                var arguments = MySqlClientArguments(options, "--single-transaction", "--routines", "--events", "--triggers", databaseName);
+                var result = await RunProcessAsync(
+                    executable,
+                    arguments,
+                    runtime,
+                    MySqlPasswordEnvironment(options),
+                    temporaryDestination,
+                    cancellationToken).ConfigureAwait(false);
+                EnsureSuccess(result, $"{DisplayEngine(kind)} backup");
             }
 
             var temporaryInfo = new FileInfo(temporaryDestination);
@@ -275,20 +268,13 @@ public sealed class DatabaseRuntimeService : IDisposable
         var mysqlRuntime = RuntimePath(registration.Engine, version);
         var client = FirstExisting(Path.Combine(mysqlRuntime, "bin", "mysql.exe"), Path.Combine(mysqlRuntime, "bin", "mariadb.exe"))
             ?? throw new FileNotFoundException($"{DisplayEngine(kind)} command client was not found.");
-        var defaultsFile = CreateMySqlDefaultsFile(options);
-        try
-        {
-            var createSql = $"CREATE DATABASE IF NOT EXISTS `{databaseName}`";
-            var createResult = await RunProcessAsync(client, [$"--defaults-extra-file={defaultsFile}", $"--execute={createSql}"], mysqlRuntime, null, null, cancellationToken).ConfigureAwait(false);
-            EnsureSuccess(createResult, $"{DisplayEngine(kind)} target database creation");
+        var createSql = $"CREATE DATABASE IF NOT EXISTS `{databaseName}`";
+        var environment = MySqlPasswordEnvironment(options);
+        var createResult = await RunProcessAsync(client, MySqlClientArguments(options, $"--execute={createSql}"), mysqlRuntime, environment, null, cancellationToken).ConfigureAwait(false);
+        EnsureSuccess(createResult, $"{DisplayEngine(kind)} target database creation");
 
-            var restoreResult = await RunProcessAsync(client, [$"--defaults-extra-file={defaultsFile}", databaseName], mysqlRuntime, null, null, cancellationToken, source).ConfigureAwait(false);
-            EnsureSuccess(restoreResult, $"{DisplayEngine(kind)} restore");
-        }
-        finally
-        {
-            TryDeleteFile(defaultsFile);
-        }
+        var restoreResult = await RunProcessAsync(client, MySqlClientArguments(options, databaseName), mysqlRuntime, environment, null, cancellationToken, source).ConfigureAwait(false);
+        EnsureSuccess(restoreResult, $"{DisplayEngine(kind)} restore");
     }
 
     private static async Task EnsurePostgreSqlDatabaseAsync(
@@ -377,15 +363,13 @@ public sealed class DatabaseRuntimeService : IDisposable
         if (admin is null)
             return;
         var effective = NormalizeOptions(options, registration.Port);
-        var defaults = CreateMySqlDefaultsFile(effective);
-        try
-        {
-            _ = await RunProcessAsync(admin, [$"--defaults-extra-file={defaults}", "shutdown"], runtime, null, null, cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            TryDeleteFile(defaults);
-        }
+        _ = await RunProcessAsync(
+            admin,
+            MySqlClientArguments(effective, "shutdown"),
+            runtime,
+            MySqlPasswordEnvironment(effective),
+            null,
+            cancellationToken).ConfigureAwait(false);
     }
 
     private FileStream AcquireRegistrationLock() =>
@@ -540,28 +524,21 @@ public sealed class DatabaseRuntimeService : IDisposable
         return new Dictionary<string, string?> { ["PGPASSWORD"] = options.Password };
     }
 
-    private string CreateMySqlDefaultsFile(DatabaseConnectionOptions options)
+    private static IReadOnlyList<string> MySqlClientArguments(DatabaseConnectionOptions options, params string[] commandArguments)
     {
-        var directory = Path.Combine(_rootPath, "tmp", "db-auth");
-        Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, $"client-{Guid.NewGuid():N}.cnf");
-        var builder = new StringBuilder();
-        builder.AppendLine("[client]");
-        builder.AppendLine($"host={EscapeIniValue(options.Host)}");
-        builder.AppendLine($"port={options.Port}");
-        builder.AppendLine($"user={EscapeIniValue(options.User)}");
-        if (!string.IsNullOrEmpty(options.Password))
-            builder.AppendLine($"password={EscapeIniValue(options.Password)}");
-        File.WriteAllText(path, builder.ToString(), new UTF8Encoding(false));
-        return path;
+        var result = new List<string>
+        {
+            $"--host={options.Host}",
+            $"--port={options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            $"--user={options.User}"
+        };
+        result.AddRange(commandArguments);
+        return result;
     }
 
-    private static string EscapeIniValue(string value)
-    {
-        if (value.IndexOfAny(['\r', '\n', '\0']) >= 0)
-            throw new ArgumentException("Database credential contains unsupported control characters.");
-        return value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
-    }
+    private static IReadOnlyDictionary<string, string?>? MySqlPasswordEnvironment(DatabaseConnectionOptions options) =>
+        string.IsNullOrEmpty(options.Password) ? null : new Dictionary<string, string?> { ["MYSQL_PWD"] = options.Password };
+
 
     private static async Task<ProcessResult> RunProcessAsync(
         string executable,

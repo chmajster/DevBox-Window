@@ -55,11 +55,13 @@ public sealed class WordPressToolkitService
 
         var actions = new List<string>();
         var databaseName = string.IsNullOrWhiteSpace(request.DatabaseName) ? SafeDatabaseName(request.Name) : SafeDatabaseName(request.DatabaseName);
-        var databaseOptions = request.DatabaseOptions ?? DefaultDatabaseOptions(request.DatabaseEngine);
+        var databaseOptions = request.DatabaseOptions ?? ResolveDatabaseOptions(request.DatabaseEngine);
+        var databaseManager = new DatabaseManager(_rootPath);
+        var projectDatabases = new ProjectDatabaseProvisioner(_rootPath, databaseManager);
         var provisioning = new ProjectProvisioningService(
             _rootPath,
             _workspace,
-            new DatabaseManager(_rootPath),
+            databaseManager,
             new ManagedServiceCatalog(_rootPath));
         var result = await provisioning.ProvisionAsync(
             new ProjectCreateRequest(
@@ -153,11 +155,28 @@ public sealed class WordPressToolkitService
         }
         catch
         {
+            var cleanupErrors = new List<Exception>();
             try
             {
                 _sites.Delete(result.Site.Name, deleteDocumentRoot: true);
             }
-            catch (Exception) { }
+            catch (Exception ex)
+            {
+                cleanupErrors.Add(ex);
+            }
+            if (result.DatabaseCreated)
+            {
+                try
+                {
+                    await projectDatabases.DropDatabaseAsync(request.DatabaseEngine, databaseName, databaseOptions, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    cleanupErrors.Add(ex);
+                }
+            }
+            if (cleanupErrors.Count > 0)
+                throw new AggregateException("WordPress setup failed and cleanup was incomplete.", cleanupErrors);
             throw;
         }
     }
@@ -172,7 +191,8 @@ public sealed class WordPressToolkitService
         EnsureSuccess(result, "WordPress status");
         var lines = new List<string> { $"WordPress {result.StandardOutput.Trim()}" };
         var update = await RunWpCliAsync(php, projectRoot, ["core", "check-update", "--format=csv", "--no-color"], null, cancellationToken).ConfigureAwait(false);
-        if (update.ExitCode == 0 && !string.IsNullOrWhiteSpace(update.StandardOutput))
+        EnsureSuccess(update, "WordPress update check");
+        if (!string.IsNullOrWhiteSpace(update.StandardOutput))
             lines.Add("Core update is available.");
         else
             lines.Add("No core update reported by WP-CLI.");
@@ -207,10 +227,17 @@ public sealed class WordPressToolkitService
         return root;
     }
 
-    private static DatabaseConnectionOptions DefaultDatabaseOptions(string engine) =>
-        engine.Equals("mariadb", StringComparison.OrdinalIgnoreCase)
-            ? new DatabaseConnectionOptions(Port: 3306, User: "root", Password: string.Empty)
-            : new DatabaseConnectionOptions(Port: 3306, User: "root", Password: string.Empty);
+    private DatabaseConnectionOptions ResolveDatabaseOptions(string engine)
+    {
+        using var runtimes = new DatabaseRuntimeService(_rootPath);
+        var normalized = engine.Trim().ToLowerInvariant();
+        var candidate = runtimes.GetInstances(normalized)
+            .OrderByDescending(item => item.State == ServiceState.Running)
+            .ThenBy(item => item.Port)
+            .FirstOrDefault();
+        var fallbackPort = normalized == "mariadb" ? 3316 : 3306;
+        return new DatabaseConnectionOptions(Port: candidate?.Port ?? fallbackPort, User: "root", Password: string.Empty);
+    }
 
     private static string SafeDatabaseName(string value)
     {

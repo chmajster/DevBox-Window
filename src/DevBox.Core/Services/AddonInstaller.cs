@@ -216,6 +216,7 @@ public sealed class AddonInstaller : IDisposable
         }
 
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+        var databasePort = ResolvePhpMyAdminPort();
         var config = $$"""
 <?php
 $cfg['blowfish_secret'] = '{{secret}}';
@@ -223,12 +224,29 @@ $i = 0;
 $i++;
 $cfg['Servers'][$i]['auth_type'] = 'cookie';
 $cfg['Servers'][$i]['host'] = '127.0.0.1';
-$cfg['Servers'][$i]['port'] = '3306';
+$cfg['Servers'][$i]['port'] = '{{databasePort}}';
 $cfg['Servers'][$i]['compress'] = false;
 $cfg['Servers'][$i]['AllowNoPassword'] = true;
 $cfg['TempDir'] = 'tmp';
 """;
         AtomicWrite(configPath, config.Replace("\n", Environment.NewLine));
+    }
+
+    private int ResolvePhpMyAdminPort()
+    {
+        using var databases = new DatabaseRuntimeService(_rootPath);
+        return SelectPhpMyAdminPort(databases.GetInstances());
+    }
+
+    internal static int SelectPhpMyAdminPort(IEnumerable<DatabaseRuntimeInstance> instances)
+    {
+        var selected = instances
+            .Where(item => item.Engine is DatabaseEngineKind.MySql or DatabaseEngineKind.MariaDb)
+            .OrderByDescending(item => item.State == ServiceState.Running)
+            .ThenBy(item => item.Engine == DatabaseEngineKind.MySql ? 0 : 1)
+            .ThenBy(item => item.Port)
+            .FirstOrDefault();
+        return selected?.Port ?? 3306;
     }
 
     private void WriteAddonNginxConfig(AddonDefinition addon)

@@ -25,7 +25,7 @@ public sealed class ProjectTransferService
         _workspace = new ProjectWorkspaceService(_rootPath, _sites, new PhpExtensionInspector(_rootPath), new LocalCertificateManager(_rootPath));
     }
 
-    public Task<ProjectTransferResult> ExportAsync(
+    public async Task<ProjectTransferResult> ExportAsync(
         string projectPath,
         ProjectSnapshotOptions? options = null,
         IReadOnlyList<string>? databaseBackups = null,
@@ -61,25 +61,25 @@ public sealed class ProjectTransferService
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
-                AddFile(archive, file, $"project/{relative}");
+                await AddFileAsync(archive, file, $"project/{relative}", cancellationToken).ConfigureAwait(false);
             }
             if (options.IncludeDatabase)
             {
                 foreach (var backup in dbFiles)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    AddFile(archive, backup, $"database/{Path.GetFileName(backup)}");
+                    await AddFileAsync(archive, backup, $"database/{Path.GetFileName(backup)}", cancellationToken).ConfigureAwait(false);
                 }
             }
             var entry = archive.CreateEntry("transfer.json", CompressionLevel.Optimal);
             using var writer = new StreamWriter(entry.Open());
-            writer.Write(JsonSerializer.Serialize(transferManifest, JsonOptions));
+            await writer.WriteAsync(JsonSerializer.Serialize(transferManifest, JsonOptions)).ConfigureAwait(false);
         }
 
-        return Task.FromResult(new ProjectTransferResult(destination, transferManifest, new FileInfo(destination).Length));
+        return new ProjectTransferResult(destination, transferManifest, new FileInfo(destination).Length);
     }
 
-    public Task<string> ImportAsync(
+    public async Task<string> ImportAsync(
         string archivePath,
         string? targetProjectName = null,
         string? targetDomain = null,
@@ -93,7 +93,7 @@ public sealed class ProjectTransferService
         Directory.CreateDirectory(tempRoot);
         try
         {
-            ExtractSafely(source, tempRoot, cancellationToken);
+            await ExtractSafelyAsync(source, tempRoot, cancellationToken).ConfigureAwait(false);
             var transferPath = Path.Combine(tempRoot, "transfer.json");
             if (!File.Exists(transferPath))
                 throw new InvalidDataException("Project archive does not contain transfer.json.");
@@ -167,7 +167,7 @@ public sealed class ProjectTransferService
 
             if (previous is not null)
                 TryDeleteDirectory(previous);
-            return Task.FromResult(destination);
+            return destination;
         }
         finally
         {
@@ -286,7 +286,7 @@ public sealed class ProjectTransferService
         }
     }
 
-    private static void ExtractSafely(string archivePath, string destination, CancellationToken cancellationToken)
+    private static async Task ExtractSafelyAsync(string archivePath, string destination, CancellationToken cancellationToken)
     {
         using var archive = ZipFile.OpenRead(archivePath);
         if (archive.Entries.Count > MaximumImportEntries)
@@ -310,7 +310,7 @@ public sealed class ProjectTransferService
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             using var input = entry.Open();
             using var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-            input.CopyTo(output);
+            await input.CopyToAsync(output, 81920, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -423,12 +423,12 @@ public sealed class ProjectTransferService
 
     private static string SafeFileName(string value) => new(value.Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '-').ToArray());
 
-    private static void AddFile(ZipArchive archive, string source, string entryName)
+    private static async Task AddFileAsync(ZipArchive archive, string sourcePath, string entryName, CancellationToken cancellationToken)
     {
         var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
-        using var input = File.OpenRead(source);
-        using var output = entry.Open();
-        input.CopyTo(output);
+        await using var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
+        await using var output = entry.Open();
+        await input.CopyToAsync(output, 81920, cancellationToken).ConfigureAwait(false);
     }
 
     private static void AtomicWrite(string path, string content)

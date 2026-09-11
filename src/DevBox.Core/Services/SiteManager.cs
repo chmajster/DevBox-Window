@@ -44,6 +44,7 @@ public sealed partial class SiteManager
 
     public SiteDefinition Create(string name, string? domain = null, string? documentRoot = null)
     {
+        using var mutationLock = AcquireMutationLock();
         var normalizedName = NormalizeName(name);
         var normalizedDomain = NormalizeDomain(domain ?? $"{normalizedName}.test");
         var root = documentRoot is null
@@ -77,6 +78,7 @@ public sealed partial class SiteManager
 
     public SiteDefinition RegisterExisting(string name, string domain, string documentRoot)
     {
+        using var mutationLock = AcquireMutationLock();
         var normalizedName = NormalizeName(name);
         var normalizedDomain = NormalizeDomain(domain);
         var root = EnsureDocumentRootUnderWww(documentRoot);
@@ -93,6 +95,7 @@ public sealed partial class SiteManager
     public SiteDefinition Update(SiteDefinition site)
     {
         ArgumentNullException.ThrowIfNull(site);
+        using var mutationLock = AcquireMutationLock();
         var normalizedName = NormalizeName(site.Name);
         var normalizedDomain = NormalizeDomain(site.Domain);
         var documentRoot = EnsureDocumentRootUnderWww(site.DocumentRoot);
@@ -121,6 +124,7 @@ public sealed partial class SiteManager
 
     public SiteDefinition SetHttps(string name, bool enabled)
     {
+        using var mutationLock = AcquireMutationLock();
         var normalizedName = NormalizeName(name);
         var sites = GetSites().ToList();
         var index = sites.FindIndex(site => site.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase));
@@ -134,6 +138,7 @@ public sealed partial class SiteManager
 
     public SiteDefinition SetPhpVersion(string name, string? version)
     {
+        using var mutationLock = AcquireMutationLock();
         var normalizedName = NormalizeName(name);
         var normalizedVersion = NormalizePhpVersion(version);
         var sites = GetSites().ToList();
@@ -150,6 +155,7 @@ public sealed partial class SiteManager
 
     public void Delete(string name, bool deleteDocumentRoot = false)
     {
+        using var mutationLock = AcquireMutationLock();
         var normalizedName = NormalizeName(name);
         var sites = GetSites().ToList();
         var site = sites.FirstOrDefault(item => item.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase));
@@ -359,6 +365,9 @@ server {
         if (File.Exists(configPath))
             File.Delete(configPath);
     }
+
+    private FileStream AcquireMutationLock() =>
+        CrossProcessFileLock.Acquire(_sitesMetadataPath + ".lock", TimeSpan.FromSeconds(15));
 
     private void SaveSites(IReadOnlyCollection<SiteDefinition> sites)
     {

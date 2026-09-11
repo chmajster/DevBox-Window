@@ -47,9 +47,11 @@ public sealed partial class LocalCertificateAuthorityService
         EnsureWindows();
         var normalizedDomain = LocalCertificateManager.NormalizeDomain(domain);
         var rollbackService = new TlsRollbackStateService(_rootPath);
-        var rollbackState = rollbackService.Capture(normalizedDomain);
+        TlsRollbackState? rollbackState = null;
         try
         {
+            using var domainLock = CrossProcessFileLock.Acquire(LocalCertificateManager.GetDomainLockPath(_rootPath, normalizedDomain));
+            rollbackState = rollbackService.Capture(normalizedDomain);
             using var authority = EnsureAuthority(trustAuthority);
             using var key = RSA.Create(2048);
             var request = new CertificateRequest(
@@ -83,12 +85,10 @@ public sealed partial class LocalCertificateAuthorityService
             {
                 try
                 {
-                    new LocalCertificateManager(_rootPath).UntrustForCurrentUser(normalizedDomain);
+                    new LocalCertificateManager(_rootPath).UntrustForCurrentUserUnlocked(normalizedDomain);
                 }
                 catch (CryptographicException)
                 {
-                    // A corrupt previous PEM has no recoverable thumbprint. The raw bytes were
-                    // already captured above, so replacement can proceed and rollback remains safe.
                 }
             }
 
@@ -98,7 +98,8 @@ public sealed partial class LocalCertificateAuthorityService
         }
         catch
         {
-            rollbackService.Restore(rollbackState);
+            if (rollbackState is not null)
+                rollbackService.Restore(rollbackState);
             throw;
         }
     }

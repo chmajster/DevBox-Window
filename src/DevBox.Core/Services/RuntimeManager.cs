@@ -62,12 +62,21 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(definition);
         ValidateDefinition(definition);
+        using var runtimeLock = await AcquireRuntimeLockAsync(definition.Key, cancellationToken).ConfigureAwait(false);
+        await InstallUnderLockAsync(definition, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task InstallUnderLockAsync(RuntimeDefinition definition, CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(definition);
+        ValidateDefinition(definition);
 
         var bundledPath = VersionPath(definition.Key, definition.Version);
         if (Directory.Exists(bundledPath))
         {
             ValidateRuntimeExecutable(bundledPath, definition.ExecutableRelativePath);
-            await ActivateAsync(
+            await ActivateUnderLockAsync(
                 definition.Key,
                 definition.Version,
                 definition.ExecutableRelativePath,
@@ -108,7 +117,7 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
 
             var installPath = VersionPath(definition.Key, definition.Version);
             ReplaceDirectory(stagingPath, installPath);
-            await ActivateAsync(definition.Key, definition.Version, definition.ExecutableRelativePath, cancellationToken).ConfigureAwait(false);
+            await ActivateUnderLockAsync(definition.Key, definition.Version, definition.ExecutableRelativePath, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -116,7 +125,14 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         }
     }
 
-    public Task ActivateAsync(string runtimeKey, string version, string executableRelativePath, CancellationToken cancellationToken = default)
+    public async Task ActivateAsync(string runtimeKey, string version, string executableRelativePath, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        using var runtimeLock = await AcquireRuntimeLockAsync(runtimeKey, cancellationToken).ConfigureAwait(false);
+        await ActivateUnderLockAsync(runtimeKey, version, executableRelativePath, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal Task ActivateUnderLockAsync(string runtimeKey, string version, string executableRelativePath, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
@@ -141,7 +157,14 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         return Task.CompletedTask;
     }
 
-    public Task RemoveAsync(string runtimeKey, string version, CancellationToken cancellationToken = default)
+    public async Task RemoveAsync(string runtimeKey, string version, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        using var runtimeLock = await AcquireRuntimeLockAsync(runtimeKey, cancellationToken).ConfigureAwait(false);
+        await RemoveUnderLockAsync(runtimeKey, version, cancellationToken).ConfigureAwait(false);
+    }
+
+    private Task RemoveUnderLockAsync(string runtimeKey, string version, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
@@ -225,6 +248,15 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
             MaximumRuntimeDownloadBytes,
             "Runtime",
             cancellationToken).ConfigureAwait(false);
+    }
+
+    internal Task<FileStream> AcquireRuntimeLockAsync(string runtimeKey, CancellationToken cancellationToken)
+    {
+        ValidateSegment(runtimeKey, nameof(runtimeKey));
+        return CrossProcessFileLock.AcquireAsync(
+            Path.Combine(_rootPath, "tmp", "locks", $"runtime-{runtimeKey.ToLowerInvariant()}.lock"),
+            cancellationToken,
+            TimeSpan.FromSeconds(30));
     }
 
     private string RuntimeRoot(string runtimeKey) => Path.Combine(_rootPath, "runtime", runtimeKey);

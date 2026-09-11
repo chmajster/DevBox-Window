@@ -25,6 +25,86 @@ public sealed class ProjectDatabaseProvisioner
         _ => false
     };
 
+    public async Task<bool> DatabaseExistsAsync(
+        string engine,
+        string databaseName,
+        DatabaseConnectionOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        var safeName = DatabaseManager.ValidateDatabaseName(databaseName);
+        switch (engine.ToLowerInvariant())
+        {
+            case "mysql":
+            {
+                var effective = options ?? new DatabaseConnectionOptions();
+                var values = await _mysql.ListDatabasesAsync(effective, cancellationToken).ConfigureAwait(false);
+                return values.Contains(safeName, StringComparer.OrdinalIgnoreCase);
+            }
+            case "mariadb":
+            {
+                var effective = options ?? new DatabaseConnectionOptions(Port: 3316);
+                effective.Validate();
+                var client = ResolveMariaDbClient() ?? throw new FileNotFoundException("MariaDB client runtime is not installed under runtime/mariadb/current/bin.");
+                var output = await RunAsync(client, MariaDbArguments(effective, "--batch", "--skip-column-names", "--execute=SHOW DATABASES;"), MySqlPasswordEnvironment(effective), cancellationToken).ConfigureAwait(false);
+                return output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Contains(safeName, StringComparer.OrdinalIgnoreCase);
+            }
+            case "postgresql":
+            {
+                var effective = options ?? new DatabaseConnectionOptions(Port: 5432, User: "postgres");
+                effective.Validate();
+                var psql = PostgresTool("psql.exe");
+                EnsureFile(psql, "PostgreSQL psql client is not installed under runtime/postgresql/current/bin.");
+                var output = await RunAsync(
+                    psql,
+                    ["--host", effective.Host, "--port", effective.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), "--username", effective.User, "--dbname", "postgres", "--tuples-only", "--no-align", "--command", $"SELECT 1 FROM pg_database WHERE datname = '{safeName}';"],
+                    PgPasswordEnvironment(effective),
+                    cancellationToken).ConfigureAwait(false);
+                return output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Contains("1", StringComparer.Ordinal);
+            }
+            case "none":
+                return true;
+            default:
+                throw new NotSupportedException($"Database engine '{engine}' is not supported by project provisioning.");
+        }
+    }
+
+    public async Task DropDatabaseAsync(
+        string engine,
+        string databaseName,
+        DatabaseConnectionOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        var safeName = DatabaseManager.ValidateDatabaseName(databaseName);
+        switch (engine.ToLowerInvariant())
+        {
+            case "mysql":
+                await _mysql.DropDatabaseAsync(safeName, options ?? new DatabaseConnectionOptions(), cancellationToken).ConfigureAwait(false);
+                return;
+            case "mariadb":
+            {
+                var effective = options ?? new DatabaseConnectionOptions(Port: 3316);
+                effective.Validate();
+                var client = ResolveMariaDbClient() ?? throw new FileNotFoundException("MariaDB client runtime is not installed under runtime/mariadb/current/bin.");
+                _ = await RunAsync(client, MariaDbArguments(effective, $"--execute=DROP DATABASE IF EXISTS `{safeName}`;"), MySqlPasswordEnvironment(effective), cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            case "postgresql":
+            {
+                var effective = options ?? new DatabaseConnectionOptions(Port: 5432, User: "postgres");
+                effective.Validate();
+                var dropdb = PostgresTool("dropdb.exe");
+                EnsureFile(dropdb, "PostgreSQL dropdb client is not installed under runtime/postgresql/current/bin.");
+                _ = await RunAsync(dropdb, ["--host", effective.Host, "--port", effective.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), "--username", effective.User, "--if-exists", safeName], PgPasswordEnvironment(effective), cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            case "none":
+                return;
+            default:
+                throw new NotSupportedException($"Database engine '{engine}' is not supported by project provisioning.");
+        }
+    }
+
     public async Task EnsureDatabaseAsync(
         string engine,
         string databaseName,
@@ -38,7 +118,7 @@ public sealed class ProjectDatabaseProvisioner
                 await _mysql.CreateDatabaseAsync(safeName, options ?? new DatabaseConnectionOptions(), cancellationToken).ConfigureAwait(false);
                 return;
             case "mariadb":
-                await EnsureMariaDbAsync(safeName, options ?? new DatabaseConnectionOptions(), cancellationToken).ConfigureAwait(false);
+                await EnsureMariaDbAsync(safeName, options ?? new DatabaseConnectionOptions(Port: 3316), cancellationToken).ConfigureAwait(false);
                 return;
             case "postgresql":
                 await EnsurePostgreSqlAsync(
@@ -58,14 +138,11 @@ public sealed class ProjectDatabaseProvisioner
         options.Validate();
         var client = ResolveMariaDbClient()
             ?? throw new FileNotFoundException("MariaDB client runtime is not installed under runtime/mariadb/current/bin.");
-        await WithMariaDbConfigAsync(options, async configPath =>
-        {
-            await RunAsync(
-                client,
-                [$"--defaults-extra-file={configPath}", $"--execute=CREATE DATABASE IF NOT EXISTS `{databaseName}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"],
-                null,
-                cancellationToken).ConfigureAwait(false);
-        }).ConfigureAwait(false);
+        _ = await RunAsync(
+            client,
+            MariaDbArguments(options, $"--execute=CREATE DATABASE IF NOT EXISTS `{databaseName}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"),
+            MySqlPasswordEnvironment(options),
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task EnsurePostgreSqlAsync(string databaseName, DatabaseConnectionOptions options, CancellationToken cancellationToken)
@@ -76,9 +153,7 @@ public sealed class ProjectDatabaseProvisioner
         EnsureFile(psql, "PostgreSQL psql client is not installed under runtime/postgresql/current/bin.");
         EnsureFile(createdb, "PostgreSQL createdb client is not installed under runtime/postgresql/current/bin.");
 
-        await WithPgPassAsync(options, async pgPassPath =>
-        {
-            var environment = new Dictionary<string, string?> { ["PGPASSFILE"] = pgPassPath };
+        var environment = PgPasswordEnvironment(options);
             var check = await RunAsync(
                 psql,
                 ["--host", options.Host, "--port", options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), "--username", options.User, "--dbname", "postgres", "--tuples-only", "--no-align", "--command", $"SELECT 1 FROM pg_database WHERE datname = '{databaseName}';"],
@@ -93,7 +168,6 @@ public sealed class ProjectDatabaseProvisioner
                 ["--host", options.Host, "--port", options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), "--username", options.User, databaseName],
                 environment,
                 cancellationToken).ConfigureAwait(false);
-        }).ConfigureAwait(false);
     }
 
     private string? ResolveMariaDbClient()
@@ -106,51 +180,23 @@ public sealed class ProjectDatabaseProvisioner
 
     private string PostgresTool(string name) => Path.Combine(_rootPath, "runtime", "postgresql", "current", "bin", name);
 
-    private async Task WithMariaDbConfigAsync(DatabaseConnectionOptions options, Func<string, Task> operation)
+    private static IReadOnlyList<string> MariaDbArguments(DatabaseConnectionOptions options, params string[] commandArguments)
     {
-        var directory = Path.Combine(_rootPath, "tmp", "mariadb");
-        Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, $"client-{Guid.NewGuid():N}.cnf");
-        try
+        var result = new List<string>
         {
-            var text = new StringBuilder()
-                .AppendLine("[client]")
-                .Append("host=").AppendLine(QuoteOptionValue(options.Host))
-                .Append("port=").AppendLine(options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture))
-                .Append("user=").AppendLine(QuoteOptionValue(options.User));
-            if (options.Password is not null) text.Append("password=").AppendLine(QuoteOptionValue(options.Password));
-            File.WriteAllText(path, text.ToString(), new UTF8Encoding(false));
-            File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.Hidden);
-            await operation(path).ConfigureAwait(false);
-        }
-        finally
-        {
-            DeleteSensitiveFile(path);
-        }
+            $"--host={options.Host}",
+            $"--port={options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            $"--user={options.User}"
+        };
+        result.AddRange(commandArguments);
+        return result;
     }
 
-    private async Task WithPgPassAsync(DatabaseConnectionOptions options, Func<string, Task> operation)
-    {
-        var directory = Path.Combine(_rootPath, "tmp", "postgresql");
-        Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, $"pgpass-{Guid.NewGuid():N}.conf");
-        try
-        {
-            var line = string.Join(':',
-                EscapePgPass(options.Host),
-                options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                "*",
-                EscapePgPass(options.User),
-                EscapePgPass(options.Password ?? string.Empty));
-            File.WriteAllText(path, line + Environment.NewLine, new UTF8Encoding(false));
-            File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.Hidden);
-            await operation(path).ConfigureAwait(false);
-        }
-        finally
-        {
-            DeleteSensitiveFile(path);
-        }
-    }
+    private static IReadOnlyDictionary<string, string?>? MySqlPasswordEnvironment(DatabaseConnectionOptions options) =>
+        string.IsNullOrEmpty(options.Password) ? null : new Dictionary<string, string?> { ["MYSQL_PWD"] = options.Password };
+
+    private static IReadOnlyDictionary<string, string?>? PgPasswordEnvironment(DatabaseConnectionOptions options) =>
+        string.IsNullOrEmpty(options.Password) ? null : new Dictionary<string, string?> { ["PGPASSWORD"] = options.Password };
 
     private static async Task<string> RunAsync(
         string executable,

@@ -70,9 +70,15 @@ public sealed class GitProjectBootstrapService
             using (var locks = new EnvironmentLockService(_rootPath))
             {
                 if (!string.IsNullOrWhiteSpace(request.ProfileKey))
+                {
                     environment = await locks.ApplyProfileAsync(projectRoot, request.ProfileKey, cancellationToken).ConfigureAwait(false);
+                    if (environment.Warnings.Count > 0)
+                        throw new InvalidOperationException("Environment profile application was incomplete: " + string.Join(" | ", environment.Warnings));
+                }
                 else
+                {
                     _ = locks.Generate(projectRoot);
+                }
             }
 
             IReadOnlyList<ProjectActionResult> actions = Array.Empty<ProjectActionResult>();
