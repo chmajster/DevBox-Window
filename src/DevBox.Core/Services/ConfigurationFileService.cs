@@ -120,9 +120,28 @@ public sealed class ConfigurationFileService
             throw new InvalidOperationException("Configuration backups can only be restored from the DevBox backup directory.");
         if (!File.Exists(source))
             throw new FileNotFoundException("Configuration backup does not exist.", source);
+        var fileName = Path.GetFileName(source);
+        if (!fileName.StartsWith(normalized + "-", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Backup '{fileName}' does not belong to configuration '{normalized}'.");
+        var content = File.ReadAllText(source);
+        var validation = ValidateAsync(normalized, content).ConfigureAwait(false).GetAwaiter().GetResult();
+        if (!validation.IsValid)
+            throw new InvalidDataException($"Configuration backup failed validation: {validation.Message}");
         var destination = GetPath(normalized);
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-        File.Copy(source, destination, overwrite: true);
+        var temp = destination + $".{Guid.NewGuid():N}.restore.tmp";
+        try
+        {
+            File.WriteAllText(temp, content);
+            if (File.Exists(destination))
+                File.Replace(temp, destination, null);
+            else
+                File.Move(temp, destination);
+        }
+        finally
+        {
+            TryDeleteFile(temp);
+        }
     }
 
     private async Task<(bool Valid, string Message)> ValidateNginxAsync(string configPath, CancellationToken cancellationToken)

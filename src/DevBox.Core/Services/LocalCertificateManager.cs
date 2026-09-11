@@ -15,17 +15,25 @@ public sealed class CertificateTrustStoreException : Exception
 
 public sealed partial class LocalCertificateManager
 {
+    private readonly string _rootPath;
     private readonly string _certificateRoot;
 
     public LocalCertificateManager(string rootPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
-        _certificateRoot = Path.GetFullPath(Path.Combine(rootPath, "config", "ssl", "sites"));
+        _rootPath = Path.GetFullPath(rootPath);
+        _certificateRoot = Path.Combine(_rootPath, "config", "ssl", "sites");
     }
 
     public LocalCertificate Ensure(string domain)
     {
         var normalizedDomain = NormalizeDomain(domain);
+        using var domainLock = CrossProcessFileLock.Acquire(GetDomainLockPath(_rootPath, normalizedDomain));
+        return EnsureCore(normalizedDomain);
+    }
+
+    private LocalCertificate EnsureCore(string normalizedDomain)
+    {
         Directory.CreateDirectory(_certificateRoot);
         var certificatePath = CertificatePath(normalizedDomain);
         var privateKeyPath = PrivateKeyPath(normalizedDomain);
@@ -132,7 +140,9 @@ public sealed partial class LocalCertificateManager
 
     public void TrustForCurrentUser(string domain)
     {
-        var certificate = Ensure(domain);
+        var normalizedDomain = NormalizeDomain(domain);
+        using var domainLock = CrossProcessFileLock.Acquire(GetDomainLockPath(_rootPath, normalizedDomain));
+        var certificate = EnsureCore(normalizedDomain);
         using var publicCertificate = LoadPublicCertificate(certificate.CertificatePath);
         using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
         store.Open(OpenFlags.ReadWrite);
@@ -142,10 +152,16 @@ public sealed partial class LocalCertificateManager
 
     public void UntrustForCurrentUser(string domain)
     {
-        var certificatePath = CertificatePath(NormalizeDomain(domain));
+        var normalizedDomain = NormalizeDomain(domain);
+        using var domainLock = CrossProcessFileLock.Acquire(GetDomainLockPath(_rootPath, normalizedDomain));
+        UntrustForCurrentUserUnlocked(normalizedDomain);
+    }
+
+    internal void UntrustForCurrentUserUnlocked(string normalizedDomain)
+    {
+        var certificatePath = CertificatePath(normalizedDomain);
         if (!File.Exists(certificatePath))
             return;
-
         using var certificate = LoadPublicCertificate(certificatePath);
         RemoveTrustedThumbprint(certificate.Thumbprint);
     }
@@ -153,6 +169,8 @@ public sealed partial class LocalCertificateManager
     public void Delete(string domain)
     {
         var normalizedDomain = NormalizeDomain(domain);
+        using var domainLock = CrossProcessFileLock.Acquire(GetDomainLockPath(_rootPath, normalizedDomain));
+
         var certificatePath = CertificatePath(normalizedDomain);
         var privateKeyPath = PrivateKeyPath(normalizedDomain);
         string? thumbprint = null;
@@ -198,6 +216,9 @@ public sealed partial class LocalCertificateManager
         foreach (var match in store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, validOnly: false))
             store.Remove(match);
     }
+
+    internal static string GetDomainLockPath(string rootPath, string normalizedDomain) =>
+        Path.Combine(Path.GetFullPath(rootPath), "tmp", "locks", $"tls-{normalizedDomain}.lock");
 
     private string CertificatePath(string domain) => Path.Combine(_certificateRoot, $"{domain}.crt.pem");
     private string PrivateKeyPath(string domain) => Path.Combine(_certificateRoot, $"{domain}.key.pem");

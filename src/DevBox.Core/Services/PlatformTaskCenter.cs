@@ -112,8 +112,28 @@ public sealed class PlatformTaskCenter : IDisposable
         if (_disposed)
             return;
         _disposed = true;
-        foreach (var entry in _entries.Values)
+        var entries = _entries.Values.ToArray();
+        foreach (var entry in entries)
             entry.Cancellation?.Cancel();
+
+        var executions = entries.Where(entry => entry.Execution is not null).Select(entry => entry.Execution!).ToArray();
+        if (executions.Length == 0)
+        {
+            DisposeSynchronization(entries);
+            return;
+        }
+
+        _ = Task.WhenAll(executions).ContinueWith(
+            _ => DisposeSynchronization(entries),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private void DisposeSynchronization(IEnumerable<TaskEntry> entries)
+    {
+        foreach (var entry in entries)
+            entry.Cancellation?.Dispose();
         _parallelism.Dispose();
     }
 

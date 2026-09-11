@@ -126,7 +126,8 @@ public sealed class EnvironmentLockService : IDisposable
         };
         ValidateLock(desired);
         var result = await ApplyDesiredStateAsync(root, desired, cancellationToken).ConfigureAwait(false);
-        AtomicWrite(Path.Combine(root, LockFileName), JsonSerializer.Serialize(desired, JsonOptions));
+        if (result.Warnings.Count == 0)
+            AtomicWrite(Path.Combine(root, LockFileName), JsonSerializer.Serialize(desired, JsonOptions));
         return result;
     }
 

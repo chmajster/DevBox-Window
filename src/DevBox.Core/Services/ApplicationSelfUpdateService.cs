@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography.X509Certificates;
 using System.Security.Cryptography;
 using System.Text.Json;
 using DevBox.Core.Models;
@@ -84,6 +85,7 @@ public sealed class ApplicationSelfUpdateService : IDisposable
                 await source.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
 
             VerifySha256(temporaryPath, expectedSha256);
+            VerifyAuthenticodeSignature(temporaryPath);
             File.Move(temporaryPath, installerPath, overwrite: true);
         }
         finally
@@ -135,6 +137,78 @@ public sealed class ApplicationSelfUpdateService : IDisposable
         if (!CryptographicOperations.FixedTimeEquals(actual, expected))
             throw new InvalidDataException("Downloaded DevBox installer failed SHA-256 verification.");
     }
+
+    internal static void VerifyAuthenticodeSignature(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("Authenticode verification requires Windows.");
+        if (!File.Exists(path))
+            throw new FileNotFoundException("Downloaded installer was not found for signature verification.", path);
+
+        var filePathPtr = Marshal.StringToCoTaskMemUni(Path.GetFullPath(path));
+        var fileInfo = new WinTrustFileInfo
+        {
+            StructSize = (uint)Marshal.SizeOf<WinTrustFileInfo>(),
+            FilePath = filePathPtr
+        };
+        var fileInfoPtr = Marshal.AllocHGlobal(Marshal.SizeOf<WinTrustFileInfo>());
+        Marshal.StructureToPtr(fileInfo, fileInfoPtr, fDeleteOld: false);
+        var trustData = new WinTrustData
+        {
+            StructSize = (uint)Marshal.SizeOf<WinTrustData>(),
+            UiChoice = 2,
+            RevocationChecks = 0,
+            UnionChoice = 1,
+            FileInfo = fileInfoPtr,
+            StateAction = 1,
+            ProviderFlags = 0
+        };
+        try
+        {
+            var action = new Guid("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
+            var status = WinVerifyTrust(IntPtr.Zero, action, ref trustData);
+            if (status != 0)
+                throw new InvalidDataException($"Downloaded DevBox installer does not have a valid trusted Authenticode signature (0x{status:X8}).");
+            trustData.StateAction = 2;
+            _ = WinVerifyTrust(IntPtr.Zero, action, ref trustData);
+        }
+        finally
+        {
+            Marshal.DestroyStructure<WinTrustFileInfo>(fileInfoPtr);
+            Marshal.FreeHGlobal(fileInfoPtr);
+            Marshal.FreeCoTaskMem(filePathPtr);
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct WinTrustFileInfo
+    {
+        public uint StructSize;
+        public IntPtr FilePath;
+        public IntPtr FileHandle;
+        public IntPtr KnownSubject;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct WinTrustData
+    {
+        public uint StructSize;
+        public IntPtr PolicyCallbackData;
+        public IntPtr SipClientData;
+        public uint UiChoice;
+        public uint RevocationChecks;
+        public uint UnionChoice;
+        public IntPtr FileInfo;
+        public uint StateAction;
+        public IntPtr StateData;
+        public IntPtr UrlReference;
+        public uint ProviderFlags;
+        public uint UiContext;
+        public IntPtr SignatureSettings;
+    }
+
+    [DllImport("wintrust.dll", ExactSpelling = true, SetLastError = true, PreserveSig = true)]
+    private static extern uint WinVerifyTrust(IntPtr hwnd, [MarshalAs(UnmanagedType.LPStruct)] Guid actionId, ref WinTrustData trustData);
 
     private static string ValidateGitHubUrl(string? value, string description)
     {

@@ -21,7 +21,7 @@ public sealed class ProjectSnapshotService
         _snapshotRoot = Path.Combine(_rootPath, "backups", "projects");
     }
 
-    public Task<ProjectSnapshotResult> CreateAsync(
+    public async Task<ProjectSnapshotResult> CreateAsync(
         string projectPath,
         ProjectSnapshotOptions? options = null,
         IReadOnlyList<string>? databaseBackups = null,
@@ -44,7 +44,7 @@ public sealed class ProjectSnapshotService
                 var entry = archive.CreateEntry($"project/{relative}", CompressionLevel.Optimal);
                 using var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: false);
                 using var output = entry.Open();
-                input.CopyTo(output);
+                await input.CopyToAsync(output, 81920, cancellationToken).ConfigureAwait(false);
                 included.Add(relative);
             }
 
@@ -57,7 +57,7 @@ public sealed class ProjectSnapshotService
                     var entry = archive.CreateEntry($"database/{Path.GetFileName(full)}", CompressionLevel.Optimal);
                     using var input = File.OpenRead(full);
                     using var output = entry.Open();
-                    input.CopyTo(output);
+                    await input.CopyToAsync(output, 81920, cancellationToken).ConfigureAwait(false);
                 }
             }
 
@@ -71,14 +71,14 @@ public sealed class ProjectSnapshotService
             };
             var metadataEntry = archive.CreateEntry("snapshot.json", CompressionLevel.Optimal);
             using var writer = new StreamWriter(metadataEntry.Open());
-            writer.Write(JsonSerializer.Serialize(metadata, JsonOptions));
+            await writer.WriteAsync(JsonSerializer.Serialize(metadata, JsonOptions)).ConfigureAwait(false);
         }
 
         var info = new FileInfo(destination);
-        return Task.FromResult(new ProjectSnapshotResult(destination, projectName, info.Length, DateTimeOffset.UtcNow, included));
+        return new ProjectSnapshotResult(destination, projectName, info.Length, DateTimeOffset.UtcNow, included);
     }
 
-    public Task<string> RestoreAsync(
+    public async Task<string> RestoreAsync(
         string snapshotPath,
         string destinationProjectName,
         bool overwrite = false,
@@ -99,7 +99,7 @@ public sealed class ProjectSnapshotService
         string? databaseDestination = null;
         try
         {
-            ExtractSnapshot(source, staging, databaseStaging, cancellationToken);
+            await ExtractSnapshotAsync(source, staging, databaseStaging, cancellationToken).ConfigureAwait(false);
             var manifestPath = Path.Combine(staging, ProjectWorkspaceService.ManifestFileName);
             if (!File.Exists(manifestPath))
                 throw new InvalidDataException("Snapshot does not contain devbox.json.");
@@ -176,7 +176,7 @@ public sealed class ProjectSnapshotService
 
             if (previous is not null)
                 TryDeleteDirectory(previous);
-            return Task.FromResult(destination);
+            return destination;
         }
         finally
         {
@@ -344,7 +344,7 @@ public sealed class ProjectSnapshotService
         }
     }
 
-    private static void ExtractSnapshot(string archivePath, string projectDestination, string databaseDestination, CancellationToken cancellationToken)
+    private static async Task ExtractSnapshotAsync(string archivePath, string projectDestination, string databaseDestination, CancellationToken cancellationToken)
     {
         using var archive = ZipFile.OpenRead(archivePath);
         if (archive.Entries.Count > MaximumEntries)

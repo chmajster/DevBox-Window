@@ -40,12 +40,16 @@ public sealed class RuntimePlatformService : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentException.ThrowIfNullOrWhiteSpace(version);
-        var architecture = CurrentArchitecture();
-        return GetCatalog().FirstOrDefault(item =>
-                   item.Key.Equals(key, StringComparison.OrdinalIgnoreCase) &&
-                   item.Version.Equals(version, StringComparison.OrdinalIgnoreCase) &&
-                   (item.Architecture.Equals(architecture, StringComparison.OrdinalIgnoreCase) || item.Architecture.Equals("any", StringComparison.OrdinalIgnoreCase)))
-               ?? throw new KeyNotFoundException($"Runtime package '{key}' version '{version}' for {architecture} was not found in the catalog.");
+        var architecture = RuntimeInformation.ProcessArchitecture;
+        var architectureName = CurrentArchitecture();
+        return GetCatalog()
+                   .Where(item => item.Key.Equals(key, StringComparison.OrdinalIgnoreCase) &&
+                                  item.Version.Equals(version, StringComparison.OrdinalIgnoreCase) &&
+                                  IsPackageArchitectureCompatible(item.Architecture, architecture))
+                   .OrderByDescending(item => item.Architecture.Equals(architectureName, StringComparison.OrdinalIgnoreCase))
+                   .ThenByDescending(item => item.Architecture.Equals("any", StringComparison.OrdinalIgnoreCase))
+                   .FirstOrDefault()
+               ?? throw new KeyNotFoundException($"Runtime package '{key}' version '{version}' for {architectureName} was not found in the catalog.");
     }
 
     public IReadOnlyList<RuntimeVersionStatus> GetStatuses(string? runtimeKey = null)
@@ -53,7 +57,7 @@ public sealed class RuntimePlatformService : IDisposable
         ThrowIfDisposed();
         var packages = GetCatalog()
             .Where(item => string.IsNullOrWhiteSpace(runtimeKey) || item.Key.Equals(runtimeKey, StringComparison.OrdinalIgnoreCase))
-            .Where(item => item.Architecture.Equals("any", StringComparison.OrdinalIgnoreCase) || item.Architecture.Equals(CurrentArchitecture(), StringComparison.OrdinalIgnoreCase))
+            .Where(item => IsPackageArchitectureCompatible(item.Architecture, RuntimeInformation.ProcessArchitecture))
             .ToArray();
         var statuses = new List<RuntimeVersionStatus>();
 
@@ -133,6 +137,7 @@ public sealed class RuntimePlatformService : IDisposable
                 throw new InvalidDataException($"Runtime executable '{package.ExecutableRelativePath}' was not found in the package.");
             File.WriteAllText(Path.Combine(staging, ".devbox-version"), package.Version);
 
+            using var runtimeLock = await _runtimeManager.AcquireRuntimeLockAsync(package.Key, cancellationToken).ConfigureAwait(false);
             var installRoot = Path.Combine(_rootPath, "runtime", package.Key);
             var installPath = Path.Combine(installRoot, package.Version);
             Directory.CreateDirectory(installRoot);
@@ -141,7 +146,7 @@ public sealed class RuntimePlatformService : IDisposable
             Directory.Move(staging, installPath);
 
             if (activate)
-                await _runtimeManager.ActivateAsync(package.Key, package.Version, package.ExecutableRelativePath, cancellationToken).ConfigureAwait(false);
+                await _runtimeManager.ActivateUnderLockAsync(package.Key, package.Version, package.ExecutableRelativePath, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -381,6 +386,23 @@ public sealed class RuntimePlatformService : IDisposable
             if (File.Exists(temp))
                 File.Delete(temp);
         }
+    }
+
+    internal static bool IsPackageArchitectureCompatible(string packageArchitecture, Architecture architecture)
+    {
+        if (packageArchitecture.Equals("any", StringComparison.OrdinalIgnoreCase))
+            return true;
+        var current = architecture switch
+        {
+            Architecture.X64 => "x64",
+            Architecture.Arm64 => "arm64",
+            Architecture.X86 => "x86",
+            _ => architecture.ToString().ToLowerInvariant()
+        };
+        if (packageArchitecture.Equals(current, StringComparison.OrdinalIgnoreCase))
+            return true;
+        return OperatingSystem.IsWindows() && architecture == Architecture.Arm64 &&
+               packageArchitecture.Equals("x64", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string CurrentArchitecture() => RuntimeInformation.ProcessArchitecture switch

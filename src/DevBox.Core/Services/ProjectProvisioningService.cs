@@ -33,6 +33,9 @@ public sealed class ProjectProvisioningService
         ArgumentNullException.ThrowIfNull(request);
         var actions = new List<string>();
         var warnings = new List<string>();
+        var databaseCreated = false;
+        string? createdDatabaseEngine = null;
+        string? createdDatabaseName = null;
 
         var expectedProjectRoot = Path.Combine(_rootPath, "www", request.Name.Trim().ToLowerInvariant());
         var projectRootExisted = Directory.Exists(expectedProjectRoot);
@@ -67,11 +70,22 @@ public sealed class ProjectProvisioningService
             {
                 if (_projectDatabases.IsAvailable(manifest.DatabaseEngine))
                 {
+                    var existedBefore = await _projectDatabases.DatabaseExistsAsync(
+                        manifest.DatabaseEngine,
+                        manifest.DatabaseName,
+                        databaseOptions,
+                        cancellationToken).ConfigureAwait(false);
                     await _projectDatabases.EnsureDatabaseAsync(
                         manifest.DatabaseEngine,
                         manifest.DatabaseName,
                         databaseOptions,
                         cancellationToken).ConfigureAwait(false);
+                    databaseCreated = !existedBefore;
+                    if (databaseCreated)
+                    {
+                        createdDatabaseEngine = manifest.DatabaseEngine;
+                        createdDatabaseName = manifest.DatabaseName;
+                    }
                     actions.Add($"Ensured {DisplayEngine(manifest.DatabaseEngine)} database {manifest.DatabaseName}.");
                 }
                 else
@@ -98,19 +112,27 @@ public sealed class ProjectProvisioningService
                     warnings.Add($"{template.DisplayName} is required by the profile but its runtime is not installed. The service definition was registered disabled.");
             }
 
-            return new ProjectProvisioningResult(site, manifest, actions, warnings);
+            return new ProjectProvisioningResult(site, manifest, actions, warnings, databaseCreated);
         }
         catch (Exception original)
         {
-            RollbackExecutor.RethrowAfterRollback(
-                original,
-                () =>
+            var rollbackActions = new List<Action>();
+            if (databaseCreated && createdDatabaseEngine is not null && createdDatabaseName is not null)
+            {
+                rollbackActions.Add(() => _projectDatabases.DropDatabaseAsync(
+                    createdDatabaseEngine,
+                    createdDatabaseName,
+                    databaseOptions,
+                    CancellationToken.None).GetAwaiter().GetResult());
+            }
+            rollbackActions.Add(() =>
                 {
                     var current = _sites.GetSites().FirstOrDefault(item => item.Name.Equals(site.Name, StringComparison.OrdinalIgnoreCase));
                     if (current is not null)
                         _sites.Delete(current.Name);
-                },
-                () => RollbackProjectDirectory(projectRoot, projectRootExisted));
+                });
+            rollbackActions.Add(() => RollbackProjectDirectory(projectRoot, projectRootExisted));
+            RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
             throw new InvalidOperationException("Project provisioning rollback executor returned unexpectedly.");
         }
     }
