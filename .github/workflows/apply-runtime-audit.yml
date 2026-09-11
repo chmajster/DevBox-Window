@@ -1,0 +1,43 @@
+name: Apply runtime audit
+
+on:
+  push:
+    branches:
+      - fix/startup-runtime-lifecycle-audit
+    paths:
+      - .github/runtime-audit-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/startup-runtime-lifecycle-audit
+          fetch-depth: 0
+
+      - name: Apply remaining fixes
+        shell: pwsh
+        run: python .github/scripts/apply-runtime-audit.py
+
+      - name: Validate
+        shell: pwsh
+        run: |
+          git diff --check
+          dotnet build DevBox.sln --configuration Release
+          dotnet test DevBox.sln --configuration Release --no-build
+
+      - name: Commit fixes
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "fix: harden runtime startup and recovery"
+            git push origin HEAD:fix/startup-runtime-lifecycle-audit
+          }
