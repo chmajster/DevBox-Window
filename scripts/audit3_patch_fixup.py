@@ -57,5 +57,13 @@ text, removed = re.subn(
 if removed < 1:
     raise RuntimeError('No redundant snapshot CopyTo patch statement was found.')
 
+# ProjectTransferService currently names the AddFile source parameter `source`, not
+# `sourcePath`. Match the actual method but keep the generated async method name/body.
+old_transfer_match = r'''private static void AddFile\(ZipArchive archive, string sourcePath, string entryName\)'''
+new_transfer_match = r'''private static void AddFile\(ZipArchive archive, string source, string entryName\)'''
+if old_transfer_match not in text:
+    raise RuntimeError('ProjectTransferService AddFile matcher was not found in audit3_patch.py')
+text = text.replace(old_transfer_match, new_transfer_match, 1)
+
 path.write_text(text, encoding='utf-8', newline='')
-print(f'Fixed TLS/runtime backreferences and snapshot async transformation; removed {removed} redundant CopyTo matcher(s).')
+print(f'Fixed TLS/runtime/transfer matchers and snapshot async transformation; removed {removed} redundant CopyTo matcher(s).')
