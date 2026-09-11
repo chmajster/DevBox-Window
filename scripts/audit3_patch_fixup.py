@@ -27,34 +27,31 @@ if start < 0 or end < 0:
     raise RuntimeError('Delete cleanup block was not found in audit3_patch.py')
 text = text[:start] + text[end:]
 
-# Correct regex replacement backreferences. Python ordinary string \1 is a control
-# character; \g<n> reaches re.sub as an explicit group reference.
+# Correct regex replacement backreferences.
 text = text.replace(r'{\1', r'{\g<1>')
 text = text.replace(r'{\2', r'{\g<2>')
 text = text.replace(r'{\3', r'{\g<3>')
 text = text.replace(r';\1', r';\g<1>')
 
-# Duplicate validation in the RuntimeManager private under-lock body is harmless.
+# Duplicate validation in the private RuntimeManager method is harmless.
 start = text.find('# Strip duplicated guards from moved Install body.')
 end = text.find('# Public Install must not re-enter lock through Activate.', start)
 if start < 0 or end < 0:
     raise RuntimeError('RuntimeManager cleanup block was not found in audit3_patch.py')
 text = text[:start] + text[end:]
 
-# Snapshot has two 16-space CopyTo calls (project create and restore extraction).
-# Replace both deterministically, while the 20-space database copy remains a separate matcher.
-ambiguous = "replace_once(snapshot, '''                input.CopyTo(output);''', '''                await input.CopyToAsync(output, 81920, cancellationToken).ConfigureAwait(false);''')"
-first = text.find(ambiguous)
-last = text.rfind(ambiguous)
-if first < 0 or last < 0 or first == last:
-    raise RuntimeError('Expected two ambiguous snapshot CopyTo patch statements.')
+# ProjectSnapshotService contains two C# CopyTo calls with 16-space indentation.
+# Replace both in one deterministic operation. The later 12-space generator matcher
+# was intended for the same extraction call and must therefore be removed.
+first_stmt = "replace_once(snapshot, '''                input.CopyTo(output);''', '''                await input.CopyToAsync(output, 81920, cancellationToken).ConfigureAwait(false);''')"
+if first_stmt not in text:
+    raise RuntimeError('Primary snapshot CopyTo patch statement was not found.')
 replacement = """snapshot_text = read(snapshot)\nif snapshot_text.count('                input.CopyTo(output);') != 2:\n    raise RuntimeError('ProjectSnapshotService: expected two 16-space CopyTo calls')\nwrite(snapshot, snapshot_text.replace('                input.CopyTo(output);', '                await input.CopyToAsync(output, 81920, cancellationToken).ConfigureAwait(false);'))"""
-text = text[:first] + replacement + text[first + len(ambiguous):]
-# Remove the second source-level statement; its C# target is already handled above.
-last = text.rfind(ambiguous)
-if last < 0:
-    raise RuntimeError('Second snapshot CopyTo patch statement disappeared unexpectedly.')
-text = text[:last] + text[last + len(ambiguous):]
+text = text.replace(first_stmt, replacement, 1)
+late_stmt = "replace_once(snapshot, '''            input.CopyTo(output);''', '''            await input.CopyToAsync(output, 81920, cancellationToken).ConfigureAwait(false);''')"
+if late_stmt not in text:
+    raise RuntimeError('Late snapshot CopyTo patch statement was not found.')
+text = text.replace(late_stmt, '', 1)
 
 path.write_text(text, encoding='utf-8', newline='')
 print('Fixed TLS/runtime backreferences and snapshot async transformation.')
