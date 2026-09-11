@@ -26,6 +26,8 @@ public sealed class AddonInstallerTests
 
             Assert.True(File.Exists(addon.EntryPointPath));
             Assert.Equal("<?php echo 'ok';", File.ReadAllText(addon.EntryPointPath));
+            Assert.True(File.Exists(AddonOwnership.MarkerPath(addon)));
+            Assert.True(AddonOwnership.IsOwned(root, addon, allowLegacyVhost: false));
             var config = Path.Combine(addon.InstallPath, "config.inc.php");
             Assert.True(File.Exists(config));
             var configContent = File.ReadAllText(config);
@@ -114,6 +116,7 @@ public sealed class AddonInstallerTests
             var addon = Definition(root, new string('0', 64));
             Directory.CreateDirectory(addon.InstallPath);
             File.WriteAllText(addon.EntryPointPath, "<?php echo 'ok';");
+            AddonOwnership.WriteMarker(addon);
             var configPath = Path.Combine(addon.InstallPath, "config.inc.php");
             File.WriteAllText(configPath, """
 <?php
@@ -148,6 +151,7 @@ $cfg['TempDir'] = 'tmp';
             var addon = Definition(root, new string('0', 64));
             Directory.CreateDirectory(addon.InstallPath);
             File.WriteAllText(addon.EntryPointPath, "ok");
+            AddonOwnership.WriteMarker(addon);
             var sibling = Path.Combine(root, "www", "keep.txt");
             File.WriteAllText(sibling, "keep");
             using var installer = new AddonInstaller(root, new HttpClient(new StaticResponseHandler(Array.Empty<byte>())));
@@ -161,6 +165,28 @@ $cfg['TempDir'] = 'tmp';
             Assert.False(Directory.Exists(addon.InstallPath));
             Assert.False(File.Exists(vhost));
             Assert.True(File.Exists(sibling));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task UninstallAsync_UnownedDirectory_IsRefusedAndPreserved()
+    {
+        var root = TempRoot();
+        try
+        {
+            var addon = Definition(root, new string('0', 64));
+            Directory.CreateDirectory(addon.InstallPath);
+            File.WriteAllText(addon.EntryPointPath, "user-owned");
+            using var installer = new AddonInstaller(root, new HttpClient(new StaticResponseHandler(Array.Empty<byte>())));
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => installer.UninstallAsync(addon));
+
+            Assert.True(Directory.Exists(addon.InstallPath));
+            Assert.Equal("user-owned", File.ReadAllText(addon.EntryPointPath));
         }
         finally
         {
