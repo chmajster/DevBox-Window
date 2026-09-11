@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using DevBox.Core.Models;
 
@@ -9,6 +10,9 @@ namespace DevBox.Core.Services;
 public sealed class ApplicationSelfUpdateService : IDisposable
 {
     private const string LatestReleaseUrl = "https://api.github.com/repos/chmajster/DevBox-Window/releases/latest";
+    private const long MaximumReleaseMetadataBytes = 2L * 1024 * 1024;
+    private const long MaximumChecksumBytes = 1024 * 1024;
+    private const long MaximumInstallerDownloadBytes = 1024L * 1024 * 1024;
     private readonly string _rootPath;
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
@@ -31,17 +35,34 @@ public sealed class ApplicationSelfUpdateService : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(currentVersion);
 
-        using var releaseResponse = await _httpClient.GetAsync(LatestReleaseUrl, cancellationToken).ConfigureAwait(false);
+        using var releaseResponse = await _httpClient.GetAsync(LatestReleaseUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         releaseResponse.EnsureSuccessStatusCode();
-        await using var releaseStream = await releaseResponse.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        using var document = await JsonDocument.ParseAsync(releaseStream, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var releasePayload = await ArchiveSafety.ReadContentBytesWithLimitAsync(
+            releaseResponse,
+            MaximumReleaseMetadataBytes,
+            "GitHub release metadata",
+            cancellationToken).ConfigureAwait(false);
 
-        var root = document.RootElement;
-        var version = ApplicationUpdateService.ParseReleaseVersion(root.GetProperty("tag_name").GetString());
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(releasePayload);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException("GitHub release response contains invalid JSON.", ex);
+        }
+        using var releaseDocument = document;
+        var root = releaseDocument.RootElement;
+        if (!root.TryGetProperty("tag_name", out var tagElement) || tagElement.ValueKind != JsonValueKind.String ||
+            !root.TryGetProperty("html_url", out var releaseUrlElement) || releaseUrlElement.ValueKind != JsonValueKind.String)
+            throw new InvalidDataException("GitHub release response is missing tag_name or html_url.");
+
+        var version = ApplicationUpdateService.ParseReleaseVersion(tagElement.GetString());
         if (version <= currentVersion)
             throw new InvalidOperationException("No newer stable DevBox release is available.");
 
-        var releaseUrl = ValidateGitHubUrl(root.GetProperty("html_url").GetString(), "release URL");
+        var releaseUrl = ValidateGitHubUrl(releaseUrlElement.GetString(), "release URL");
         var expectedInstallerName = GetExpectedInstallerAssetName(version);
 
         if (!root.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array)
@@ -67,7 +88,14 @@ public sealed class ApplicationSelfUpdateService : IDisposable
         if (checksumsUrl is null)
             throw new InvalidDataException("Release is missing SHA256SUMS.txt.");
 
-        var checksums = await _httpClient.GetStringAsync(checksumsUrl, cancellationToken).ConfigureAwait(false);
+        using var checksumsResponse = await _httpClient.GetAsync(checksumsUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        checksumsResponse.EnsureSuccessStatusCode();
+        var checksumsPayload = await ArchiveSafety.ReadContentBytesWithLimitAsync(
+            checksumsResponse,
+            MaximumChecksumBytes,
+            "SHA256SUMS.txt",
+            cancellationToken).ConfigureAwait(false);
+        var checksums = Encoding.UTF8.GetString(checksumsPayload);
         var expectedSha256 = ParseChecksum(checksums, expectedInstallerName);
 
         var updateDirectory = Path.Combine(_rootPath, "tmp", "updates", version.ToString(3));
@@ -77,11 +105,13 @@ public sealed class ApplicationSelfUpdateService : IDisposable
 
         try
         {
-            using var response = await _httpClient.GetAsync(installerUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
-            await using (var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false))
-            await using (var destination = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true))
-                await source.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
+            await ArchiveSafety.DownloadToFileAsync(
+                _httpClient,
+                new Uri(installerUrl),
+                temporaryPath,
+                MaximumInstallerDownloadBytes,
+                "DevBox installer",
+                cancellationToken).ConfigureAwait(false);
 
             VerifySha256(temporaryPath, expectedSha256);
             File.Move(temporaryPath, installerPath, overwrite: true);
@@ -129,7 +159,17 @@ public sealed class ApplicationSelfUpdateService : IDisposable
 
     internal static void VerifySha256(string path, string expectedSha256)
     {
-        var expected = Convert.FromHexString(expectedSha256);
+        if (string.IsNullOrWhiteSpace(expectedSha256) || expectedSha256.Trim().Length != 64)
+            throw new InvalidDataException("Expected installer SHA-256 must contain 64 hexadecimal characters.");
+        byte[] expected;
+        try
+        {
+            expected = Convert.FromHexString(expectedSha256.Trim());
+        }
+        catch (FormatException ex)
+        {
+            throw new InvalidDataException("Expected installer SHA-256 is invalid.", ex);
+        }
         using var stream = File.OpenRead(path);
         var actual = SHA256.HashData(stream);
         if (!CryptographicOperations.FixedTimeEquals(actual, expected))

@@ -9,6 +9,9 @@ public sealed class ProjectTransferService
 {
     private const long MaximumImportBytes = 8L * 1024 * 1024 * 1024;
     private const int MaximumImportEntries = 250_000;
+    private const long MaximumMetadataBytes = 1024 * 1024;
+    private const long CompressionRatioCheckThreshold = 1024 * 1024;
+    private const double MaximumCompressionRatio = 200d;
     private readonly string _rootPath;
     private readonly string _wwwRoot;
     private readonly string _exportRoot;
@@ -42,7 +45,12 @@ public sealed class ProjectTransferService
         var destination = string.IsNullOrWhiteSpace(destinationPath)
             ? Path.Combine(_exportRoot, $"{SafeFileName(projectName)}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.devbox-project.zip")
             : Path.GetFullPath(destinationPath);
-        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        var destinationDirectory = Path.GetDirectoryName(destination)!;
+        Directory.CreateDirectory(destinationDirectory);
+        cancellationToken.ThrowIfCancellationRequested();
+        var temporaryDestination = Path.Combine(
+            destinationDirectory,
+            $".{Path.GetFileName(destination)}.{Guid.NewGuid():N}.tmp");
 
         var transferManifest = new ProjectTransferManifest
         {
@@ -51,32 +59,52 @@ public sealed class ProjectTransferService
             ExportedAtUtc = DateTimeOffset.UtcNow,
             ProjectDirectory = "project",
             EnvironmentLockFile = File.Exists(Path.Combine(root, EnvironmentLockService.LockFileName)) ? EnvironmentLockService.LockFileName : null,
-            DatabaseBackups = dbFiles.Select(path => Path.GetFileName(path)!).ToArray()
+            DatabaseBackups = options.IncludeDatabase
+                ? dbFiles.Select(path => Path.GetFileName(path)!).ToArray()
+                : Array.Empty<string>()
         };
 
-        using (var stream = new FileStream(destination, FileMode.Create, FileAccess.ReadWrite, FileShare.None))
-        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create))
+        try
         {
-            foreach (var file in EnumerateProjectFiles(root, options))
+            using (var stream = new FileStream(temporaryDestination, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
+            using (var archive = new ZipArchive(stream, ZipArchiveMode.Create))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
-                await AddFileAsync(archive, file, $"project/{relative}", cancellationToken).ConfigureAwait(false);
-            }
-            if (options.IncludeDatabase)
-            {
-                foreach (var backup in dbFiles)
+                var excludedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    Path.GetFullPath(destination),
+                    Path.GetFullPath(temporaryDestination)
+                };
+                foreach (var file in EnumerateProjectFiles(root, options))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    await AddFileAsync(archive, backup, $"database/{Path.GetFileName(backup)}", cancellationToken).ConfigureAwait(false);
+                    if (excludedPaths.Contains(Path.GetFullPath(file)))
+                        continue;
+                    var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
+                    await AddFileAsync(archive, file, $"project/{relative}", cancellationToken).ConfigureAwait(false);
                 }
+                if (options.IncludeDatabase)
+                {
+                    foreach (var backup in dbFiles)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (excludedPaths.Contains(Path.GetFullPath(backup)))
+                            continue;
+                        await AddFileAsync(archive, backup, $"database/{Path.GetFileName(backup)}", cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                var entry = archive.CreateEntry("transfer.json", CompressionLevel.Optimal);
+                using var writer = new StreamWriter(entry.Open());
+                await writer.WriteAsync(JsonSerializer.Serialize(transferManifest, JsonOptions).AsMemory(), cancellationToken).ConfigureAwait(false);
             }
-            var entry = archive.CreateEntry("transfer.json", CompressionLevel.Optimal);
-            using var writer = new StreamWriter(entry.Open());
-            await writer.WriteAsync(JsonSerializer.Serialize(transferManifest, JsonOptions)).ConfigureAwait(false);
-        }
 
-        return new ProjectTransferResult(destination, transferManifest, new FileInfo(destination).Length);
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Move(temporaryDestination, destination, overwrite: true);
+            return new ProjectTransferResult(destination, transferManifest, new FileInfo(destination).Length);
+        }
+        finally
+        {
+            TryDeleteFile(temporaryDestination);
+        }
     }
 
     public async Task<string> ImportAsync(
@@ -100,7 +128,7 @@ public sealed class ProjectTransferService
             ProjectTransferManifest transfer;
             try
             {
-                transfer = JsonSerializer.Deserialize<ProjectTransferManifest>(File.ReadAllText(transferPath), JsonOptions)
+                transfer = JsonSerializer.Deserialize<ProjectTransferManifest>(ReadMetadataText(transferPath, "transfer.json"), JsonOptions)
                     ?? throw new InvalidDataException("transfer.json is empty.");
             }
             catch (JsonException ex)
@@ -259,7 +287,7 @@ public sealed class ProjectTransferService
         JsonObject manifest;
         try
         {
-            manifest = JsonNode.Parse(File.ReadAllText(path)) as JsonObject
+            manifest = JsonNode.Parse(ReadMetadataText(path, "devbox.json")) as JsonObject
                 ?? throw new InvalidDataException("devbox.json must contain a JSON object.");
         }
         catch (JsonException ex)
@@ -275,7 +303,7 @@ public sealed class ProjectTransferService
         {
             try
             {
-                var lockFile = JsonSerializer.Deserialize<EnvironmentLockFile>(File.ReadAllText(lockPath), JsonOptions);
+                var lockFile = JsonSerializer.Deserialize<EnvironmentLockFile>(ReadMetadataText(lockPath, EnvironmentLockService.LockFileName), JsonOptions);
                 if (lockFile is not null)
                     AtomicWrite(lockPath, JsonSerializer.Serialize(lockFile with { ProjectName = name, Domain = domain, GeneratedAtUtc = DateTimeOffset.UtcNow }, JsonOptions));
             }
@@ -299,9 +327,18 @@ public sealed class ProjectTransferService
             var normalized = entry.FullName.Replace('\\', '/');
             if (normalized.StartsWith("/", StringComparison.Ordinal) || normalized.Contains(':', StringComparison.Ordinal) || normalized.Split('/').Any(part => part == ".."))
                 throw new InvalidDataException("Project archive contains an unsafe entry path.");
+            const int unixFileTypeMask = 0xF000;
+            const int unixSymbolicLink = 0xA000;
+            var unixFileType = (entry.ExternalAttributes >> 16) & unixFileTypeMask;
+            if (unixFileType == unixSymbolicLink)
+                throw new InvalidDataException($"Project archive contains a symbolic link entry: {entry.FullName}");
+
             total = checked(total + Math.Max(0, entry.Length));
             if (total > MaximumImportBytes)
                 throw new InvalidDataException("Project archive exceeds the maximum extracted size.");
+            if (entry.Length >= CompressionRatioCheckThreshold && entry.CompressedLength > 0 &&
+                (double)entry.Length / entry.CompressedLength > MaximumCompressionRatio)
+                throw new InvalidDataException($"Project archive entry '{entry.FullName}' has a suspicious compression ratio.");
             if (normalized.EndsWith("/", StringComparison.Ordinal))
                 continue;
             var target = Path.GetFullPath(Path.Combine(destination, normalized.Replace('/', Path.DirectorySeparatorChar)));
@@ -361,7 +398,7 @@ public sealed class ProjectTransferService
             throw new FileNotFoundException("Project does not contain devbox.json.", path);
         try
         {
-            return JsonNode.Parse(File.ReadAllText(path)) as JsonObject
+            return JsonNode.Parse(ReadMetadataText(path, "devbox.json")) as JsonObject
                 ?? throw new InvalidDataException("devbox.json must contain a JSON object.");
         }
         catch (JsonException ex)
@@ -422,6 +459,16 @@ public sealed class ProjectTransferService
     }
 
     private static string SafeFileName(string value) => new(value.Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '-').ToArray());
+
+    private static string ReadMetadataText(string path, string displayName)
+    {
+        var info = new FileInfo(path);
+        if (!info.Exists)
+            throw new FileNotFoundException($"{displayName} was not found.", path);
+        if (info.Length > MaximumMetadataBytes)
+            throw new InvalidDataException($"{displayName} exceeds the {MaximumMetadataBytes} byte metadata limit.");
+        return File.ReadAllText(path);
+    }
 
     private static async Task AddFileAsync(ZipArchive archive, string sourcePath, string entryName, CancellationToken cancellationToken)
     {

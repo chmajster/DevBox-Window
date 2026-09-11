@@ -38,6 +38,27 @@ internal static class ArchiveSafety
         await CopyToWithLimitAsync(source, target, maximumBytes, packageName, cancellationToken).ConfigureAwait(false);
     }
 
+    public static async Task<byte[]> ReadContentBytesWithLimitAsync(
+        HttpResponseMessage response,
+        long maximumBytes,
+        string contentName,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentName);
+        if (maximumBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maximumBytes));
+
+        var declaredLength = response.Content.Headers.ContentLength;
+        if (declaredLength.HasValue && declaredLength.Value > maximumBytes)
+            throw new InvalidDataException($"{contentName} is too large ({declaredLength.Value} bytes; limit {maximumBytes} bytes).");
+
+        await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var target = new MemoryStream();
+        await CopyToWithLimitAsync(source, target, maximumBytes, contentName, cancellationToken).ConfigureAwait(false);
+        return target.ToArray();
+    }
+
     public static void ExtractZipSafely(
         string archivePath,
         string destinationPath,

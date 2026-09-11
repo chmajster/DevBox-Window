@@ -97,7 +97,7 @@ public sealed class UpdateWindowViewModel : ObservableObject
 
             App.RequestExit();
         }
-        catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or Win32Exception)
+        catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or Win32Exception or PlatformNotSupportedException)
         {
             Status = "Update installation failed";
             _dialogs.Error("Update installation failed", ex.Message);
