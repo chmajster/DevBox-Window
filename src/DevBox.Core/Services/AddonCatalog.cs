@@ -61,7 +61,7 @@ public sealed class AddonCatalog
     public bool IsInstalled(AddonDefinition addon)
     {
         ArgumentNullException.ThrowIfNull(addon);
-        return File.Exists(addon.EntryPointPath);
+        return File.Exists(addon.EntryPointPath) && AddonOwnership.IsOwned(_rootPath, addon);
     }
 
     private AddonDefinition ToDefinition(AddonManifestEntry entry)
