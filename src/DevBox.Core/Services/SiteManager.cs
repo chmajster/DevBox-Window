@@ -106,6 +106,8 @@ public sealed partial class SiteManager
             .Any(item => item.Domain.Equals(normalizedDomain, StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException($"Domain '{normalizedDomain}' is already assigned to another site.");
 
+        ValidatePhpPortCollision(sites, index, phpVersion);
+
         var previous = sites[index];
         var updated = site with
         {
@@ -139,18 +141,7 @@ public sealed partial class SiteManager
         if (index < 0)
             throw new InvalidOperationException($"Site '{normalizedName}' does not exist.");
 
-        if (normalizedVersion is not null)
-        {
-            var requestedPort = PhpRuntimePoolManager.GetPort(normalizedVersion);
-            var collision = sites
-                .Where((_, siteIndex) => siteIndex != index)
-                .Select(site => site.PhpVersion)
-                .Where(existing => !string.IsNullOrWhiteSpace(existing) && !existing.Equals(normalizedVersion, StringComparison.OrdinalIgnoreCase))
-                .FirstOrDefault(existing => PhpRuntimePoolManager.GetPort(existing!) == requestedPort);
-            if (collision is not null)
-                throw new InvalidOperationException(
-                    $"PHP {normalizedVersion} conflicts with PHP {collision} on FastCGI port {requestedPort}. Choose a different runtime version.");
-        }
+        ValidatePhpPortCollision(sites, index, normalizedVersion);
 
         var previous = sites[index];
         var updated = previous with { PhpVersion = normalizedVersion };
@@ -191,6 +182,8 @@ public sealed partial class SiteManager
 
     private SiteDefinition PersistNewSite(SiteDefinition site, List<SiteDefinition> sites)
     {
+        var configPath = GetNginxConfigPath(site.Domain);
+        var previousConfig = CaptureFile(configPath);
         try
         {
             WriteNginxConfig(site);
@@ -200,7 +193,7 @@ public sealed partial class SiteManager
         }
         catch
         {
-            TryDeleteNginxConfig(site.Domain);
+            RestoreFile(configPath, previousConfig);
             throw;
         }
     }
@@ -285,6 +278,23 @@ public sealed partial class SiteManager
             throw new InvalidOperationException($"Domain '{normalizedDomain}' is already assigned to another site.");
     }
 
+    private static void ValidatePhpPortCollision(IReadOnlyList<SiteDefinition> sites, int currentIndex, string? normalizedVersion)
+    {
+        if (normalizedVersion is null)
+            return;
+
+        var requestedPort = PhpRuntimePoolManager.GetPort(normalizedVersion);
+        var collision = sites
+            .Where((_, siteIndex) => siteIndex != currentIndex)
+            .Select(site => site.PhpVersion)
+            .Where(existing => !string.IsNullOrWhiteSpace(existing) &&
+                               !existing.Equals(normalizedVersion, StringComparison.OrdinalIgnoreCase))
+            .FirstOrDefault(existing => PhpRuntimePoolManager.GetPort(existing!) == requestedPort);
+        if (collision is not null)
+            throw new InvalidOperationException(
+                $"PHP {normalizedVersion} conflicts with PHP {collision} on FastCGI port {requestedPort}. Choose a different runtime version.");
+    }
+
     private void WriteNginxConfig(SiteDefinition site)
     {
         var configPath = GetNginxConfigPath(site.Domain);
@@ -348,20 +358,6 @@ server {
         var configPath = GetNginxConfigPath(domain);
         if (File.Exists(configPath))
             File.Delete(configPath);
-    }
-
-    private void TryDeleteNginxConfig(string domain)
-    {
-        try
-        {
-            DeleteNginxConfig(domain);
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
     }
 
     private void SaveSites(IReadOnlyCollection<SiteDefinition> sites)
