@@ -35,10 +35,23 @@ internal static class ArchiveSafety
             throw new InvalidDataException($"{packageName} download is too large ({declaredLength.Value} bytes; limit {maximumBytes} bytes).");
         }
 
-        await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        await using var target = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true);
-        await CopyToWithLimitAsync(source, target, maximumBytes, declaredLength, packageName, cancellationToken, progress).ConfigureAwait(false);
-        progress?.Report(100);
+        var destinationCreated = false;
+        try
+        {
+            await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            await using var target = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+            destinationCreated = true;
+            await CopyToWithLimitAsync(source, target, maximumBytes, declaredLength, packageName, cancellationToken, progress).ConfigureAwait(false);
+            progress?.Report(100);
+        }
+        catch
+        {
+            if (destinationCreated)
+            {
+                TryDeletePartialDownload(destination);
+            }
+            throw;
+        }
     }
 
     public static async Task<byte[]> ReadContentBytesWithLimitAsync(
@@ -201,6 +214,23 @@ internal static class ArchiveSafety
         if (unixFileType == UnixSymbolicLink)
         {
             throw new InvalidDataException($"{packageName} archive contains a symbolic link entry: {entry.FullName}");
+        }
+    }
+
+    private static void TryDeletePartialDownload(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 }
