@@ -41,6 +41,49 @@ public sealed class DatabaseManagerTests
         Assert.Equal("devbox_app", DatabaseManager.ValidateMutableDatabaseName("devbox_app"));
     }
 
+    [Theory]
+    [InlineData("mysql")]
+    [InlineData("information_schema")]
+    [InlineData("performance_schema")]
+    [InlineData("sys")]
+    public async Task RestoreAsync_RejectsSystemDatabaseBeforeRunningClient(string databaseName)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "devbox-database-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var manager = new DatabaseManager(root);
+            var options = new DatabaseConnectionOptions("127.0.0.1", 3306, "root", string.Empty);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                manager.RestoreAsync(databaseName, Path.Combine(root, "missing.sql"), options));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("mysql")]
+    [InlineData("information_schema")]
+    [InlineData("performance_schema")]
+    [InlineData("sys")]
+    public async Task CreateDatabaseAsync_RejectsSystemDatabaseBeforeRunningClient(string databaseName)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "devbox-database-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var manager = new DatabaseManager(root);
+            var options = new DatabaseConnectionOptions("127.0.0.1", 3306, "root", string.Empty);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => manager.CreateDatabaseAsync(databaseName, options));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public void ConnectionOptions_RejectInvalidPort()
     {
