@@ -62,6 +62,34 @@ public sealed class OnlineModuleDeliveryTests
     }
 
     [Fact]
+    public void RuntimeRow_InstallProgress_IgnoresLateLowerPercentage()
+    {
+        var package = new RuntimePackageEntry
+        {
+            Key = "nginx",
+            DisplayName = "Nginx",
+            Version = "1.31.5",
+            Architecture = "any",
+            ExecutableRelativePath = "nginx.exe",
+            DownloadUrl = "https://example.test/nginx.zip",
+            Sha256 = new string('a', 64),
+            Recommended = true
+        };
+
+        var row = new RuntimeRowViewModel(
+            new RuntimeVersionStatus(package, Installed: false, Active: false, Valid: false, RuntimeSupportState.Current),
+            Path.GetTempPath());
+
+        row.BeginInstall();
+        row.SetInstallProgress(82);
+        row.SetInstallProgress(41);
+
+        Assert.Equal(82, row.ProgressPercent);
+        Assert.Equal("82%", row.ProgressText);
+        Assert.Equal("Installing module... 82%", row.Status);
+    }
+
+    [Fact]
     public void RuntimePlatform_ReleaseGeneratedMysqlCatalog_EnablesInstall()
     {
         var root = Path.Combine(Path.GetTempPath(), "devbox-online-module-tests", Guid.NewGuid().ToString("N"));
