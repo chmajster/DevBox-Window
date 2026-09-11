@@ -293,8 +293,8 @@ begin
           Exit;
         end;
 
-        ; The old uninstaller may predate [UninstallDelete], therefore perform
-        ; explicit cleanup here as well so the first reinstall also removes modules.
+        // The old uninstaller may predate [UninstallDelete], therefore perform
+        // explicit cleanup here as well so the first reinstall also removes modules.
         RemoveGeneratedModules(PreviousInstallLocation);
         ExistingInstallation := False;
         Log('Existing installation and generated modules removed successfully; continuing with reinstall.');
