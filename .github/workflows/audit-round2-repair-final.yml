@@ -1,0 +1,55 @@
+name: One-shot audit round 2 repair final
+
+on:
+  push:
+    branches:
+      - fix/post-merge-audit-round2-2026-09-11
+    paths:
+      - .github/workflows/audit-round2-repair-final.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+      - name: Fix repair script matcher
+        run: python .github/scripts/audit_round2_fixup.py
+      - name: Apply audit fixes
+        run: python .github/scripts/audit_round2_repair.py
+      - name: Update TLS rollback regression expectation
+        run: python .github/scripts/audit_round2_test_fixup.py
+      - name: Restore
+        run: dotnet restore DevBox.sln
+      - name: Test
+        run: dotnet test DevBox.sln --configuration Release --no-restore
+      - name: Validate installer x64
+        shell: pwsh
+        run: |
+          dotnet publish src/DevBox.App/DevBox.App.csproj --configuration Release --runtime win-x64 --self-contained true --output publish/win-x64
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --yes --no-progress }
+          & $iscc "/DPublishDir=$pwd\publish\win-x64" "/DOutputDir=$pwd\artifacts" "installer\DevBox.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup x64 validation failed" }
+      - name: Validate installer ARM64
+        shell: pwsh
+        run: |
+          dotnet publish src/DevBox.App/DevBox.App.csproj --configuration Release --runtime win-arm64 --self-contained true --output publish/win-arm64
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DMyAppRid=win-arm64" "/DMyArchitecturesAllowed=arm64" "/DMyArchitecturesInstallMode=arm64" "/DPublishDir=$pwd\publish\win-arm64" "/DOutputDir=$pwd\artifacts" "installer\DevBox.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup ARM64 validation failed" }
+      - name: Commit repaired tree
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests installer .github/workflows/release.yml
+          git commit -m "fix: harden cross-process lifecycle and release architecture"
+          git push origin HEAD:${GITHUB_REF_NAME}
