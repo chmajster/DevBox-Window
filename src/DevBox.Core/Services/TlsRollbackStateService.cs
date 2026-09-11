@@ -134,7 +134,8 @@ internal sealed class TlsRollbackStateService
     {
         if (content is null)
         {
-            TryDeleteFile(path);
+            if (File.Exists(path))
+                File.Delete(path);
             return;
         }
 
