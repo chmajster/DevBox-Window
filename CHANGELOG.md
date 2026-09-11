@@ -40,6 +40,17 @@ All notable changes to DevBox Windows are documented here.
 
 ### Fixed
 
+- Local TLS and Local CA mutations now avoid re-entrant lock deadlocks, serialize CA lifecycle operations, and roll back failed CA creation/rotation transactionally.
+- ADDON install/repair/uninstall operations and mutable environment/runtime/service catalogs are serialized across GUI and CLI processes.
+- phpMyAdmin Repair now refreshes a stale MySQL/MariaDB port instead of accepting an otherwise complete obsolete configuration.
+- Project provisioning, WordPress setup and Git bootstrap restore pre-existing TLS material and trust state when a later setup stage fails.
+- Explicit database ports are rejected when another process already owns the listener, and database autodiscovery no longer persists registrations outside the registration lock.
+- Managed services reject HTTPS, standard database and currently registered database ports reserved by DevBox core services.
+- Cancelled project database client operations terminate their native child process instead of leaving it running in the background.
+- Self-update verifies that a trusted installer is signed by the same publisher identity as the currently running signed DevBox executable and enables certificate revocation checks.
+- Project/Site path validation rejects junctions and other reparse points that could escape the DevBox `www` tree.
+- Runtime activation/import copy loops now observe cancellation between files and directories.
+
 - Environment profile application no longer writes `devbox.lock.json` when prerequisites fail or the apply operation reports warnings.
 - Site, TLS and runtime mutations are serialized across DevBox processes to prevent lost updates and concurrent replacement races.
 - Project and WordPress provisioning now roll back databases created by the failing operation without deleting pre-existing user databases.

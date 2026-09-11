@@ -99,7 +99,7 @@ public sealed partial class LocalCertificateManager
             RestoreBytes(privateKeyPath, previousKey);
             if (previousWasTrusted && OperatingSystem.IsWindows())
             {
-                try { TrustForCurrentUser(normalizedDomain); }
+                try { TrustForCurrentUserUnlocked(normalizedDomain); }
                 catch (Exception) { }
             }
             throw;
@@ -142,8 +142,16 @@ public sealed partial class LocalCertificateManager
     {
         var normalizedDomain = NormalizeDomain(domain);
         using var domainLock = CrossProcessFileLock.Acquire(GetDomainLockPath(_rootPath, normalizedDomain));
-        var certificate = EnsureCore(normalizedDomain);
-        using var publicCertificate = LoadPublicCertificate(certificate.CertificatePath);
+        _ = EnsureCore(normalizedDomain);
+        TrustForCurrentUserUnlocked(normalizedDomain);
+    }
+
+    internal void TrustForCurrentUserUnlocked(string normalizedDomain)
+    {
+        var certificatePath = CertificatePath(normalizedDomain);
+        if (!File.Exists(certificatePath))
+            throw new FileNotFoundException("Local TLS certificate was not found.", certificatePath);
+        using var publicCertificate = LoadPublicCertificate(certificatePath);
         using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
         store.Open(OpenFlags.ReadWrite);
         if (store.Certificates.Find(X509FindType.FindByThumbprint, publicCertificate.Thumbprint, validOnly: false).Count == 0)

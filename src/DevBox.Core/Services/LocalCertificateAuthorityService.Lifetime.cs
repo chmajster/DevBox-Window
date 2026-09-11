@@ -15,6 +15,12 @@ public sealed partial class LocalCertificateAuthorityService : IDisposable
     public void RemoveAuthority()
     {
         EnsureWindows();
+        using var authorityLock = AcquireAuthorityLock();
+        RemoveAuthorityUnderLock();
+    }
+
+    private void RemoveAuthorityUnderLock()
+    {
         using var availableAuthority = LoadAvailableAuthority();
         var wasTrusted = availableAuthority is not null && ProbeTrustCurrentUser(availableAuthority);
         var pfxState = CaptureAuthorityFile(_caPfxPath);

@@ -30,6 +30,12 @@ public sealed partial class LocalCertificateAuthorityService
     public X509Certificate2 EnsureAuthority(bool trustCurrentUser = true)
     {
         EnsureWindows();
+        using var authorityLock = AcquireAuthorityLock();
+        return EnsureAuthorityUnderLock(trustCurrentUser);
+    }
+
+    private X509Certificate2 EnsureAuthorityUnderLock(bool trustCurrentUser)
+    {
         Directory.CreateDirectory(_caDirectory);
         if (!Exists)
             CreateAuthority();
@@ -52,7 +58,8 @@ public sealed partial class LocalCertificateAuthorityService
         {
             using var domainLock = CrossProcessFileLock.Acquire(LocalCertificateManager.GetDomainLockPath(_rootPath, normalizedDomain));
             rollbackState = rollbackService.Capture(normalizedDomain);
-            using var authority = EnsureAuthority(trustAuthority);
+            using var authorityLock = AcquireAuthorityLock();
+            using var authority = EnsureAuthorityUnderLock(trustAuthority);
             using var key = RSA.Create(2048);
             var request = new CertificateRequest(
                 new X500DistinguishedName($"CN={normalizedDomain}"),
@@ -118,7 +125,8 @@ public sealed partial class LocalCertificateAuthorityService
     public void TrustCurrentUser()
     {
         EnsureWindows();
-        using var certificate = EnsureAuthority(trustCurrentUser: false);
+        using var authorityLock = AcquireAuthorityLock();
+        using var certificate = EnsureAuthorityUnderLock(trustCurrentUser: false);
         TrustCurrentUser(certificate);
     }
 
@@ -143,12 +151,56 @@ public sealed partial class LocalCertificateAuthorityService
     public void RotateAuthority()
     {
         EnsureWindows();
-        RemoveAuthority();
-        using var replacement = EnsureAuthority(trustCurrentUser: true);
+        using var authorityLock = AcquireAuthorityLock();
+        var previousPfx = CaptureAuthorityFile(_caPfxPath);
+        var previousPem = CaptureAuthorityFile(_caPemPath);
+        var previousPassword = _secrets.Get(PasswordSecretKey);
+        using var previousAuthority = LoadAvailableAuthority();
+        var previousTrusted = previousAuthority is not null && ProbeTrustCurrentUser(previousAuthority);
+
+        try
+        {
+            RemoveAuthorityUnderLock();
+            using var replacement = EnsureAuthorityUnderLock(trustCurrentUser: true);
+        }
+        catch (Exception original)
+        {
+            var rollbackErrors = new List<Exception>();
+            void Attempt(Action action)
+            {
+                try { action(); }
+                catch (Exception ex) { rollbackErrors.Add(ex); }
+            }
+
+            Attempt(() => RestoreAuthorityFile(_caPfxPath, previousPfx));
+            Attempt(() => RestoreAuthorityFile(_caPemPath, previousPem));
+            Attempt(() =>
+            {
+                if (previousPassword is null)
+                    _secrets.Delete(PasswordSecretKey);
+                else
+                    _secrets.Set(PasswordSecretKey, previousPassword);
+            });
+            if (previousTrusted && previousAuthority is not null)
+                Attempt(() => RestoreAuthorityTrustCurrentUser(previousAuthority));
+
+            if (rollbackErrors.Count > 0)
+                throw new AggregateException(
+                    "Local CA rotation failed and one or more rollback operations also failed.",
+                    new[] { original }.Concat(rollbackErrors));
+            throw;
+        }
+        finally
+        {
+            previousPassword = string.Empty;
+        }
     }
 
     private void CreateAuthority()
     {
+        var previousPfx = CaptureAuthorityFile(_caPfxPath);
+        var previousPem = CaptureAuthorityFile(_caPemPath);
+        var previousPassword = _secrets.Get(PasswordSecretKey);
         var passwordBytes = RandomNumberGenerator.GetBytes(32);
         var password = Convert.ToBase64String(passwordBytes);
         CryptographicOperations.ZeroMemory(passwordBytes);
@@ -167,19 +219,43 @@ public sealed partial class LocalCertificateAuthorityService
             var pfx = certificate.Export(X509ContentType.Pfx, password);
             try
             {
-                File.WriteAllBytes(_caPfxPath, pfx);
+                AtomicWriteBytes(_caPfxPath, pfx);
+                AtomicWrite(_caPemPath, certificate.ExportCertificatePem());
+                _secrets.Set(PasswordSecretKey, password);
+                TryHide(_caPfxPath);
+            }
+            catch (Exception original)
+            {
+                var rollbackErrors = new List<Exception>();
+                void Attempt(Action action)
+                {
+                    try { action(); }
+                    catch (Exception ex) { rollbackErrors.Add(ex); }
+                }
+                Attempt(() => RestoreAuthorityFile(_caPfxPath, previousPfx));
+                Attempt(() => RestoreAuthorityFile(_caPemPath, previousPem));
+                Attempt(() =>
+                {
+                    if (previousPassword is null)
+                        _secrets.Delete(PasswordSecretKey);
+                    else
+                        _secrets.Set(PasswordSecretKey, previousPassword);
+                });
+                if (rollbackErrors.Count > 0)
+                    throw new AggregateException(
+                        "Local CA creation failed and rollback was incomplete.",
+                        new[] { original }.Concat(rollbackErrors));
+                throw;
             }
             finally
             {
                 CryptographicOperations.ZeroMemory(pfx);
             }
-            AtomicWrite(_caPemPath, certificate.ExportCertificatePem());
-            _secrets.Set(PasswordSecretKey, password);
-            TryHide(_caPfxPath);
         }
         finally
         {
             password = string.Empty;
+            previousPassword = string.Empty;
         }
     }
 
@@ -213,6 +289,27 @@ public sealed partial class LocalCertificateAuthorityService
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
         if (!TestDomainRegex().IsMatch(domain))
             throw new ArgumentException("Local CA only issues DNS certificates for normalized .test domains.", nameof(domain));
+    }
+
+    internal FileStream AcquireAuthorityLock() =>
+        CrossProcessFileLock.Acquire(Path.Combine(_rootPath, "tmp", "locks", "local-ca.lock"), TimeSpan.FromSeconds(30));
+
+    private static void AtomicWriteBytes(string path, byte[] content)
+    {
+        var temp = path + $".{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllBytes(temp, content);
+            if (File.Exists(path))
+                File.Replace(temp, path, null);
+            else
+                File.Move(temp, path);
+        }
+        finally
+        {
+            if (File.Exists(temp))
+                File.Delete(temp);
+        }
     }
 
     private static void AtomicWrite(string path, string content)

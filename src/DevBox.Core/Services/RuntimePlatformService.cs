@@ -130,7 +130,7 @@ public sealed class RuntimePlatformService : IDisposable
             if (!Directory.Exists(source))
                 throw new InvalidDataException($"Archive root '{package.ArchiveRootDirectory}' does not exist.");
 
-            CopyDirectory(source, staging);
+            CopyDirectory(source, staging, cancellationToken);
             var executable = Path.GetFullPath(Path.Combine(staging, package.ExecutableRelativePath));
             EnsureUnder(executable, staging, "Runtime executable path escapes the package directory.");
             if (!File.Exists(executable))
@@ -159,6 +159,7 @@ public sealed class RuntimePlatformService : IDisposable
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(package);
         ValidatePackage(package);
+        using var mutationLock = CrossProcessFileLock.Acquire(_catalogPath + ".lock", TimeSpan.FromSeconds(15));
         var custom = LoadCustomCatalog().ToList();
         var index = custom.FindIndex(item =>
             item.Key.Equals(package.Key, StringComparison.OrdinalIgnoreCase) &&
@@ -353,20 +354,23 @@ public sealed class RuntimePlatformService : IDisposable
             throw new InvalidDataException(message);
     }
 
-    private static void CopyDirectory(string source, string destination)
+    private static void CopyDirectory(string source, string destination, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(destination);
         foreach (var file in Directory.GetFiles(source))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
                 throw new InvalidDataException("Runtime package contains a reparse point.");
             File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), overwrite: false);
         }
         foreach (var directory in Directory.GetDirectories(source))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
                 throw new InvalidDataException("Runtime package contains a reparse point.");
-            CopyDirectory(directory, Path.Combine(destination, Path.GetFileName(directory)));
+            CopyDirectory(directory, Path.Combine(destination, Path.GetFileName(directory)), cancellationToken);
         }
     }
 

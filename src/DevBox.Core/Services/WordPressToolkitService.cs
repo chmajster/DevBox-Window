@@ -56,6 +56,8 @@ public sealed class WordPressToolkitService
         var actions = new List<string>();
         var databaseName = string.IsNullOrWhiteSpace(request.DatabaseName) ? SafeDatabaseName(request.Name) : SafeDatabaseName(request.DatabaseName);
         var databaseOptions = request.DatabaseOptions ?? ResolveDatabaseOptions(request.DatabaseEngine);
+        var tlsRollback = new TlsRollbackStateService(_rootPath);
+        var tlsState = tlsRollback.Capture(request.Domain ?? $"{request.Name.Trim().ToLowerInvariant()}.test");
         var databaseManager = new DatabaseManager(_rootPath);
         var projectDatabases = new ProjectDatabaseProvisioner(_rootPath, databaseManager);
         var provisioning = new ProjectProvisioningService(
@@ -175,6 +177,14 @@ public sealed class WordPressToolkitService
                     cleanupErrors.Add(ex);
                 }
             }
+            try
+            {
+                tlsRollback.Restore(tlsState);
+            }
+            catch (Exception ex)
+            {
+                cleanupErrors.Add(ex);
+            }
             if (cleanupErrors.Count > 0)
                 throw new AggregateException("WordPress setup failed and cleanup was incomplete.", cleanupErrors);
             throw;
@@ -219,12 +229,12 @@ public sealed class WordPressToolkitService
     private string EnsureProjectRoot(string projectPath)
     {
         var root = Path.GetFullPath(projectPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var www = Path.GetFullPath(Path.Combine(_rootPath, "www")).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         if (!Directory.Exists(root))
             throw new DirectoryNotFoundException($"Project directory was not found: {root}");
-        if (!root.StartsWith(www, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("WordPress Toolkit is restricted to projects in the DevBox www directory.");
-        return root;
+        return PathSafety.EnsureUnderRootWithoutReparsePoints(
+            Path.Combine(_rootPath, "www"),
+            root,
+            "WordPress Toolkit is restricted to projects in DevBox www and cannot traverse a reparse point.");
     }
 
     private DatabaseConnectionOptions ResolveDatabaseOptions(string engine)

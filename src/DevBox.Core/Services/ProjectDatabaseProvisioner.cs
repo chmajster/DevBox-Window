@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 using DevBox.Core.Models;
@@ -221,7 +222,15 @@ public sealed class ProjectDatabaseProvisioner
         if (!process.Start()) throw new InvalidOperationException($"Unable to start {Path.GetFileName(executable)}.");
         var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            TryKill(process);
+            throw;
+        }
         var output = await stdout.ConfigureAwait(false);
         var error = await stderr.ConfigureAwait(false);
         if (process.ExitCode != 0)
@@ -243,6 +252,17 @@ public sealed class ProjectDatabaseProvisioner
     {
         if (value.Contains('\r') || value.Contains('\n')) throw new ArgumentException("PostgreSQL credential fields cannot contain line breaks.");
         return value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace(":", "\\:", StringComparison.Ordinal);
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException) { }
+        catch (Win32Exception) { }
     }
 
     private static void EnsureFile(string path, string message)

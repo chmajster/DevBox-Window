@@ -89,6 +89,8 @@ public sealed partial class ProjectWorkspaceService
             throw new InvalidOperationException("Node-only projects are not served by the current PHP/Nginx Site model. Import the project first and run its Node service separately.");
 
         var projectRoot = Path.Combine(_wwwRoot, NormalizeProjectDirectoryName(request.Name));
+        _ = PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _wwwRoot, projectRoot, "Project destination must remain inside DevBox www and cannot traverse a reparse point.");
         var projectRootExisted = Directory.Exists(projectRoot);
         if (projectRootExisted && Directory.EnumerateFileSystemEntries(projectRoot).Any())
             throw new InvalidOperationException($"Project destination is not empty: {projectRoot}");
@@ -152,6 +154,8 @@ public sealed partial class ProjectWorkspaceService
         var projectRoot = request.CopyIntoDevBox
             ? Path.Combine(_wwwRoot, NormalizeProjectDirectoryName(request.Name))
             : EnsureUnderWww(source);
+        _ = PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _wwwRoot, projectRoot, "Project import destination must remain inside DevBox www and cannot traverse a reparse point.");
         var projectRootExisted = Directory.Exists(projectRoot);
         if (request.CopyIntoDevBox && projectRootExisted && Directory.EnumerateFileSystemEntries(projectRoot).Any())
             throw new InvalidOperationException($"Import destination is not empty: {projectRoot}");
@@ -534,13 +538,10 @@ public sealed partial class ProjectWorkspaceService
 
     private string EnsureUnderWww(string path)
     {
-        var fullWww = _wwwRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        var fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (!fullPath.StartsWith(fullWww, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("Existing projects can only be registered in-place when they are already inside the DevBox www directory. Enable CopyIntoDevBox for external projects.");
-        }
-        return fullPath;
+        return PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _wwwRoot,
+            path,
+            "Existing projects can only be registered in-place when they are already inside DevBox www and the path does not traverse a reparse point. Enable CopyIntoDevBox for external projects.");
     }
 
     private static string RequireExistingDirectory(string path)

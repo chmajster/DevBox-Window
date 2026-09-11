@@ -26,6 +26,7 @@ public sealed class AddonInstaller : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(addon);
         EnsureInstallPathIsSafe(addon);
+        using var addonLock = await CrossProcessFileLock.AcquireAsync(AddonLockPath(addon), cancellationToken, TimeSpan.FromSeconds(30)).ConfigureAwait(false);
 
         var tempRoot = Path.Combine(_rootPath, "tmp", "addons", addon.Key, Guid.NewGuid().ToString("N"));
         var archivePath = Path.Combine(tempRoot, "package.zip");
@@ -81,6 +82,7 @@ public sealed class AddonInstaller : IDisposable
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(addon);
         EnsureInstallPathIsSafe(addon);
+        using var addonLock = CrossProcessFileLock.Acquire(AddonLockPath(addon), TimeSpan.FromSeconds(30));
 
         if (!File.Exists(addon.EntryPointPath))
         {
@@ -97,6 +99,7 @@ public sealed class AddonInstaller : IDisposable
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(addon);
         EnsureInstallPathIsSafe(addon);
+        using var addonLock = CrossProcessFileLock.Acquire(AddonLockPath(addon), TimeSpan.FromSeconds(30));
 
         if (Directory.Exists(addon.InstallPath))
         {
@@ -175,7 +178,7 @@ public sealed class AddonInstaller : IDisposable
             MaximumAddonArchiveEntries,
             "Addon");
 
-    internal static bool IsPhpMyAdminConfigUsable(string content)
+    internal static bool IsPhpMyAdminConfigUsable(string content, int? expectedPort = null)
     {
         if (string.IsNullOrWhiteSpace(content) || !content.Contains("<?php", StringComparison.OrdinalIgnoreCase))
         {
@@ -191,7 +194,10 @@ public sealed class AddonInstaller : IDisposable
             "$cfg['Servers'][$i]['AllowNoPassword'] = true",
             "$cfg['TempDir']"
         };
-        return requiredFragments.All(fragment => content.Contains(fragment, StringComparison.Ordinal));
+        if (!requiredFragments.All(fragment => content.Contains(fragment, StringComparison.Ordinal)))
+            return false;
+        return expectedPort is null ||
+               content.Contains($"$cfg['Servers'][$i]['port'] = '{expectedPort.Value}';", StringComparison.Ordinal);
     }
 
     private void ConfigureAddon(AddonDefinition addon)
@@ -206,17 +212,15 @@ public sealed class AddonInstaller : IDisposable
         var tempDirectory = Path.Combine(addon.InstallPath, "tmp");
         Directory.CreateDirectory(tempDirectory);
         var configPath = Path.Combine(addon.InstallPath, "config.inc.php");
+        var databasePort = ResolvePhpMyAdminPort();
         if (File.Exists(configPath))
         {
             var existing = File.ReadAllText(configPath);
-            if (IsPhpMyAdminConfigUsable(existing))
-            {
+            if (IsPhpMyAdminConfigUsable(existing, databasePort))
                 return;
-            }
         }
 
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-        var databasePort = ResolvePhpMyAdminPort();
         var config = $$"""
 <?php
 $cfg['blowfish_secret'] = '{{secret}}';
@@ -298,6 +302,12 @@ server {
     {
         var host = new Uri(addon.LocalUrl).Host;
         return Path.Combine(_rootPath, "config", "nginx", "sites-enabled", $"{host}.conf");
+    }
+
+    private string AddonLockPath(AddonDefinition addon)
+    {
+        var safeKey = new string(addon.Key.Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '-').ToArray());
+        return Path.Combine(_rootPath, "tmp", "locks", $"addon-{safeKey}.lock");
     }
 
     private static void AtomicWrite(string path, string content)

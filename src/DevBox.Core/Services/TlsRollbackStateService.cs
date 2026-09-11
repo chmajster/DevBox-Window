@@ -65,6 +65,14 @@ internal sealed class TlsRollbackStateService
     {
         ArgumentNullException.ThrowIfNull(state);
         var normalizedDomain = LocalCertificateManager.NormalizeDomain(state.Domain);
+        using var domainLock = CrossProcessFileLock.Acquire(LocalCertificateManager.GetDomainLockPath(_rootPath, normalizedDomain));
+        RestoreUnderLock(state);
+    }
+
+    internal void RestoreUnderLock(TlsRollbackState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var normalizedDomain = LocalCertificateManager.NormalizeDomain(state.Domain);
         var certificatePath = CertificatePath(normalizedDomain);
         var privateKeyPath = PrivateKeyPath(normalizedDomain);
         var errors = new List<Exception>();
@@ -76,7 +84,7 @@ internal sealed class TlsRollbackStateService
         }
 
         if (OperatingSystem.IsWindows() && File.Exists(certificatePath))
-            Attempt(() => _certificates.UntrustForCurrentUser(normalizedDomain));
+            Attempt(() => _certificates.UntrustForCurrentUserUnlocked(normalizedDomain));
 
         Attempt(() => RestoreBytes(certificatePath, state.Certificate));
         Attempt(() => RestoreBytes(privateKeyPath, state.PrivateKey));
@@ -86,7 +94,7 @@ internal sealed class TlsRollbackStateService
             if (state.Certificate is not null && state.LeafTrusted)
                 Attempt(() => TrustLeaf(certificatePath));
             else if (state.Certificate is not null)
-                Attempt(() => _certificates.UntrustForCurrentUser(normalizedDomain));
+                Attempt(() => _certificates.UntrustForCurrentUserUnlocked(normalizedDomain));
 
             Attempt(() => RestoreAuthorityState(state));
         }

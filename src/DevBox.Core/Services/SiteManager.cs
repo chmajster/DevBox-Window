@@ -516,11 +516,10 @@ server {
     private string EnsureDocumentRootUnderWww(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        var fullWwwRoot = _wwwRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        var fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (!fullPath.StartsWith(fullWwwRoot, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Site document root must be inside the DevBox www directory.");
-        return fullPath;
+        return PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _wwwRoot,
+            path,
+            "Site document root must be inside the DevBox www directory and cannot traverse a reparse point.");
     }
 
     private static string NormalizeName(string name)
