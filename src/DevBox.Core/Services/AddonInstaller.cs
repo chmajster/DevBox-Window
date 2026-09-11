@@ -28,7 +28,9 @@ public sealed class AddonInstaller : IDisposable
         EnsureInstallPathIsSafe(addon);
         using var addonLock = await CrossProcessFileLock.AcquireAsync(AddonLockPath(addon), cancellationToken, TimeSpan.FromSeconds(30)).ConfigureAwait(false);
 
-        if (Directory.Exists(addon.InstallPath) && !AddonOwnership.IsOwned(_rootPath, addon))
+        if (Directory.Exists(addon.InstallPath) &&
+            Directory.EnumerateFileSystemEntries(addon.InstallPath).Any() &&
+            !AddonOwnership.IsOwned(_rootPath, addon))
         {
             throw new InvalidOperationException(
                 $"Refusing to install {addon.DisplayName} over '{addon.InstallPath}' because that directory is not owned by DevBox.");
@@ -334,7 +336,7 @@ server {
     {
         var directory = Path.GetDirectoryName(path)!;
         Directory.CreateDirectory(directory);
-        var tempPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        var tempPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp";
         try
         {
             File.WriteAllText(tempPath, content);
@@ -344,7 +346,7 @@ server {
             }
             else
             {
-                File.Move(tempPath, path);
+                File.Move(tempPath, markerPath: null);
             }
         }
         finally
