@@ -40,6 +40,15 @@ All notable changes to DevBox Windows are documented here.
 
 ### Fixed
 
+- Environment profile application no longer writes `devbox.lock.json` when prerequisites fail or the apply operation reports warnings.
+- Site, TLS and runtime mutations are serialized across DevBox processes to prevent lost updates and concurrent replacement races.
+- Project and WordPress provisioning now roll back databases created by the failing operation without deleting pre-existing user databases.
+- phpMyAdmin and WordPress now use the registered MySQL/MariaDB runtime port instead of assuming `3306`; MariaDB defaults to the managed `3316` port.
+- Database client execution no longer relies on plaintext temporary credential files for MariaDB/PostgreSQL runtime operations.
+- Configuration restore validates the matching configuration kind before atomic replacement, and Task Center shutdown waits for active task synchronization before disposing primitives.
+- Snapshot and project-transfer file copies now honor cancellation during large file operations.
+- Git bootstrap fails explicitly when environment profile application is incomplete instead of continuing with a partial environment.
+- Windows ARM64 can use verified x64 runtime packages as an emulation fallback when no native package exists.
 - Release and CI packaging no longer copy the CLI over the case-insensitively identical `DevBox.exe` GUI path on Windows. The GUI executable now keeps its embedded application icon and starts normally after installation, while the CLI is packaged separately as `cli\devbox.exe`.
 - Sites pinned to a specific PHP version now ensure their dedicated FastCGI pool is running before opening over either HTTP or HTTPS instead of always starting the global PHP service.
 - Asynchronous WPF commands now contain and trace unexpected exceptions at the command boundary instead of leaking them through `async void` execution.
@@ -82,6 +91,8 @@ All notable changes to DevBox Windows are documented here.
 
 ### Security
 
+- Self-update now requires both the published SHA-256 checksum and a valid trusted Authenticode signature before the downloaded installer can execute.
+- Manual releases now require the Windows code-signing certificate; unsigned release artifacts are rejected instead of being published for an updater that will not trust them.
 - Runtime and ADDONS downloads now enforce explicit byte limits, and ZIP extraction enforces entry-count/extracted-size limits while rejecting traversal, NTFS alternate data streams, symbolic-link entries and suspicious compression ratios.
 - Bundled MySQL packaging verifies the vendor-published digest before extraction and records SHA-256 provenance for the packaged archive.
 
@@ -127,4 +138,4 @@ All notable changes to DevBox Windows are documented here.
 ### Known limitations
 
 - Built-in automatic MySQL download remains disabled until the package can satisfy the same pinned SHA-256 policy as other remote runtimes. Packaged DevBox 0.2.2 releases carry MySQL directly.
-- Authenticode support is implemented in the release workflow, but artifacts remain unsigned until a code-signing PFX and password are configured as repository secrets.
+- Authenticode releases require `WINDOWS_SIGNING_CERTIFICATE_BASE64` and `WINDOWS_SIGNING_CERTIFICATE_PASSWORD` repository secrets; manual release fails closed when signing material is unavailable.
