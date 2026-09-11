@@ -6,41 +6,24 @@ namespace DevBox.App.Services;
 internal sealed class SingleInstanceGuard : IDisposable
 {
     private readonly Mutex _mutex;
-    private bool _ownsMutex;
     private bool _disposed;
 
     private SingleInstanceGuard(Mutex mutex)
     {
         _mutex = mutex;
-        _ownsMutex = true;
     }
 
     public static SingleInstanceGuard? TryAcquire(string rootPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
-        var mutex = new Mutex(initiallyOwned: false, BuildMutexName(rootPath));
-        var acquired = false;
-        try
+        var mutex = new Mutex(initiallyOwned: false, BuildMutexName(rootPath), out var createdNew);
+        if (!createdNew)
         {
-            try
-            {
-                acquired = mutex.WaitOne(0, exitContext: false);
-            }
-            catch (AbandonedMutexException)
-            {
-                acquired = true;
-            }
-
-            if (!acquired)
-                return null;
-
-            return new SingleInstanceGuard(mutex);
+            mutex.Dispose();
+            return null;
         }
-        finally
-        {
-            if (!acquired)
-                mutex.Dispose();
-        }
+
+        return new SingleInstanceGuard(mutex);
     }
 
     internal static string BuildMutexName(string rootPath)
@@ -58,18 +41,6 @@ internal sealed class SingleInstanceGuard : IDisposable
         if (_disposed)
             return;
         _disposed = true;
-
-        if (_ownsMutex)
-        {
-            try
-            {
-                _mutex.ReleaseMutex();
-            }
-            catch (ApplicationException)
-            {
-            }
-            _ownsMutex = false;
-        }
         _mutex.Dispose();
     }
 }
