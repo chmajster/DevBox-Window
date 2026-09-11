@@ -56,22 +56,26 @@ jobs:
           cache: true
           cache-dependency-path: '**/*.csproj'
 
-      - name: Resolve next version
+      - name: Resolve next version from latest GitHub Release
         shell: pwsh
         env:
+          GH_TOKEN: ${{ github.token }}
           VERSION_BUMP: ${{ inputs.bump }}
         run: |
-          $projectPath = 'src/DevBox.App/DevBox.App.csproj'
-          $projectText = Get-Content $projectPath -Raw
-          $match = [regex]::Match($projectText, '<Version>(?<version>\d+\.\d+\.\d+)</Version>')
-          if (-not $match.Success) {
-            throw "Could not read the current semantic version from $projectPath"
+          $latestReleaseTag = gh api "repos/$env:GITHUB_REPOSITORY/releases/latest" --jq '.tag_name' 2>$null
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($latestReleaseTag)) {
+            Write-Host 'No published GitHub Release found. Using 0.0.0 as the version baseline.'
+            $currentText = '0.0.0'
+          }
+          else {
+            $latestReleaseTag = $latestReleaseTag.Trim()
+            $match = [regex]::Match($latestReleaseTag, '^v(?<version>\d+\.\d+\.\d+)$')
+            if (-not $match.Success) {
+              throw "Latest GitHub Release tag '$latestReleaseTag' is not valid SemVer in vMAJOR.MINOR.PATCH format."
+            }
+            $currentText = $match.Groups['version'].Value
           }
 
-          $sourceVersion = $match.Groups['version'].Value
-          git fetch origin --tags --force
-          $latestTag = git tag --list 'v*' --sort=-v:refname | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | Select-Object -First 1
-          $currentText = if ([string]::IsNullOrWhiteSpace($latestTag)) { '0.0.0' } else { $latestTag.Substring(1) }
           $parts = $currentText.Split('.')
           $major = [int]$parts[0]
           $minor = [int]$parts[1]
@@ -98,9 +102,10 @@ jobs:
           $nextVersion = "$major.$minor.$patch"
           $releaseTag = "v$nextVersion"
 
+          git fetch origin --tags --force
           $existingTag = git tag --list $releaseTag
           if (-not [string]::IsNullOrWhiteSpace($existingTag)) {
-            throw "Tag $releaseTag already exists."
+            throw "Tag $releaseTag already exists. Latest published GitHub Release is v$currentText, so the repository contains an unpublished or conflicting tag."
           }
 
           "DEVBOX_CURRENT_VERSION=$currentText" >> $env:GITHUB_ENV
@@ -108,8 +113,8 @@ jobs:
           "DEVBOX_RELEASE_TAG=$releaseTag" >> $env:GITHUB_ENV
 
           "### Manual release" >> $env:GITHUB_STEP_SUMMARY
+          "- Version source: latest published GitHub Release" >> $env:GITHUB_STEP_SUMMARY
           "- Latest published version: ``$currentText``" >> $env:GITHUB_STEP_SUMMARY
-          "- Source development version: ``$sourceVersion``" >> $env:GITHUB_STEP_SUMMARY
           "- Increment: ``$env:VERSION_BUMP``" >> $env:GITHUB_STEP_SUMMARY
           "- New version: ``$nextVersion``" >> $env:GITHUB_STEP_SUMMARY
 
