@@ -19,8 +19,8 @@ replace_once(
     '''            var timeout = definition.ShutdownTimeout ?? TimeSpan.FromSeconds(5);\n''')
 replace_once(
     "src/DevBox.Core/Services/ProcessManager.cs",
-    '''                    await managed.Process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);\n                }\n            }\n\n            AppendLog(managed, "APP", "Stopped.");\n''',
-    '''                    await managed.Process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);\n                }\n\n            AppendLog(managed, "APP", "Stopped.");\n''')
+    '''                }\n            }\n            AppendLog(managed, "APP", "Stopped.");\n''',
+    '''                }\n            AppendLog(managed, "APP", "Stopped.");\n''')
 
 # Optional managed-service configuration must not prevent the core application
 # from starting. The main dashboard falls back to Nginx/PHP/MySQL and reports
