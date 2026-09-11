@@ -9,6 +9,9 @@ public sealed class ProjectSnapshotService
 {
     private const long MaximumRestoredBytes = 8L * 1024 * 1024 * 1024;
     private const int MaximumEntries = 250_000;
+    private const long MaximumMetadataBytes = 1024 * 1024;
+    private const long CompressionRatioCheckThreshold = 1024 * 1024;
+    private const double MaximumCompressionRatio = 200d;
     private readonly string _rootPath;
     private readonly string _wwwRoot;
     private readonly string _snapshotRoot;
@@ -32,50 +35,61 @@ public sealed class ProjectSnapshotService
         var projectName = Path.GetFileName(projectRoot);
         Directory.CreateDirectory(_snapshotRoot);
         var destination = Path.Combine(_snapshotRoot, $"{SafeFileName(projectName)}-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.devbox-snapshot.zip");
+        var temporaryDestination = destination + $".{Guid.NewGuid():N}.tmp";
         var included = new List<string>();
+        var includedDatabaseBackups = options.IncludeDatabase
+            ? (databaseBackups ?? Array.Empty<string>()).Where(File.Exists).Select(Path.GetFullPath).ToArray()
+            : Array.Empty<string>();
 
-        using (var stream = new FileStream(destination, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
-        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: false))
+        try
         {
-            foreach (var file in EnumerateProjectFiles(projectRoot, options))
+            cancellationToken.ThrowIfCancellationRequested();
+            using (var stream = new FileStream(temporaryDestination, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
+            using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: false))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var relative = Path.GetRelativePath(projectRoot, file).Replace('\\', '/');
-                var entry = archive.CreateEntry($"project/{relative}", CompressionLevel.Optimal);
-                using var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: false);
-                using var output = entry.Open();
-                await input.CopyToAsync(output, 81920, cancellationToken).ConfigureAwait(false);
-                included.Add(relative);
-            }
-
-            if (options.IncludeDatabase && databaseBackups is not null)
-            {
-                foreach (var backup in databaseBackups.Where(File.Exists))
+                foreach (var file in EnumerateProjectFiles(projectRoot, options))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var full = Path.GetFullPath(backup);
-                    var entry = archive.CreateEntry($"database/{Path.GetFileName(full)}", CompressionLevel.Optimal);
-                    using var input = File.OpenRead(full);
-                    using var output = entry.Open();
+                    var relative = Path.GetRelativePath(projectRoot, file).Replace('\\', '/');
+                    var entry = archive.CreateEntry($"project/{relative}", CompressionLevel.Optimal);
+                    await using var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
+                    await using var output = entry.Open();
+                    await input.CopyToAsync(output, 81920, cancellationToken).ConfigureAwait(false);
+                    included.Add(relative);
+                }
+
+                foreach (var backup in includedDatabaseBackups)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var entry = archive.CreateEntry($"database/{Path.GetFileName(backup)}", CompressionLevel.Optimal);
+                    await using var input = new FileStream(backup, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
+                    await using var output = entry.Open();
                     await input.CopyToAsync(output, 81920, cancellationToken).ConfigureAwait(false);
                 }
+
+                var metadata = new
+                {
+                    SchemaVersion = 1,
+                    ProjectName = projectName,
+                    CreatedAtUtc = DateTimeOffset.UtcNow,
+                    Options = options,
+                    DatabaseBackups = includedDatabaseBackups.Select(path => Path.GetFileName(path)!).ToArray()
+                };
+                var metadataEntry = archive.CreateEntry("snapshot.json", CompressionLevel.Optimal);
+                await using var metadataStream = metadataEntry.Open();
+                await using var writer = new StreamWriter(metadataStream);
+                await writer.WriteAsync(JsonSerializer.Serialize(metadata, JsonOptions).AsMemory(), cancellationToken).ConfigureAwait(false);
             }
 
-            var metadata = new
-            {
-                SchemaVersion = 1,
-                ProjectName = projectName,
-                CreatedAtUtc = DateTimeOffset.UtcNow,
-                Options = options,
-                DatabaseBackups = databaseBackups?.Where(File.Exists).Select(path => Path.GetFileName(path)!).ToArray() ?? Array.Empty<string>()
-            };
-            var metadataEntry = archive.CreateEntry("snapshot.json", CompressionLevel.Optimal);
-            using var writer = new StreamWriter(metadataEntry.Open());
-            await writer.WriteAsync(JsonSerializer.Serialize(metadata, JsonOptions)).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Move(temporaryDestination, destination);
+            var info = new FileInfo(destination);
+            return new ProjectSnapshotResult(destination, projectName, info.Length, DateTimeOffset.UtcNow, included);
         }
-
-        var info = new FileInfo(destination);
-        return new ProjectSnapshotResult(destination, projectName, info.Length, DateTimeOffset.UtcNow, included);
+        finally
+        {
+            TryDeleteFile(temporaryDestination);
+        }
     }
 
     public async Task<string> RestoreAsync(
@@ -97,6 +111,7 @@ public sealed class ProjectSnapshotService
         var previousSite = sites.GetSites().FirstOrDefault(item => item.Name.Equals(safeName, StringComparison.OrdinalIgnoreCase));
         string? previous = null;
         string? databaseDestination = null;
+        string? previousDatabaseDestination = null;
         try
         {
             await ExtractSnapshotAsync(source, staging, databaseStaging, cancellationToken).ConfigureAwait(false);
@@ -139,7 +154,8 @@ public sealed class ProjectSnapshotService
                     {
                         if (!overwrite)
                             throw new InvalidOperationException($"Snapshot database backup destination already exists: {databaseDestination}");
-                        Directory.Delete(databaseDestination, recursive: true);
+                        previousDatabaseDestination = databaseDestination + $".restore-backup-{Guid.NewGuid():N}";
+                        Directory.Move(databaseDestination, previousDatabaseDestination);
                     }
                     Directory.CreateDirectory(Path.GetDirectoryName(databaseDestination)!);
                     Directory.Move(databaseStaging, databaseDestination);
@@ -169,6 +185,16 @@ public sealed class ProjectSnapshotService
                     var databasePath = databaseDestination;
                     rollbackActions.Add(() => TryDeleteDirectory(databasePath));
                 }
+                if (previousDatabaseDestination is not null)
+                {
+                    var previousDatabasePath = previousDatabaseDestination;
+                    var databasePath = databaseDestination!;
+                    rollbackActions.Add(() =>
+                    {
+                        if (Directory.Exists(previousDatabasePath) && !Directory.Exists(databasePath))
+                            Directory.Move(previousDatabasePath, databasePath);
+                    });
+                }
 
                 RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
                 throw new InvalidOperationException("Rollback executor returned unexpectedly.");
@@ -176,6 +202,8 @@ public sealed class ProjectSnapshotService
 
             if (previous is not null)
                 TryDeleteDirectory(previous);
+            if (previousDatabaseDestination is not null)
+                TryDeleteDirectory(previousDatabaseDestination);
             return destination;
         }
         finally
@@ -349,6 +377,26 @@ public sealed class ProjectSnapshotService
         using var archive = ZipFile.OpenRead(archivePath);
         if (archive.Entries.Count > MaximumEntries)
             throw new InvalidDataException("Snapshot contains too many entries.");
+
+        var metadataEntries = archive.Entries.Where(entry => entry.FullName.Equals("snapshot.json", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (metadataEntries.Length != 1)
+            throw new InvalidDataException("Snapshot must contain exactly one snapshot.json metadata entry.");
+        var metadataEntry = metadataEntries[0];
+        if (metadataEntry.Length > MaximumMetadataBytes)
+            throw new InvalidDataException($"snapshot.json exceeds the {MaximumMetadataBytes} byte metadata limit.");
+        try
+        {
+            using var metadataStream = metadataEntry.Open();
+            using var metadataDocument = JsonDocument.Parse(metadataStream);
+            if (!metadataDocument.RootElement.TryGetProperty("SchemaVersion", out var schemaVersion) ||
+                schemaVersion.ValueKind != JsonValueKind.Number || schemaVersion.GetInt32() != 1)
+                throw new InvalidDataException("Snapshot contains an unsupported or missing schema version.");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException("snapshot.json contains invalid JSON.", ex);
+        }
+
         var projectRoot = Path.GetFullPath(projectDestination).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         var databaseRoot = Path.GetFullPath(databaseDestination).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         long total = 0;
@@ -358,6 +406,13 @@ public sealed class ProjectSnapshotService
             var normalized = entry.FullName.Replace('\\', '/');
             if (normalized.StartsWith("/", StringComparison.Ordinal) || normalized.Contains(':', StringComparison.Ordinal) || normalized.Split('/').Any(part => part == ".."))
                 throw new InvalidDataException("Snapshot contains an unsafe entry path.");
+
+            const int unixFileTypeMask = 0xF000;
+            const int unixSymbolicLink = 0xA000;
+            var unixFileType = (entry.ExternalAttributes >> 16) & unixFileTypeMask;
+            if (unixFileType == unixSymbolicLink)
+                throw new InvalidDataException($"Snapshot contains a symbolic link entry: {entry.FullName}");
+
             if (normalized.EndsWith("/", StringComparison.Ordinal))
                 continue;
             var isProject = normalized.StartsWith("project/", StringComparison.Ordinal);
@@ -368,6 +423,9 @@ public sealed class ProjectSnapshotService
             total = checked(total + Math.Max(0, entry.Length));
             if (total > MaximumRestoredBytes)
                 throw new InvalidDataException("Snapshot exceeds the maximum restored size.");
+            if (entry.Length >= CompressionRatioCheckThreshold && entry.CompressedLength > 0 &&
+                (double)entry.Length / entry.CompressedLength > MaximumCompressionRatio)
+                throw new InvalidDataException($"Snapshot entry '{entry.FullName}' has a suspicious compression ratio.");
 
             var prefix = isProject ? "project/" : "database/";
             var root = isProject ? projectDestination : databaseDestination;
@@ -379,9 +437,9 @@ public sealed class ProjectSnapshotService
             if (!target.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Snapshot entry escapes the destination directory.");
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            using var input = entry.Open();
-            using var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-            input.CopyTo(output);
+            await using var input = entry.Open();
+            await using var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+            await input.CopyToAsync(output, 81920, cancellationToken).ConfigureAwait(false);
         }
     }
 
