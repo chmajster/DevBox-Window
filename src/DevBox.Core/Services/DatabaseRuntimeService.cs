@@ -8,6 +8,16 @@ namespace DevBox.Core.Services;
 
 public sealed class DatabaseRuntimeService : IDisposable
 {
+    private static readonly HashSet<string> MySqlSystemDatabases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "information_schema", "mysql", "performance_schema", "sys"
+    };
+
+    private static readonly HashSet<string> PostgreSqlSystemDatabases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "postgres", "template0", "template1"
+    };
+
     private readonly string _rootPath;
     private readonly string _registrationsPath;
     private readonly ProcessManager _processes = new();
@@ -18,7 +28,9 @@ public sealed class DatabaseRuntimeService : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         _rootPath = Path.GetFullPath(rootPath);
-        _registrationsPath = Path.Combine(_rootPath, "config", "database-runtimes.json");
+        _registrationsPath = SafeManagedPath(
+            Path.Combine(_rootPath, "config", "database-runtimes.json"),
+            "Database runtime registrations cannot escape the DevBox root or traverse a reparse point.");
     }
 
     public IReadOnlyList<DatabaseRuntimeInstance> GetInstances(string? engine = null)
@@ -188,11 +200,15 @@ public sealed class DatabaseRuntimeService : IDisposable
         var registration = GetRegistration(engine, version);
         var kind = ParseEngine(registration.Engine);
         options = NormalizeOptions(options ?? DefaultOptions(kind, registration.Port), registration.Port);
-        var backupRoot = Path.Combine(_rootPath, "backups", "databases", registration.Engine);
+        var backupRoot = SafeManagedPath(
+            Path.Combine(_rootPath, "backups", "databases", registration.Engine),
+            "Managed database backup paths cannot escape the DevBox root or traverse a reparse point.");
         Directory.CreateDirectory(backupRoot);
         var extension = kind == DatabaseEngineKind.PostgreSql ? ".dump" : ".sql";
         var destination = string.IsNullOrWhiteSpace(destinationPath)
-            ? Path.Combine(backupRoot, $"{databaseName}-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}{extension}")
+            ? SafeManagedPath(
+                Path.Combine(backupRoot, $"{databaseName}-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}{extension}"),
+                "Managed database backup destination cannot escape the DevBox root or traverse a reparse point.")
             : Path.GetFullPath(destinationPath);
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         var temporaryDestination = destination + $".{Guid.NewGuid():N}.tmp";
@@ -251,12 +267,12 @@ public sealed class DatabaseRuntimeService : IDisposable
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        ValidateDatabaseName(databaseName);
+        var registration = GetRegistration(engine, version);
+        var kind = ParseEngine(registration.Engine);
+        ValidateMutableDatabaseName(kind, databaseName);
         var source = Path.GetFullPath(backupPath);
         if (!File.Exists(source))
             throw new FileNotFoundException("Database backup was not found.", source);
-        var registration = GetRegistration(engine, version);
-        var kind = ParseEngine(registration.Engine);
         options = NormalizeOptions(options ?? DefaultOptions(kind, registration.Port), registration.Port);
 
         if (kind == DatabaseEngineKind.PostgreSql)
@@ -335,7 +351,9 @@ public sealed class DatabaseRuntimeService : IDisposable
         var engine = NormalizeEngine(kind);
         var runtime = RuntimePath(engine, version);
         var data = DataPath(engine, version);
-        var log = Path.Combine(_rootPath, "logs", $"{engine}-{version}.log");
+        var log = SafeManagedPath(
+            Path.Combine(_rootPath, "logs", $"{engine}-{version}.log"),
+            "Database runtime log path cannot escape the DevBox root or traverse a reparse point.");
         if (kind == DatabaseEngineKind.PostgreSql)
         {
             return new ServiceDefinition(
@@ -384,10 +402,16 @@ public sealed class DatabaseRuntimeService : IDisposable
     }
 
     private FileStream AcquireRegistrationLock() =>
-        CrossProcessFileLock.Acquire(_registrationsPath + ".lock", TimeSpan.FromSeconds(10));
+        CrossProcessFileLock.Acquire(
+            SafeManagedPath(
+                _registrationsPath + ".lock",
+                "Database runtime registration lock cannot escape the DevBox root or traverse a reparse point."),
+            TimeSpan.FromSeconds(10));
 
     private string InitializationLockPath(DatabaseEngineKind engine, string version) =>
-        Path.Combine(_rootPath, "tmp", "locks", $"database-init-{SafeServiceSegment(NormalizeEngine(engine))}-{SafeServiceSegment(version)}.lock");
+        SafeManagedPath(
+            Path.Combine(_rootPath, "tmp", "locks", $"database-init-{SafeServiceSegment(NormalizeEngine(engine))}-{SafeServiceSegment(version)}.lock"),
+            "Database initialization lock cannot escape the DevBox root or traverse a reparse point.");
 
     private DatabaseRuntimeRegistration GetRegistration(string engine, string version)
     {
@@ -442,7 +466,9 @@ public sealed class DatabaseRuntimeService : IDisposable
         var registrations = new List<DatabaseRuntimeRegistration>();
         foreach (var engine in new[] { "mysql", "mariadb", "postgresql" })
         {
-            var runtimeRoot = Path.Combine(_rootPath, "runtime", engine);
+            var runtimeRoot = SafeManagedPath(
+                Path.Combine(_rootPath, "runtime", engine),
+                "Database runtime discovery cannot traverse a reparse point.");
             if (!Directory.Exists(runtimeRoot))
                 continue;
             foreach (var directory in Directory.GetDirectories(runtimeRoot))
@@ -450,8 +476,10 @@ public sealed class DatabaseRuntimeService : IDisposable
                 var version = Path.GetFileName(directory);
                 if (version.Equals("current", StringComparison.OrdinalIgnoreCase) || version.StartsWith(".", StringComparison.Ordinal))
                     continue;
+                ValidateVersion(version);
+                var safeDirectory = RuntimePath(engine, version);
                 var kind = ParseEngine(engine);
-                if (!File.Exists(ServerExecutable(kind, directory)))
+                if (!File.Exists(ServerExecutable(kind, safeDirectory)))
                     continue;
                 registrations.Add(new DatabaseRuntimeRegistration(engine, version, ChooseAvailablePort(kind, registrations)));
             }
@@ -508,8 +536,26 @@ public sealed class DatabaseRuntimeService : IDisposable
         return instance with { State = snapshot.State, ProcessId = snapshot.ProcessId, Initialized = IsInitialized(instance.Engine, instance.Version) };
     }
 
-    private string RuntimePath(string engine, string version) => Path.Combine(_rootPath, "runtime", engine, version);
-    private string DataPath(string engine, string version) => Path.Combine(_rootPath, "data", engine, version);
+    private string RuntimePath(string engine, string version)
+    {
+        var normalizedEngine = NormalizeEngine(ParseEngine(engine));
+        ValidateVersion(version);
+        return SafeManagedPath(
+            Path.Combine(_rootPath, "runtime", normalizedEngine, version),
+            "Database runtime path cannot escape the DevBox root or traverse a reparse point.");
+    }
+
+    private string DataPath(string engine, string version)
+    {
+        var normalizedEngine = NormalizeEngine(ParseEngine(engine));
+        ValidateVersion(version);
+        return SafeManagedPath(
+            Path.Combine(_rootPath, "data", normalizedEngine, version),
+            "Database data path cannot escape the DevBox root or traverse a reparse point.");
+    }
+
+    private string SafeManagedPath(string path, string message) =>
+        PathSafety.EnsureUnderRootWithoutReparsePoints(_rootPath, path, message);
 
     private static string ServerExecutable(DatabaseEngineKind kind, string runtime) => kind switch
     {
@@ -610,7 +656,7 @@ public sealed class DatabaseRuntimeService : IDisposable
         Task copyTask = Task.CompletedTask;
         if (stdoutFile is null)
         {
-            stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            stdoutTask = ProcessOutputCapture.ReadBoundedAsync(process.StandardOutput, cancellationToken: cancellationToken);
         }
         else
         {
@@ -619,7 +665,7 @@ public sealed class DatabaseRuntimeService : IDisposable
             copyTask = process.StandardOutput.BaseStream.CopyToAsync(outputStream, cancellationToken);
             stdoutTask = Task.FromResult(string.Empty);
         }
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stderrTask = ProcessOutputCapture.ReadBoundedAsync(process.StandardError, cancellationToken: cancellationToken);
         Task inputTask = Task.CompletedTask;
         if (stdinFile is not null)
         {
@@ -688,6 +734,20 @@ public sealed class DatabaseRuntimeService : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
         if (value.Length > 64 || !value.All(ch => char.IsLetterOrDigit(ch) || ch is '_' or '-'))
             throw new ArgumentException("Database name contains unsupported characters.", nameof(value));
+    }
+
+    private static void ValidateMutableDatabaseName(DatabaseEngineKind kind, string value)
+    {
+        ValidateDatabaseName(value);
+        if (kind is DatabaseEngineKind.MySql or DatabaseEngineKind.MariaDb)
+        {
+            if (MySqlSystemDatabases.Contains(value))
+                throw new InvalidOperationException($"System database '{value}' cannot be restored by DevBox.");
+            return;
+        }
+
+        if (kind == DatabaseEngineKind.PostgreSql && PostgreSqlSystemDatabases.Contains(value))
+            throw new InvalidOperationException($"System database '{value}' cannot be restored by DevBox.");
     }
 
     private static string SafeServiceSegment(string value) => new(value.Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '-').ToArray());
