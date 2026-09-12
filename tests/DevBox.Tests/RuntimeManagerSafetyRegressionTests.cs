@@ -65,6 +65,32 @@ public sealed class RuntimeManagerSafetyRegressionTests
         }
     }
 
+    [Fact]
+    public async Task InstallAsync_ActivationFailure_RemovesNewlyInstalledVersion()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var package = CreateArchive(("package/php.exe", "runtime"));
+            var checksum = Convert.ToHexString(SHA256.HashData(package)).ToLowerInvariant();
+            var runtimeRoot = Path.Combine(root, "runtime", "php");
+            Directory.CreateDirectory(runtimeRoot);
+            File.WriteAllText(Path.Combine(runtimeRoot, "current"), "blocks activation");
+            using var manager = new RuntimeManager(root, new HttpClient(new StaticHandler(package)));
+            var definition = new RuntimeDefinition(
+                "php", "PHP", "8.4.1", "https://example.test/php.zip", checksum, "php.exe", "package");
+
+            await Assert.ThrowsAnyAsync<IOException>(() => manager.InstallAsync(definition));
+
+            Assert.False(Directory.Exists(Path.Combine(runtimeRoot, "8.4.1")));
+            Assert.True(File.Exists(Path.Combine(runtimeRoot, "current")));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
     private static byte[] CreateArchive(params (string Path, string Content)[] files)
     {
         using var memory = new MemoryStream();
