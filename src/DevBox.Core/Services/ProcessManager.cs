@@ -602,8 +602,8 @@ public sealed class ProcessManager : IProcessManager
             throw new InvalidOperationException($"Unable to start MySQL initialization: {ex.Message}", ex);
         }
 
-        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        var outputTask = ProcessOutputCapture.ReadBoundedAsync(process.StandardOutput, cancellationToken: cancellationToken);
+        var errorTask = ProcessOutputCapture.ReadBoundedAsync(process.StandardError, cancellationToken: cancellationToken);
         try
         {
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);

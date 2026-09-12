@@ -623,14 +623,25 @@ public sealed class EnvironmentLockService : IDisposable
     {
         if (value.SchemaVersion != EnvironmentLockFile.CurrentSchemaVersion)
             throw new InvalidDataException($"Unsupported devbox.lock.json schema version: {value.SchemaVersion}.");
-        if (string.IsNullOrWhiteSpace(value.ProjectName) || string.IsNullOrWhiteSpace(value.Domain) || !value.Domain.EndsWith(".test", StringComparison.OrdinalIgnoreCase))
+        if (value.Runtimes is null || value.Database is null || value.Addons is null || value.Services is null || value.Actions is null)
+            throw new InvalidDataException("Environment lock contains a null collection or database definition.");
+        if (string.IsNullOrWhiteSpace(value.ProjectName) || string.IsNullOrWhiteSpace(value.Domain))
             throw new InvalidDataException("Environment lock project identity is invalid.");
+        try
+        {
+            _ = LocalCertificateManager.NormalizeDomain(value.Domain);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new InvalidDataException("Environment lock project domain is not a valid .test domain.", ex);
+        }
         if (value.Runtimes.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || string.IsNullOrWhiteSpace(pair.Value)))
             throw new InvalidDataException("Environment lock contains an invalid runtime pin.");
         if (value.Database.Engine is not ("mysql" or "mariadb" or "postgresql" or "none"))
             throw new InvalidDataException("Environment lock database engine is invalid.");
         if (value.Database.Port is < 1 or > 65535)
             throw new InvalidDataException("Environment lock database port is invalid.");
+        ProjectActionService.ValidateDefinitions(value.Actions.Cast<ProjectActionDefinition?>());
     }
 
     private static void AtomicWrite(string path, string content)
