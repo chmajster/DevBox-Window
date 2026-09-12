@@ -43,6 +43,8 @@ All notable changes to DevBox Windows are documented here.
 
 ### Fixed
 
+- Windows autostart updates now roll back both the in-memory setting and the HKCU Run value when settings persistence fails, avoiding split registry/file state.
+- Elevated hosts-file helper processes now have a 30-second lifetime bound and are terminated on timeout instead of leaving UI operations waiting indefinitely.
 - Database runtime registration now rejects port changes while the existing server process is still running, preventing persisted port state from diverging from the active listener.
 - Database runtime commands and legacy MySQL first-start initialization use bounded stdout/stderr capture, preventing noisy native tools from growing DevBox memory without limit.
 - `devbox.lock.json` validates null collections/database definitions as controlled data errors, applies strict `.test` domain validation and reuses canonical Project Action validation.
