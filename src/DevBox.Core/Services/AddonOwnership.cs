@@ -55,12 +55,31 @@ internal static class AddonOwnership
             var content = File.ReadAllText(vhostPath);
             var relativeRoot = Path.GetRelativePath(Path.GetFullPath(rootPath), Path.GetFullPath(addon.InstallPath))
                 .Replace('\\', '/');
-            return content.Contains($"server_name {host}", StringComparison.OrdinalIgnoreCase) &&
-                   content.Contains($"root {relativeRoot}", StringComparison.OrdinalIgnoreCase);
+            return HasExactDirective(content, $"server_name {host};") &&
+                   HasExactDirective(content, $"root {relativeRoot};");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or UriFormatException or ArgumentException)
         {
             return false;
         }
+    }
+
+    private static bool HasExactDirective(string content, string directive)
+    {
+        foreach (var rawLine in content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = rawLine.Trim();
+            if (line.StartsWith('#'))
+                continue;
+
+            var commentIndex = line.IndexOf('#');
+            if (commentIndex >= 0)
+                line = line[..commentIndex].TrimEnd();
+
+            if (string.Equals(line, directive, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 }
