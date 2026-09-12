@@ -63,13 +63,36 @@ public sealed class AppSettingsService : IAppSettingsService
 
         using var key = Registry.CurrentUser.CreateSubKey(RunKeyPath, writable: true)
             ?? throw new InvalidOperationException("Unable to open the current-user startup registry key.");
-        if (enabled)
-            key.SetValue(RunValueName, BuildStartupCommand(executable!), RegistryValueKind.String);
-        else
-            key.DeleteValue(RunValueName, throwOnMissingValue: false);
+        var previousValue = key.GetValue(RunValueName, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
+        var previousKind = previousValue is null ? (RegistryValueKind?)null : key.GetValueKind(RunValueName);
+        var previousState = Current.StartWithWindows;
 
-        Current.StartWithWindows = enabled;
-        Save();
+        try
+        {
+            if (enabled)
+                key.SetValue(RunValueName, BuildStartupCommand(executable!), RegistryValueKind.String);
+            else
+                key.DeleteValue(RunValueName, throwOnMissingValue: false);
+
+            Current.StartWithWindows = enabled;
+            Save();
+        }
+        catch (Exception original)
+        {
+            Current.StartWithWindows = previousState;
+            try
+            {
+                if (previousValue is null)
+                    key.DeleteValue(RunValueName, throwOnMissingValue: false);
+                else
+                    key.SetValue(RunValueName, previousValue, previousKind ?? RegistryValueKind.String);
+            }
+            catch (Exception rollbackError) when (rollbackError is UnauthorizedAccessException or SecurityException or IOException)
+            {
+                throw new AggregateException("Updating startup settings failed and the registry rollback was incomplete.", original, rollbackError);
+            }
+            throw;
+        }
     }
 
     internal static string BuildStartupCommand(string executable)
