@@ -21,9 +21,7 @@ internal static class ArchiveSafety
         ArgumentException.ThrowIfNullOrWhiteSpace(destination);
         ArgumentException.ThrowIfNullOrWhiteSpace(packageName);
         if (maximumBytes <= 0)
-        {
             throw new ArgumentOutOfRangeException(nameof(maximumBytes));
-        }
 
         progress?.Report(0);
         using var response = await httpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
@@ -31,9 +29,7 @@ internal static class ArchiveSafety
 
         var declaredLength = response.Content.Headers.ContentLength;
         if (declaredLength.HasValue && declaredLength.Value > maximumBytes)
-        {
             throw new InvalidDataException($"{packageName} download is too large ({declaredLength.Value} bytes; limit {maximumBytes} bytes).");
-        }
 
         var destinationCreated = false;
         try
@@ -47,9 +43,7 @@ internal static class ArchiveSafety
         catch
         {
             if (destinationCreated)
-            {
                 TryDeletePartialDownload(destination);
-            }
             throw;
         }
     }
@@ -86,28 +80,27 @@ internal static class ArchiveSafety
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(packageName);
         if (maximumUncompressedBytes <= 0)
-        {
             throw new ArgumentOutOfRangeException(nameof(maximumUncompressedBytes));
-        }
         if (maximumEntries <= 0)
-        {
             throw new ArgumentOutOfRangeException(nameof(maximumEntries));
-        }
 
         var destinationRoot = Path.GetFullPath(destinationPath)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
 
         using var archive = ZipFile.OpenRead(archivePath);
         if (archive.Entries.Count > maximumEntries)
-        {
             throw new InvalidDataException($"{packageName} archive contains too many entries ({archive.Entries.Count}; limit {maximumEntries}).");
-        }
 
         long totalUncompressedBytes = 0;
+        var outputPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in archive.Entries)
         {
             ValidateEntryPath(entry, destinationPath, destinationRoot, packageName);
             RejectSymbolicLink(entry, packageName);
+            var outputPath = ResolveOutputPath(entry, destinationPath)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (!outputPaths.Add(outputPath))
+                throw new InvalidDataException($"{packageName} archive contains multiple entries targeting the same output path: {entry.FullName}");
 
             try
             {
@@ -119,17 +112,13 @@ internal static class ArchiveSafety
             }
 
             if (totalUncompressedBytes > maximumUncompressedBytes)
-            {
                 throw new InvalidDataException($"{packageName} archive expands beyond the allowed size ({maximumUncompressedBytes} bytes).");
-            }
 
             if (entry.Length >= CompressionRatioCheckThreshold && entry.CompressedLength > 0)
             {
                 var ratio = (double)entry.Length / entry.CompressedLength;
                 if (ratio > MaximumCompressionRatio)
-                {
                     throw new InvalidDataException($"{packageName} archive entry '{entry.FullName}' has a suspicious compression ratio ({ratio:F1}:1).");
-                }
             }
         }
 
@@ -164,15 +153,11 @@ internal static class ArchiveSafety
         {
             var read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken).ConfigureAwait(false);
             if (read == 0)
-            {
                 return;
-            }
 
             total += read;
             if (total > maximumBytes)
-            {
                 throw new InvalidDataException($"{packageName} download exceeded the allowed size ({maximumBytes} bytes).");
-            }
 
             await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
 
@@ -192,15 +177,11 @@ internal static class ArchiveSafety
     {
         var normalizedEntry = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
         if (Path.IsPathRooted(normalizedEntry) || normalizedEntry.Contains(':'))
-        {
             throw new InvalidDataException($"Unsafe ZIP entry detected in {packageName}: {entry.FullName}");
-        }
 
         var outputPath = ResolveOutputPath(entry, destinationPath);
         if (!outputPath.StartsWith(destinationRoot, StringComparison.OrdinalIgnoreCase))
-        {
             throw new InvalidDataException($"Unsafe ZIP entry detected in {packageName}: {entry.FullName}");
-        }
     }
 
     private static string ResolveOutputPath(ZipArchiveEntry entry, string destinationPath) =>
@@ -212,9 +193,7 @@ internal static class ArchiveSafety
         const int UnixSymbolicLink = 0xA000;
         var unixFileType = (entry.ExternalAttributes >> 16) & UnixFileTypeMask;
         if (unixFileType == UnixSymbolicLink)
-        {
             throw new InvalidDataException($"{packageName} archive contains a symbolic link entry: {entry.FullName}");
-        }
     }
 
     private static void TryDeletePartialDownload(string path)
@@ -222,15 +201,9 @@ internal static class ArchiveSafety
         try
         {
             if (File.Exists(path))
-            {
                 File.Delete(path);
-            }
         }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 }
