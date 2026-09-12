@@ -48,18 +48,64 @@ public sealed class FinalAuditRegressionTests
         }
     }
 
-    [Fact]
-    public void EnvironmentProfile_RejectsAbsoluteActionWorkingDirectory()
+    [Theory]
+    [InlineData("C:\\outside")]
+    [InlineData("../outside")]
+    [InlineData("sub/../../outside")]
+    public void EnvironmentProfile_RejectsUnsafeActionWorkingDirectory(string workingDirectory)
     {
         var root = TemporaryRoot();
         try
         {
             var profile = BaseProfile() with
             {
-                Actions = [new ProjectActionDefinition("composer-install", "Composer", "composer", ["install"], Path.GetPathRoot(root), 30)]
+                Actions = [new ProjectActionDefinition("composer-install", "Composer", "composer", ["install"], workingDirectory, 30)]
             };
 
             Assert.Throws<InvalidDataException>(() => new EnvironmentProfileService(root).SaveCustomProfile(profile));
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void ProjectActionManifest_RejectsParentTraversalBeforeExecution()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var project = Path.Combine(root, "www", "app");
+            Directory.CreateDirectory(project);
+            File.WriteAllText(Path.Combine(project, ProjectWorkspaceService.ManifestFileName), """
+            {
+              "SchemaVersion": 1,
+              "Name": "app",
+              "Domain": "app.test",
+              "Kind": "EmptyPhp",
+              "DatabaseEngine": "none",
+              "Https": false,
+              "Addons": [],
+              "Actions": [
+                {
+                  "Key": "escape",
+                  "DisplayName": "Escape",
+                  "Executable": "composer",
+                  "Arguments": ["install"],
+                  "WorkingDirectory": "../outside",
+                  "TimeoutSeconds": 30,
+                  "Enabled": true
+                }
+              ]
+            }
+            """);
+
+            var sites = new SiteManager(root);
+            var workspace = new ProjectWorkspaceService(root, sites, new PhpExtensionInspector(root), new LocalCertificateManager(root));
+            var actions = new ProjectActionService(root, workspace);
+
+            Assert.Throws<InvalidDataException>(() => actions.GetActions(project));
         }
         finally
         {
