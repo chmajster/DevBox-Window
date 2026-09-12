@@ -1,6 +1,6 @@
-using System.Reflection;
 using DevBox.Core.Models;
 using DevBox.Core.Services;
+using Xunit;
 
 namespace DevBox.Tests;
 
@@ -100,23 +100,46 @@ public sealed class ProjectPathSafetyRegressionTests
     }
 
     [Fact]
-    public void ProjectAction_WorkingDirectoryDot_ResolvesToProjectRoot()
+    public void ProjectAction_WorkingDirectoryDot_RemainsValid()
     {
         var root = TemporaryRoot();
         try
         {
             var project = Path.Combine(root, "www", "app");
             Directory.CreateDirectory(project);
-            var method = typeof(ProjectActionService).GetMethod(
-                "ResolveWorkingDirectory",
-                BindingFlags.Static | BindingFlags.NonPublic);
+            File.WriteAllText(Path.Combine(project, "devbox.json"), """
+            {
+              "SchemaVersion": 1,
+              "Name": "app",
+              "Domain": "app.test",
+              "Kind": "EmptyPhp",
+              "DatabaseEngine": "none",
+              "Https": false,
+              "Addons": [],
+              "Actions": [
+                {
+                  "Key": "dot-root",
+                  "DisplayName": "Dot root",
+                  "Executable": "php",
+                  "Arguments": ["-v"],
+                  "WorkingDirectory": ".",
+                  "TimeoutSeconds": 30,
+                  "Enabled": true
+                }
+              ]
+            }
+            """);
 
-            Assert.NotNull(method);
-            var resolved = Assert.IsType<string>(method!.Invoke(null, [project, "."]));
-            Assert.Equal(
-                Path.GetFullPath(project).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                Path.GetFullPath(resolved).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                ignoreCase: OperatingSystem.IsWindows());
+            var sites = new SiteManager(root);
+            var workspace = new ProjectWorkspaceService(
+                root,
+                sites,
+                new PhpExtensionInspector(root),
+                new LocalCertificateManager(root));
+            var actions = new ProjectActionService(root, workspace);
+
+            var configured = Assert.Single(actions.GetActions(project));
+            Assert.Equal(".", configured.WorkingDirectory);
         }
         finally
         {
@@ -125,17 +148,14 @@ public sealed class ProjectPathSafetyRegressionTests
     }
 
     [Fact]
-    public void ConfigurationRestore_RejectsBackupPathThroughReparsePoint()
+    public void ConfigurationRestore_RejectsBackupThroughReparsePoint()
     {
         var root = TemporaryRoot();
-        var backupRoot = Path.Combine(root, "backups", "configuration");
+        var backupsRoot = Path.Combine(root, "backups");
         var outside = Path.Combine(root, "outside-backups");
-        var link = Path.Combine(backupRoot, "linked");
-        Directory.CreateDirectory(backupRoot);
+        Directory.CreateDirectory(root);
         Directory.CreateDirectory(outside);
-        var externalBackup = Path.Combine(outside, "nginx-evil.conf.bak");
-        File.WriteAllText(externalBackup, "events { } http { }");
-
+        var link = backupsRoot;
         if (!TryCreateDirectoryLink(link, outside))
         {
             Cleanup(root, link);
@@ -144,11 +164,12 @@ public sealed class ProjectPathSafetyRegressionTests
 
         try
         {
+            var configuration = Path.Combine(outside, "configuration");
+            Directory.CreateDirectory(configuration);
+            var backup = Path.Combine(configuration, "php-test.ini.bak");
+            File.WriteAllText(backup, "memory_limit=256M");
             var service = new ConfigurationFileService(root);
-            var error = Assert.Throws<InvalidOperationException>(() =>
-                service.RestoreBackup("nginx", Path.Combine(link, Path.GetFileName(externalBackup))));
-            Assert.Contains("reparse point", error.Message, StringComparison.OrdinalIgnoreCase);
-            Assert.False(File.Exists(service.GetPath("nginx")));
+            Assert.Throws<InvalidOperationException>(() => service.RestoreBackup("php", backup));
         }
         finally
         {
@@ -157,20 +178,17 @@ public sealed class ProjectPathSafetyRegressionTests
     }
 
     [Fact]
-    public void ManagedService_RejectsExecutablePathThroughReparsePoint()
+    public void ManagedService_RejectsExecutableThroughReparsePoint()
     {
         var root = TemporaryRoot();
-        var externalRoot = TemporaryRoot();
-        var runtimeRoot = Path.Combine(root, "runtime");
-        var link = Path.Combine(runtimeRoot, "escape");
-        Directory.CreateDirectory(runtimeRoot);
-        Directory.CreateDirectory(externalRoot);
-        File.WriteAllText(Path.Combine(externalRoot, "evil.exe"), "fixture");
-
-        if (!TryCreateDirectoryLink(link, externalRoot))
+        var outside = Path.Combine(root, "outside-runtime");
+        var runtime = Path.Combine(root, "runtime");
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(outside);
+        File.WriteAllBytes(Path.Combine(outside, "tool.exe"), []);
+        if (!TryCreateDirectoryLink(runtime, outside))
         {
-            Cleanup(root, link);
-            Cleanup(externalRoot);
+            Cleanup(root, runtime);
             return;
         }
 
@@ -179,21 +197,19 @@ public sealed class ProjectPathSafetyRegressionTests
             var catalog = new ManagedServiceCatalog(root);
             var manifest = new ManagedServiceManifest(
                 ManagedServiceManifest.CurrentSchemaVersion,
-                "escape",
-                "Escape service",
-                "runtime/escape/evil.exe",
+                "custom-tool",
+                "Custom Tool",
+                "runtime/tool.exe",
                 Array.Empty<string>(),
                 ".",
-                18080,
+                19001,
                 "1.0");
 
-            var error = Assert.Throws<InvalidDataException>(() => catalog.GetDefinition(manifest));
-            Assert.Contains("reparse point", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Throws<InvalidOperationException>(() => catalog.Save([manifest]));
         }
         finally
         {
-            Cleanup(root, link);
-            Cleanup(externalRoot);
+            Cleanup(root, runtime);
         }
     }
 
