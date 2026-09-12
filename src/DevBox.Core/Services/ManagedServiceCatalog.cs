@@ -269,11 +269,27 @@ public sealed partial class ManagedServiceCatalog
         var full = Path.GetFullPath(Path.Combine(_rootPath, relativePath.Replace('/', Path.DirectorySeparatorChar)))
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var isRoot = full.Equals(root, StringComparison.OrdinalIgnoreCase);
-        if ((!allowRoot || !isRoot) && !full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        if (isRoot)
+        {
+            if (!allowRoot)
+                throw new InvalidDataException($"{name} must point to a child path inside the DevBox root.");
+            return full;
+        }
+        if (!full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException($"{name} escapes the DevBox root.");
         }
-        return full;
+        try
+        {
+            return PathSafety.EnsureUnderRootWithoutReparsePoints(
+                root,
+                full,
+                $"{name} escapes the DevBox root or traverses a reparse point.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new InvalidDataException($"{name} escapes the DevBox root or traverses a reparse point.", ex);
+        }
     }
 
     private static void AtomicWrite(string path, string content)

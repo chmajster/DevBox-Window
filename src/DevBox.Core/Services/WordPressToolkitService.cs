@@ -155,7 +155,7 @@ public sealed class WordPressToolkitService
                 $"{siteUrl}/wp-admin/",
                 actions);
         }
-        catch
+        catch (Exception original)
         {
             var cleanupErrors = new List<Exception>();
             try
@@ -186,7 +186,11 @@ public sealed class WordPressToolkitService
                 cleanupErrors.Add(ex);
             }
             if (cleanupErrors.Count > 0)
-                throw new AggregateException("WordPress setup failed and cleanup was incomplete.", cleanupErrors);
+            {
+                var allErrors = new List<Exception> { original };
+                allErrors.AddRange(cleanupErrors);
+                throw new AggregateException("WordPress setup failed and cleanup was incomplete.", allErrors);
+            }
             throw;
         }
     }

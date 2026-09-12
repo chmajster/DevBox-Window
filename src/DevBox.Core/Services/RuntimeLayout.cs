@@ -5,6 +5,8 @@ public static class RuntimeLayout
     public static void EnsureInitialized(string rootPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+        var root = Path.GetFullPath(rootPath);
+        Directory.CreateDirectory(root);
 
         var directories = new[]
         {
@@ -24,22 +26,30 @@ public static class RuntimeLayout
 
         foreach (var relative in directories)
         {
-            Directory.CreateDirectory(Path.Combine(rootPath, relative.Replace('/', Path.DirectorySeparatorChar)));
+            var path = PathSafety.EnsureUnderRootWithoutReparsePoints(
+                root,
+                Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)),
+                $"Runtime layout path '{relative}' cannot traverse a reparse point.");
+            Directory.CreateDirectory(path);
         }
 
-        WriteIfMissing(Path.Combine(rootPath, "config", "nginx", "nginx.conf"), NginxConfig);
-        WriteIfMissing(Path.Combine(rootPath, "config", "nginx", "fastcgi_params"), FastCgiParams);
-        WriteIfMissing(Path.Combine(rootPath, "config", "php", "php.ini"), PhpIni);
-        WriteIfMissing(Path.Combine(rootPath, "config", "mysql", "my.ini"), MySqlIni);
-        WriteIfMissing(Path.Combine(rootPath, "www", "index.html"), IndexHtml);
+        WriteIfMissing(SafePath(root, "config/nginx/nginx.conf"), NginxConfig);
+        WriteIfMissing(SafePath(root, "config/nginx/fastcgi_params"), FastCgiParams);
+        WriteIfMissing(SafePath(root, "config/php/php.ini"), PhpIni);
+        WriteIfMissing(SafePath(root, "config/mysql/my.ini"), MySqlIni);
+        WriteIfMissing(SafePath(root, "www/index.html"), IndexHtml);
     }
+
+    private static string SafePath(string root, string relative) =>
+        PathSafety.EnsureUnderRootWithoutReparsePoints(
+            root,
+            Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)),
+            $"Runtime layout file '{relative}' cannot traverse a reparse point.");
 
     private static void WriteIfMissing(string path, string content)
     {
         if (!File.Exists(path))
-        {
             File.WriteAllText(path, content.Replace("\n", Environment.NewLine));
-        }
     }
 
     private const string NginxConfig = """

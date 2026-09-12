@@ -66,6 +66,50 @@ public sealed class PostMergeAuditRound4Tests
     }
 
     [Fact]
+    public async Task DatabaseRuntime_UnrecognizedNonEmptyDataDirectory_IsPreserved()
+    {
+        var root = NewRoot();
+        try
+        {
+            var executable = Path.Combine(root, "runtime", "mysql", "8.4.11", "bin", "mysqld.exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+            File.WriteAllText(executable, "fixture");
+            var data = Path.Combine(root, "data", "mysql", "8.4.11");
+            Directory.CreateDirectory(data);
+            var sentinel = Path.Combine(data, "user-data.bin");
+            File.WriteAllText(sentinel, "preserve-me");
+
+            using var databases = new DatabaseRuntimeService(root);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => databases.EnsureInitializedAsync("mysql", "8.4.11", 3406));
+
+            Assert.True(File.Exists(sentinel));
+            Assert.Equal("preserve-me", File.ReadAllText(sentinel));
+        }
+        finally { TryDelete(root); }
+    }
+
+    [Fact]
+    public void DatabaseRuntime_DuplicateEngineVersionRegistration_IsRejected()
+    {
+        var root = NewRoot();
+        try
+        {
+            var config = Path.Combine(root, "config");
+            Directory.CreateDirectory(config);
+            File.WriteAllText(Path.Combine(config, "database-runtimes.json"), """
+[
+  { "engine": "mysql", "version": "8.4.11", "port": 3406 },
+  { "engine": "MYSQL", "version": "8.4.11", "port": 3407 }
+]
+""");
+
+            using var databases = new DatabaseRuntimeService(root);
+            Assert.Throws<InvalidDataException>(() => databases.GetInstances());
+        }
+        finally { TryDelete(root); }
+    }
+
+    [Fact]
     public void EnvironmentProfiles_ConcurrentWritersDoNotLoseUpdates()
     {
         var root = NewRoot();

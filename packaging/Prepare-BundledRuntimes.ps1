@@ -2,7 +2,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string[]] $PublishDirectories,
 
-    [switch] $SkipPhp
+    [switch] $SkipPhp,
+
+    [switch] $OnlineOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,6 +15,7 @@ $packages = @(
         Key = 'php'
         DisplayName = 'PHP FastCGI'
         Version = '8.5.10'
+        Architecture = 'x64'
         Url = 'https://downloads.php.net/~windows/releases/archives/php-8.5.10-nts-Win32-vs17-x64.zip'
         ExpectedSha256 = '22ec430195984d233eb9e62c637a945bbcda06efca2f392d9d96d62c6acd34f8'
         ExpectedMd5 = $null
@@ -23,6 +26,7 @@ $packages = @(
         Key = 'nginx'
         DisplayName = 'Nginx'
         Version = '1.31.5'
+        Architecture = 'any'
         Url = 'https://nginx.org/download/nginx-1.31.5.zip'
         ExpectedSha256 = '00ad32a2bf66cee0ec8eb194347e8e79917f47017ccd3ad4bebf5574fabe002c'
         ExpectedMd5 = $null
@@ -33,6 +37,7 @@ $packages = @(
         Key = 'mysql'
         DisplayName = 'MySQL'
         Version = '8.4.11'
+        Architecture = 'x64'
         Url = 'https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.11-winx64.zip'
         ExpectedSha256 = $null
         ExpectedMd5 = '2e833921898a9a030ea6bfe81bd811bc'
@@ -42,7 +47,7 @@ $packages = @(
 )
 
 if ($SkipPhp) {
-    Write-Host 'PHP will be delivered on demand and will not be downloaded or bundled by this release.'
+    Write-Host 'PHP will not be prepared by this release.'
     $packages = @($packages | Where-Object { $_.Key -ne 'php' })
 }
 
@@ -52,11 +57,12 @@ foreach ($publishDirectory in $PublishDirectories) {
     }
 }
 
-$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('devbox-bundled-runtimes-' + [guid]::NewGuid().ToString('N'))
+$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('devbox-runtime-packages-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 
 try {
     $manifest = @()
+    $onlineCatalog = @()
 
     foreach ($package in $packages) {
         Write-Host "Preparing $($package.DisplayName) $($package.Version)..."
@@ -98,17 +104,19 @@ try {
             throw "Expected runtime executable was not found for $($package.DisplayName): $sourceExecutable"
         }
 
-        foreach ($publishDirectory in $PublishDirectories) {
-            $runtimeRoot = Join-Path $publishDirectory (Join-Path 'runtime' $package.Key)
-            $versionPath = Join-Path $runtimeRoot $package.Version
+        if (-not $OnlineOnly) {
+            foreach ($publishDirectory in $PublishDirectories) {
+                $runtimeRoot = Join-Path $publishDirectory (Join-Path 'runtime' $package.Key)
+                $versionPath = Join-Path $runtimeRoot $package.Version
 
-            if (Test-Path -LiteralPath $versionPath) {
-                Remove-Item -LiteralPath $versionPath -Recurse -Force
+                if (Test-Path -LiteralPath $versionPath) {
+                    Remove-Item -LiteralPath $versionPath -Recurse -Force
+                }
+
+                New-Item -ItemType Directory -Path $versionPath -Force | Out-Null
+                Get-ChildItem -LiteralPath $sourcePath -Force | Copy-Item -Destination $versionPath -Recurse -Force
+                Set-Content -LiteralPath (Join-Path $versionPath '.devbox-version') -Value $package.Version -Encoding ascii -NoNewline
             }
-
-            New-Item -ItemType Directory -Path $versionPath -Force | Out-Null
-            Get-ChildItem -LiteralPath $sourcePath -Force | Copy-Item -Destination $versionPath -Recurse -Force
-            Set-Content -LiteralPath (Join-Path $versionPath '.devbox-version') -Value $package.Version -Encoding ascii -NoNewline
         }
 
         $sourceIntegrityAlgorithm = if (-not [string]::IsNullOrWhiteSpace($package.ExpectedSha256)) { 'SHA-256' } else { 'MD5' }
@@ -125,14 +133,40 @@ try {
             sourceIntegrityPinned = $true
             executableRelativePath = $package.ExecutableRelativePath.Replace('\', '/')
         }
+
+        $onlineCatalog += [ordered]@{
+            key = $package.Key
+            displayName = $package.DisplayName
+            version = $package.Version
+            architecture = $package.Architecture
+            executableRelativePath = $package.ExecutableRelativePath.Replace('\', '/')
+            downloadUrl = $package.Url
+            sha256 = $actualSha256
+            archiveRootDirectory = $package.ArchiveRoot
+            recommended = $true
+        }
     }
 
     foreach ($publishDirectory in $PublishDirectories) {
-        $runtimeDirectory = Join-Path $publishDirectory 'runtime'
-        New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
-        $manifestPath = Join-Path $runtimeDirectory 'bundled-runtimes.json'
-        $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding utf8
-        Write-Host "Bundled runtime manifest: $manifestPath"
+        if ($OnlineOnly) {
+            $runtimeDirectory = Join-Path $publishDirectory 'runtime'
+            if (Test-Path -LiteralPath $runtimeDirectory) {
+                Remove-Item -LiteralPath $runtimeDirectory -Recurse -Force
+            }
+
+            $configDirectory = Join-Path $publishDirectory 'config'
+            New-Item -ItemType Directory -Path $configDirectory -Force | Out-Null
+            $catalogPath = Join-Path $configDirectory 'runtime-catalog.release.json'
+            $onlineCatalog | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $catalogPath -Encoding utf8
+            Write-Host "Verified release runtime catalog: $catalogPath"
+        }
+        else {
+            $runtimeDirectory = Join-Path $publishDirectory 'runtime'
+            New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
+            $manifestPath = Join-Path $runtimeDirectory 'bundled-runtimes.json'
+            $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding utf8
+            Write-Host "Bundled runtime manifest: $manifestPath"
+        }
     }
 }
 finally {

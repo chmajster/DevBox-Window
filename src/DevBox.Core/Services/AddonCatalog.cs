@@ -28,32 +28,25 @@ public sealed class AddonCatalog
             var entries = JsonSerializer.Deserialize<List<AddonManifestEntry>>(json, JsonOptions)
                 ?? throw new InvalidDataException("Addon manifest is empty.");
             if (entries.Count == 0)
-            {
                 return Array.Empty<AddonDefinition>();
-            }
-
             if (entries.Any(entry => entry is null))
-            {
                 throw new InvalidDataException("Addon manifest contains a null entry.");
-            }
 
             foreach (var entry in entries)
-            {
                 ValidateEntry(entry);
-            }
 
             var duplicate = entries
                 .GroupBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault(group => group.Count() > 1);
             if (duplicate is not null)
-            {
                 throw new InvalidDataException($"Addon manifest contains duplicate key '{duplicate.Key}'.");
-            }
+
             var duplicateInstallPath = entries
                 .GroupBy(entry => ResolveRelativePath(entry.InstallRelativePath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault(group => group.Count() > 1);
             if (duplicateInstallPath is not null)
                 throw new InvalidDataException("Addon manifest assigns the same install directory to multiple addons.");
+
             var duplicateDomain = entries
                 .GroupBy(entry => new Uri(entry.LocalUrl).Host, StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault(group => group.Count() > 1);
@@ -71,7 +64,23 @@ public sealed class AddonCatalog
     public bool IsInstalled(AddonDefinition addon)
     {
         ArgumentNullException.ThrowIfNull(addon);
-        return File.Exists(addon.EntryPointPath);
+        try
+        {
+            _ = PathSafety.EnsureUnderRootWithoutReparsePoints(
+                Path.Combine(_rootPath, "www"),
+                addon.InstallPath,
+                "Addon install path must remain inside DevBox www and cannot traverse a reparse point.");
+            _ = PathSafety.EnsureUnderRootWithoutReparsePoints(
+                addon.InstallPath,
+                addon.EntryPointPath,
+                "Addon entry point must remain inside its install directory and cannot traverse a reparse point.");
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+
+        return File.Exists(addon.EntryPointPath) && AddonOwnership.IsOwned(_rootPath, addon);
     }
 
     private AddonDefinition ToDefinition(AddonManifestEntry entry)
@@ -82,7 +91,9 @@ public sealed class AddonCatalog
         try
         {
             installPath = PathSafety.EnsureUnderRootWithoutReparsePoints(
-                wwwRoot, installPath, $"Addon '{entry.Key}' install path must be a child of the DevBox www directory and cannot traverse a reparse point.");
+                wwwRoot,
+                installPath,
+                $"Addon '{entry.Key}' install path must be a child of the DevBox www directory and cannot traverse a reparse point.");
         }
         catch (InvalidOperationException ex)
         {
@@ -93,7 +104,9 @@ public sealed class AddonCatalog
         try
         {
             entryPointPath = PathSafety.EnsureUnderRootWithoutReparsePoints(
-                installPath, entryPointPath, $"Addon '{entry.Key}' entry point must be inside its install directory and cannot traverse a reparse point.");
+                installPath,
+                entryPointPath,
+                $"Addon '{entry.Key}' entry point must be inside its install directory and cannot traverse a reparse point.");
         }
         catch (InvalidOperationException ex)
         {
@@ -122,9 +135,7 @@ public sealed class AddonCatalog
     private void EnsureDefaultCatalog()
     {
         if (File.Exists(_catalogPath))
-        {
             return;
-        }
 
         Directory.CreateDirectory(Path.GetDirectoryName(_catalogPath)!);
         var json = JsonSerializer.Serialize(DefaultManifest, JsonOptions);
@@ -147,9 +158,7 @@ public sealed class AddonCatalog
         finally
         {
             if (File.Exists(tempPath))
-            {
                 File.Delete(tempPath);
-            }
         }
     }
 
@@ -157,16 +166,12 @@ public sealed class AddonCatalog
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
         if (Path.IsPathRooted(relativePath))
-        {
             throw new InvalidDataException("Addon manifest paths must be relative to the DevBox root.");
-        }
 
         var root = _rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         var fullPath = Path.GetFullPath(Path.Combine(_rootPath, relativePath));
         if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
-        {
             throw new InvalidDataException("Addon manifest path escapes the DevBox root.");
-        }
         return fullPath;
     }
 
@@ -175,17 +180,11 @@ public sealed class AddonCatalog
         ArgumentNullException.ThrowIfNull(entry);
         if (string.IsNullOrWhiteSpace(entry.Key) || entry.Key.Length > 64 ||
             entry.Key.Any(character => !char.IsLetterOrDigit(character) && character is not '-' and not '_'))
-        {
-            throw new InvalidDataException("Addon key contains invalid characters.");
-        }
+            throw new InvalidDataException("Addon key contains invalid characters or exceeds 64 characters.");
         if (string.IsNullOrWhiteSpace(entry.DisplayName) || string.IsNullOrWhiteSpace(entry.Version))
-        {
             throw new InvalidDataException($"Addon '{entry.Key}' must define displayName and version.");
-        }
         if (string.IsNullOrWhiteSpace(entry.InstallRelativePath) || string.IsNullOrWhiteSpace(entry.EntryPointRelativePath))
-        {
             throw new InvalidDataException($"Addon '{entry.Key}' must define install and entry-point paths.");
-        }
         if (!Uri.TryCreate(entry.LocalUrl, UriKind.Absolute, out var localUri) ||
             localUri.Scheme != Uri.UriSchemeHttp ||
             !localUri.Host.EndsWith(".test", StringComparison.OrdinalIgnoreCase) ||
@@ -194,60 +193,44 @@ public sealed class AddonCatalog
             throw new InvalidDataException($"Addon '{entry.Key}' localUrl must be an absolute http://*.test URL on the default HTTP port.");
         }
         if (!Uri.TryCreate(entry.DownloadUrl, UriKind.Absolute, out var downloadUri) || downloadUri.Scheme != Uri.UriSchemeHttps)
-        {
             throw new InvalidDataException($"Addon '{entry.Key}' downloadUrl must use HTTPS.");
-        }
+
         var normalizedSha256 = entry.Sha256?.Trim();
         if (string.IsNullOrWhiteSpace(normalizedSha256))
-        {
             throw new InvalidDataException($"Addon '{entry.Key}' must define a SHA-256 value.");
-        }
         try
         {
             if (normalizedSha256.Length != 64 || Convert.FromHexString(normalizedSha256).Length != 32)
-            {
                 throw new InvalidDataException($"Addon '{entry.Key}' has an invalid SHA-256 value.");
-            }
         }
         catch (FormatException ex)
         {
             throw new InvalidDataException($"Addon '{entry.Key}' has an invalid SHA-256 value.", ex);
         }
+
         if (string.IsNullOrWhiteSpace(entry.ArchiveRootDirectory) ||
             Path.IsPathRooted(entry.ArchiveRootDirectory) ||
             entry.ArchiveRootDirectory.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries).Any(part => part == ".."))
-        {
             throw new InvalidDataException($"Addon '{entry.Key}' archive root is unsafe.");
-        }
 
         foreach (var extension in entry.RequiredPhpExtensions ?? Array.Empty<string>())
-        {
             _ = NormalizeRequiredPhpExtension(extension);
-        }
     }
 
     private static string NormalizeRequiredPhpExtension(string extension)
     {
         if (string.IsNullOrWhiteSpace(extension))
-        {
             throw new InvalidDataException("Addon PHP extension names cannot be empty.");
-        }
 
         var normalized = extension.Trim().ToLowerInvariant();
         if (normalized.StartsWith("php_", StringComparison.Ordinal))
-        {
             normalized = normalized[4..];
-        }
         if (normalized.EndsWith(".dll", StringComparison.Ordinal))
-        {
             normalized = normalized[..^4];
-        }
 
         if (normalized.Length == 0 || normalized.Any(character =>
                 character is not (>= 'a' and <= 'z') and not (>= '0' and <= '9') and not '_'))
-        {
             throw new InvalidDataException($"Addon PHP extension name '{extension}' is invalid.");
-        }
 
         return normalized;
     }

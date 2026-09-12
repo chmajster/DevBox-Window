@@ -1,3 +1,4 @@
+using System.Windows;
 using DevBox.Core.Models;
 
 namespace DevBox.App.ViewModels;
@@ -36,7 +37,7 @@ public sealed class ServiceRowViewModel : ObservableObject
 public sealed class AddonRowViewModel : ObservableObject
 {
     private string _status = "Not installed";
-    private string _installAction = "Download";
+    private string _installAction = "Install";
     private string _hostStatus = "Host: —";
     private string _configStatus = "Config: —";
     private string _phpStatus = "PHP: —";
@@ -68,7 +69,7 @@ public sealed class AddonRowViewModel : ObservableObject
     public void ApplyInstallation(bool installed)
     {
         Status = installed ? "Installed" : "Not installed";
-        InstallAction = installed ? "Reinstall" : "Download";
+        InstallAction = installed ? "Reinstall" : "Install";
         if (!installed)
         {
             HostStatus = "Host: —";
@@ -99,7 +100,7 @@ public sealed class AddonRowViewModel : ObservableObject
     public void SetError()
     {
         Status = "Operation failed";
-        InstallAction = "Retry download";
+        InstallAction = "Retry install";
     }
 }
 
@@ -112,8 +113,13 @@ public sealed class SiteRowViewModel(SiteDefinition site)
     public string Url { get; } = site.HttpsEnabled ? $"https://{site.Domain}" : $"http://{site.Domain}";
 }
 
-public sealed class RuntimeRowViewModel
+public sealed class RuntimeRowViewModel : ObservableObject
 {
+    private string _status;
+    private bool _canDownload;
+    private int _progressPercent;
+    private Visibility _progressVisibility = Visibility.Collapsed;
+
     public RuntimeRowViewModel(RuntimeVersionStatus status, string rootPath)
     {
         ArgumentNullException.ThrowIfNull(status);
@@ -123,13 +129,13 @@ public sealed class RuntimeRowViewModel
         Name = status.Package.DisplayName;
         Version = status.Package.Version;
         IsInstalled = status.Installed;
-        CanDownload = !status.Installed &&
-                      !string.IsNullOrWhiteSpace(status.Package.DownloadUrl) &&
-                      !string.IsNullOrWhiteSpace(status.Package.Sha256);
+        _canDownload = !status.Installed &&
+                       !string.IsNullOrWhiteSpace(status.Package.DownloadUrl) &&
+                       !string.IsNullOrWhiteSpace(status.Package.Sha256);
         CanActivate = status.Installed && status.Valid && !status.Active;
-        CanRemove = status.Installed;
-        Status = !status.Installed
-            ? CanDownload ? "Available online" : "Not installed"
+        CanRemove = status.Installed && !status.Active;
+        _status = !status.Installed
+            ? _canDownload ? "Available online" : "Not installed"
             : !status.Valid ? "Broken" : status.Active ? "Active" : "Installed";
         InstallPath = status.Installed
             ? Path.Combine(Path.GetFullPath(rootPath), "runtime", Key, Version)
@@ -142,23 +148,68 @@ public sealed class RuntimeRowViewModel
         Key = runtime.Key;
         Name = runtime.Key;
         Version = runtime.Version;
-        Status = !runtime.IsValid ? "Broken" : runtime.IsActive ? "Active" : "Installed";
+        _status = !runtime.IsValid ? "Broken" : runtime.IsActive ? "Active" : "Installed";
         InstallPath = runtime.InstallPath;
         IsInstalled = true;
-        CanDownload = false;
+        _canDownload = false;
         CanActivate = runtime.IsValid && !runtime.IsActive;
-        CanRemove = true;
+        CanRemove = !runtime.IsActive;
     }
 
     public string Key { get; }
     public string Name { get; }
     public string Version { get; }
-    public string Status { get; }
+    public string Status { get => _status; private set => SetProperty(ref _status, value); }
     public string InstallPath { get; }
     public bool IsInstalled { get; }
-    public bool CanDownload { get; }
+    public bool CanDownload { get => _canDownload; private set => SetProperty(ref _canDownload, value); }
     public bool CanActivate { get; }
     public bool CanRemove { get; }
+    public int ProgressPercent
+    {
+        get => _progressPercent;
+        private set
+        {
+            if (SetProperty(ref _progressPercent, value))
+                OnPropertyChanged(nameof(ProgressText));
+        }
+    }
+    public string ProgressText => $"{ProgressPercent}%";
+    public Visibility ProgressVisibility { get => _progressVisibility; private set => SetProperty(ref _progressVisibility, value); }
+
+    public void BeginInstall()
+    {
+        ProgressPercent = 0;
+        ProgressVisibility = Visibility.Visible;
+        CanDownload = false;
+        Status = "Preparing installation...";
+    }
+
+    public void SetInstallProgress(int percentage)
+    {
+        var normalized = Math.Clamp(percentage, 0, 100);
+        if (normalized < ProgressPercent)
+            return;
+
+        ProgressPercent = normalized;
+        Status = ProgressPercent switch
+        {
+            < 5 => "Preparing installation...",
+            < 68 => $"Downloading... {ProgressPercent}%",
+            < 74 => $"Verifying package... {ProgressPercent}%",
+            < 82 => $"Extracting package... {ProgressPercent}%",
+            < 95 => $"Installing module... {ProgressPercent}%",
+            < 100 => $"Activating module... {ProgressPercent}%",
+            _ => "Installed · 100%"
+        };
+    }
+
+    public void SetInstallFailed()
+    {
+        ProgressVisibility = Visibility.Collapsed;
+        CanDownload = true;
+        Status = "Installation failed";
+    }
 }
 
 public sealed class DiagnosticRowViewModel(DiagnosticCheck check)

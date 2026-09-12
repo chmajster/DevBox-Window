@@ -78,6 +78,61 @@ public sealed class ArchiveSafetyTests
         }
     }
 
+    [Fact]
+    public async Task DownloadToFileAsync_StreamingLimitFailure_RemovesPartialDestination()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var payload = Enumerable.Range(0, 4096).Select(index => (byte)(index % 251)).ToArray();
+            using var client = new HttpClient(new UnknownLengthHandler(payload));
+            var destination = Path.Combine(root, "partial.zip");
+
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                ArchiveSafety.DownloadToFileAsync(client, new Uri("https://example.test/package.zip"), destination, 1024, "Test", CancellationToken.None));
+
+            Assert.False(File.Exists(destination));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task DownloadToFileAsync_ReportsProgressWithoutDisablingSizeLimit()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var payload = Enumerable.Range(0, 4096).Select(index => (byte)(index % 251)).ToArray();
+            using var client = new HttpClient(new PayloadHandler(payload));
+            var destination = Path.Combine(root, "payload.zip");
+            var values = new List<int>();
+            var progress = new InlineProgress<int>(values.Add);
+
+            await ArchiveSafety.DownloadToFileAsync(
+                client,
+                new Uri("https://example.test/package.zip"),
+                destination,
+                payload.Length,
+                "Test",
+                CancellationToken.None,
+                progress);
+
+            Assert.True(File.Exists(destination));
+            Assert.Equal(payload, File.ReadAllBytes(destination));
+            Assert.NotEmpty(values);
+            Assert.Equal(0, values[0]);
+            Assert.Equal(100, values[^1]);
+            Assert.All(values, value => Assert.InRange(value, 0, 100));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
     private static string TemporaryRoot()
     {
         var root = Path.Combine(Path.GetTempPath(), "devbox-archive-tests", Guid.NewGuid().ToString("N"));
@@ -101,5 +156,43 @@ public sealed class ArchiveSafetyTests
             content.Headers.ContentLength = 2048;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
         }
+    }
+
+    private sealed class PayloadHandler(byte[] payload) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(payload)
+            });
+    }
+
+    private sealed class UnknownLengthHandler(byte[] payload) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new UnknownLengthContent(payload)
+            });
+    }
+
+    private sealed class UnknownLengthContent(byte[] payload) : HttpContent
+    {
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            stream.WriteAsync(payload).AsTask();
+
+        protected override Task<Stream> CreateContentReadStreamAsync() =>
+            Task.FromResult<Stream>(new MemoryStream(payload, writable: false));
+    }
+
+    private sealed class InlineProgress<T>(Action<T> callback) : IProgress<T>
+    {
+        public void Report(T value) => callback(value);
     }
 }

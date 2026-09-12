@@ -10,6 +10,10 @@ public sealed partial class EnvironmentProfileService
     private const string RecommendedPhp = "8.5.10";
     private const string RecommendedNginx = "1.31.5";
     private const string RecommendedMySql = "8.4.11";
+    private static readonly HashSet<string> AllowedActionTools = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "php", "composer", "npm", "pnpm"
+    };
     private readonly string _profilesPath;
 
     public EnvironmentProfileService(string rootPath)
@@ -115,7 +119,7 @@ public sealed partial class EnvironmentProfileService
     {
         Key = action.Key.Trim().ToLowerInvariant(),
         DisplayName = action.DisplayName.Trim(),
-        Executable = action.Executable.Trim(),
+        Executable = action.Executable.Trim().ToLowerInvariant(),
         Arguments = action.Arguments.Select(value => value.Trim()).ToArray(),
         WorkingDirectory = string.IsNullOrWhiteSpace(action.WorkingDirectory) ? null : action.WorkingDirectory.Trim()
     };
@@ -159,13 +163,22 @@ public sealed partial class EnvironmentProfileService
 
         foreach (var action in profile.Actions)
         {
-            if (action is null || !SafeKeyRegex().IsMatch(action.Key ?? string.Empty) || string.IsNullOrWhiteSpace(action.DisplayName))
+            if (action is null || !SafeKeyRegex().IsMatch(action.Key ?? string.Empty))
                 throw new InvalidDataException("Environment profile contains an invalid project action.");
-            if (string.IsNullOrWhiteSpace(action.Executable) || action.Arguments is null ||
+            if (string.IsNullOrWhiteSpace(action.DisplayName) || action.DisplayName.Length > 120)
+                throw new InvalidDataException($"Action '{action.Key}' display name is invalid.");
+            if (!AllowedActionTools.Contains(action.Executable ?? string.Empty))
+                throw new InvalidDataException($"Action '{action.Key}' uses unsupported tool '{action.Executable}'.");
+            if (action.Arguments is null || action.Arguments.Count > 64 ||
                 action.Arguments.Any(value => value is null || value.Length > 2048 || value.Contains('\0')))
-                throw new InvalidDataException($"Action '{action.Key}' contains an invalid executable or arguments.");
+                throw new InvalidDataException($"Action '{action.Key}' contains invalid arguments.");
             if (action.TimeoutSeconds is < 1 or > 3600)
                 throw new InvalidDataException($"Action '{action.Key}' timeout must be between 1 and 3600 seconds.");
+            if (!string.IsNullOrWhiteSpace(action.WorkingDirectory) &&
+                (Path.IsPathRooted(action.WorkingDirectory) || ContainsParentTraversal(action.WorkingDirectory)))
+            {
+                throw new InvalidDataException($"Action '{action.Key}' working directory must stay relative to the project root without parent traversal.");
+            }
         }
         var duplicateAction = profile.Actions
             .Where(action => action is not null)
@@ -174,6 +187,10 @@ public sealed partial class EnvironmentProfileService
         if (duplicateAction is not null)
             throw new InvalidDataException($"Environment profile contains duplicate action key '{duplicateAction.Key}'.");
     }
+
+    private static bool ContainsParentTraversal(string value) =>
+        value.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries)
+            .Any(segment => segment == "..");
 
     private static void AtomicWrite(string path, string content)
     {

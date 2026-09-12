@@ -242,7 +242,7 @@ public sealed class EnvironmentCenterViewModel : ObservableObject, IDisposable
     private Task SnapshotRestoreAsync() => QueueAsync("Restore project snapshot", async token =>
     {
         var target = Require(ProjectName, "Target project name");
-        var path = await new ProjectSnapshotService(_rootPath).RestoreAsync(Require(SnapshotPath, "Snapshot path"), target, overwrite: true, cancellationToken: token);
+        var path = await new ProjectSnapshotService(_rootPath).RestoreAsync(Require(SnapshotPath, "Snapshot path"), target, overwrite: false, cancellationToken: token);
         Status = $"Snapshot restored to {path}.";
     });
 
@@ -255,7 +255,7 @@ public sealed class EnvironmentCenterViewModel : ObservableObject, IDisposable
 
     private Task TransferImportAsync() => QueueAsync("Import project", async token =>
     {
-        var path = await new ProjectTransferService(_rootPath).ImportAsync(Require(TransferPath, "Project archive"), string.IsNullOrWhiteSpace(ProjectName) ? null : ProjectName, overwrite: true, cancellationToken: token);
+        var path = await new ProjectTransferService(_rootPath).ImportAsync(Require(TransferPath, "Project archive"), string.IsNullOrWhiteSpace(ProjectName) ? null : ProjectName, overwrite: false, cancellationToken: token);
         Status = $"Project imported to {path}.";
     });
 

@@ -230,23 +230,44 @@ public sealed class AdvancedDiagnosticsService
                 continue;
             try
             {
-                stale.AddRange(Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories)
-                    .Where(path =>
-                    {
-                        var name = Path.GetFileName(path);
-                        if (!(name.Contains(".backup-", StringComparison.OrdinalIgnoreCase) || name.StartsWith(".current-", StringComparison.OrdinalIgnoreCase)))
-                            return false;
-                        return Directory.GetLastWriteTimeUtc(path) < DateTime.UtcNow.AddHours(-24);
-                    })
-                    .Take(50));
+                foreach (var path in EnumerateDirectoriesWithoutReparsePoints(root))
+                {
+                    var name = Path.GetFileName(path);
+                    if (!(name.Contains(".backup-", StringComparison.OrdinalIgnoreCase) || name.StartsWith(".current-", StringComparison.OrdinalIgnoreCase)))
+                        continue;
+                    if (Directory.GetLastWriteTimeUtc(path) >= DateTime.UtcNow.AddHours(-24))
+                        continue;
+                    stale.Add(path);
+                    if (stale.Count >= 50)
+                        break;
+                }
             }
-            catch (UnauthorizedAccessException ex)
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
             {
                 findings.Add(Warning("temp-scan-access", "Filesystem", "Some temporary directories could not be scanned.", ex.Message));
             }
+            if (stale.Count >= 50)
+                break;
         }
         if (stale.Count > 0)
             findings.Add(Warning("stale-transaction-artifacts", "Filesystem", "Stale transaction directories were found.", string.Join(" | ", stale.Take(10)), "Remove them after confirming no DevBox operation is running."));
+    }
+
+    private static IEnumerable<string> EnumerateDirectoriesWithoutReparsePoints(string root)
+    {
+        var pending = new Stack<string>();
+        pending.Push(root);
+        while (pending.Count > 0)
+        {
+            var current = pending.Pop();
+            foreach (var child in Directory.EnumerateDirectories(current, "*", SearchOption.TopDirectoryOnly))
+            {
+                if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) != 0)
+                    continue;
+                yield return child;
+                pending.Push(child);
+            }
+        }
     }
 
     private static AdvancedDiagnosticFinding Info(string key, string area, string summary, string details) => new(key, area, DiagnosticSeverity.Info, summary, details);

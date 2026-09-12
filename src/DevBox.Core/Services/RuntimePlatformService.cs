@@ -11,6 +11,7 @@ public sealed class RuntimePlatformService : IDisposable
     private const int MaximumImportedEntries = 100_000;
     private readonly string _rootPath;
     private readonly string _catalogPath;
+    private readonly string _releaseCatalogPath;
     private readonly RuntimeManager _runtimeManager;
     private bool _disposed;
 
@@ -19,14 +20,17 @@ public sealed class RuntimePlatformService : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         _rootPath = Path.GetFullPath(rootPath);
         _catalogPath = Path.Combine(_rootPath, "config", "runtime-catalog.json");
+        _releaseCatalogPath = Path.Combine(_rootPath, "config", "runtime-catalog.release.json");
         _runtimeManager = new RuntimeManager(_rootPath, httpClient);
     }
 
     public IReadOnlyList<RuntimePackageEntry> GetCatalog()
     {
         ThrowIfDisposed();
-        var custom = LoadCustomCatalog();
+        var release = LoadCatalog(_releaseCatalogPath, "config/runtime-catalog.release.json");
+        var custom = LoadCatalog(_catalogPath, "config/runtime-catalog.json");
         return BuiltInCatalog()
+            .Concat(release)
             .Concat(custom)
             .GroupBy(item => $"{item.Key}|{item.Version}|{item.Architecture}", StringComparer.OrdinalIgnoreCase)
             .Select(group => group.Last())
@@ -38,8 +42,8 @@ public sealed class RuntimePlatformService : IDisposable
 
     public RuntimePackageEntry GetPackage(string key, string version)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
-        ArgumentException.ThrowIfNullOrWhiteSpace(version);
+        ValidateSegment(key, nameof(key));
+        ValidateSegment(version, nameof(version));
         var architecture = RuntimeInformation.ProcessArchitecture;
         var architectureName = CurrentArchitecture();
         return GetCatalog()
@@ -55,9 +59,19 @@ public sealed class RuntimePlatformService : IDisposable
     public IReadOnlyList<RuntimeVersionStatus> GetStatuses(string? runtimeKey = null)
     {
         ThrowIfDisposed();
+        if (!string.IsNullOrWhiteSpace(runtimeKey))
+            ValidateSegment(runtimeKey, nameof(runtimeKey));
+
+        var architecture = RuntimeInformation.ProcessArchitecture;
+        var architectureName = CurrentArchitecture();
         var packages = GetCatalog()
             .Where(item => string.IsNullOrWhiteSpace(runtimeKey) || item.Key.Equals(runtimeKey, StringComparison.OrdinalIgnoreCase))
-            .Where(item => IsPackageArchitectureCompatible(item.Architecture, RuntimeInformation.ProcessArchitecture))
+            .Where(item => IsPackageArchitectureCompatible(item.Architecture, architecture))
+            .GroupBy(item => $"{item.Key}|{item.Version}", StringComparer.OrdinalIgnoreCase)
+            .Select(group => group
+                .OrderByDescending(item => item.Architecture.Equals(architectureName, StringComparison.OrdinalIgnoreCase))
+                .ThenByDescending(item => item.Architecture.Equals("any", StringComparison.OrdinalIgnoreCase))
+                .First())
             .ToArray();
         var statuses = new List<RuntimeVersionStatus>();
 
@@ -73,19 +87,83 @@ public sealed class RuntimePlatformService : IDisposable
                 DetermineSupportState(package.EndOfLifeDate)));
         }
 
-        return statuses;
+        var candidateKeys = new HashSet<string>(packages.Select(item => item.Key), StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(runtimeKey))
+        {
+            candidateKeys.Add(runtimeKey);
+        }
+        else
+        {
+            var runtimeRoot = Path.Combine(_rootPath, "runtime");
+            if (Directory.Exists(runtimeRoot))
+            {
+                foreach (var directory in Directory.GetDirectories(runtimeRoot))
+                    candidateKeys.Add(Path.GetFileName(directory));
+            }
+        }
+
+        foreach (var key in candidateKeys)
+        {
+            string executable;
+            try
+            {
+                executable = GuessExecutable(key);
+            }
+            catch (KeyNotFoundException)
+            {
+                continue;
+            }
+
+            var displayName = packages.FirstOrDefault(item => item.Key.Equals(key, StringComparison.OrdinalIgnoreCase))?.DisplayName ?? key;
+            foreach (var installation in _runtimeManager.GetInstalled(key, executable))
+            {
+                if (packages.Any(item => item.Key.Equals(key, StringComparison.OrdinalIgnoreCase) &&
+                                         item.Version.Equals(installation.Version, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+
+                var installedPackage = new RuntimePackageEntry
+                {
+                    Key = key,
+                    DisplayName = displayName,
+                    Version = installation.Version,
+                    Architecture = architectureName,
+                    ExecutableRelativePath = executable
+                };
+                statuses.Add(new RuntimeVersionStatus(
+                    installedPackage,
+                    Installed: true,
+                    Active: installation.IsActive,
+                    Valid: installation.IsValid,
+                    SupportState: RuntimeSupportState.Unknown));
+            }
+        }
+
+        return statuses
+            .OrderBy(item => item.Package.Key, StringComparer.OrdinalIgnoreCase)
+            .ThenByDescending(item => ParseVersion(item.Package.Version))
+            .ThenByDescending(item => item.Package.Version, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
-    public async Task InstallAsync(string key, string version, CancellationToken cancellationToken = default)
+    public Task InstallAsync(string key, string version, CancellationToken cancellationToken = default) =>
+        InstallAsync(key, version, progress: null, cancellationToken);
+
+    public async Task InstallAsync(
+        string key,
+        string version,
+        IProgress<int>? progress,
+        CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         var package = GetPackage(key, version);
-        await _runtimeManager.InstallAsync(package.ToRuntimeDefinition(), cancellationToken).ConfigureAwait(false);
+        await _runtimeManager.InstallAsync(package.ToRuntimeDefinition(), progress, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task ActivateAsync(string key, string version, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+        ValidateSegment(key, nameof(key));
+        ValidateSegment(version, nameof(version));
         var package = GetPackageOrInstalledPackage(key, version);
         await _runtimeManager.ActivateAsync(key, version, package.ExecutableRelativePath, cancellationToken).ConfigureAwait(false);
     }
@@ -93,6 +171,8 @@ public sealed class RuntimePlatformService : IDisposable
     public async Task RemoveAsync(string key, string version, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+        ValidateSegment(key, nameof(key));
+        ValidateSegment(version, nameof(version));
         _ = GetPackageOrInstalledPackage(key, version);
         await _runtimeManager.RemoveAsync(key, version, cancellationToken).ConfigureAwait(false);
     }
@@ -111,6 +191,7 @@ public sealed class RuntimePlatformService : IDisposable
         cancellationToken.ThrowIfCancellationRequested();
 
         ValidatePackage(package);
+        ValidateSha256(expectedSha256, "Expected runtime archive SHA-256");
         var sourceArchive = Path.GetFullPath(archivePath);
         if (!File.Exists(sourceArchive))
             throw new FileNotFoundException("Runtime archive was not found.", sourceArchive);
@@ -144,14 +225,26 @@ public sealed class RuntimePlatformService : IDisposable
             if (Directory.Exists(installPath))
                 throw new InvalidOperationException($"Runtime {package.Key} {package.Version} is already installed.");
             Directory.Move(staging, installPath);
+
             try
             {
                 if (activate)
                     await _runtimeManager.ActivateUnderLockAsync(package.Key, package.Version, package.ExecutableRelativePath, cancellationToken).ConfigureAwait(false);
             }
-            catch
+            catch (Exception original)
             {
-                TryDeleteDirectory(installPath);
+                try
+                {
+                    if (Directory.Exists(installPath))
+                        Directory.Delete(installPath, recursive: true);
+                }
+                catch (Exception rollbackError) when (rollbackError is IOException or UnauthorizedAccessException)
+                {
+                    throw new AggregateException(
+                        $"Runtime import failed and rollback of {package.Key} {package.Version} was incomplete.",
+                        original,
+                        rollbackError);
+                }
                 throw;
             }
         }
@@ -167,7 +260,7 @@ public sealed class RuntimePlatformService : IDisposable
         ArgumentNullException.ThrowIfNull(package);
         ValidatePackage(package);
         using var mutationLock = CrossProcessFileLock.Acquire(_catalogPath + ".lock", TimeSpan.FromSeconds(15));
-        var custom = LoadCustomCatalog().ToList();
+        var custom = LoadCatalog(_catalogPath, "config/runtime-catalog.json").ToList();
         var index = custom.FindIndex(item =>
             item.Key.Equals(package.Key, StringComparison.OrdinalIgnoreCase) &&
             item.Version.Equals(package.Version, StringComparison.OrdinalIgnoreCase) &&
@@ -212,29 +305,34 @@ public sealed class RuntimePlatformService : IDisposable
         }
     }
 
-    private IReadOnlyList<RuntimePackageEntry> LoadCustomCatalog()
+    private IReadOnlyList<RuntimePackageEntry> LoadCatalog(string path, string displayPath)
     {
-        if (!File.Exists(_catalogPath))
+        if (!File.Exists(path))
             return Array.Empty<RuntimePackageEntry>();
         try
         {
-            var packages = JsonSerializer.Deserialize<List<RuntimePackageEntry?>>(File.ReadAllText(_catalogPath), JsonOptions)
+            var packages = JsonSerializer.Deserialize<List<RuntimePackageEntry?>>(File.ReadAllText(path), JsonOptions)
                 ?? new List<RuntimePackageEntry?>();
             if (packages.Any(package => package is null))
-                throw new InvalidDataException("config/runtime-catalog.json contains a null runtime entry.");
+                throw new InvalidDataException($"{displayPath} contains a null entry.");
+
             var materialized = packages.Select(package => package!).ToArray();
             foreach (var package in materialized)
                 ValidatePackage(package);
+
             var duplicate = materialized
-                .GroupBy(package => $"{package.Key}|{package.Version}|{package.Architecture}", StringComparer.OrdinalIgnoreCase)
+                .GroupBy(
+                    package => $"{package.Key}|{package.Version}|{package.Architecture}",
+                    StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault(group => group.Count() > 1);
             if (duplicate is not null)
-                throw new InvalidDataException($"config/runtime-catalog.json contains duplicate runtime identity '{duplicate.Key}'.");
+                throw new InvalidDataException($"{displayPath} contains a duplicate runtime key/version/architecture entry.");
+
             return materialized;
         }
         catch (JsonException ex)
         {
-            throw new InvalidDataException("config/runtime-catalog.json contains invalid JSON.", ex);
+            throw new InvalidDataException($"{displayPath} contains invalid JSON.", ex);
         }
     }
 
@@ -317,53 +415,63 @@ public sealed class RuntimePlatformService : IDisposable
 
     private static void ValidatePackage(RuntimePackageEntry package)
     {
-        if (!IsSafePathSegment(package.Key))
-            throw new InvalidDataException("Runtime key is invalid.");
-        if (!IsSafePathSegment(package.Version))
-            throw new InvalidDataException("Runtime version is invalid.");
-        ValidateRelativePackagePath(package.ExecutableRelativePath, "Runtime executable path");
-        if (!string.IsNullOrWhiteSpace(package.ArchiveRootDirectory))
-            ValidateRelativePackagePath(package.ArchiveRootDirectory, "Runtime archive root");
-        if (string.IsNullOrWhiteSpace(package.Architecture) || package.Architecture.Length > 32)
+        ValidateSegment(package.Key, "Runtime key");
+        ValidateSegment(package.Version, "Runtime version");
+        if (string.IsNullOrWhiteSpace(package.DisplayName))
+            throw new InvalidDataException("Runtime display name is required.");
+        if (string.IsNullOrWhiteSpace(package.Architecture) ||
+            package.Architecture.Any(character => !char.IsLetterOrDigit(character) && character is not '-' and not '_'))
             throw new InvalidDataException("Runtime architecture is invalid.");
+        ValidateRelativePath(package.ExecutableRelativePath, "Runtime executable path");
+        if (!string.IsNullOrWhiteSpace(package.ArchiveRootDirectory))
+            ValidateRelativePath(package.ArchiveRootDirectory, "Runtime archive root");
         if (!string.IsNullOrWhiteSpace(package.DownloadUrl))
         {
             if (!Uri.TryCreate(package.DownloadUrl, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
                 throw new InvalidDataException("Runtime catalog download URL must use HTTPS.");
-            if (string.IsNullOrWhiteSpace(package.Sha256) || package.Sha256.Trim().Length != 64 || !package.Sha256.Trim().All(Uri.IsHexDigit))
-                throw new InvalidDataException("Remote runtime catalog entries require a valid pinned SHA-256 digest.");
+            ValidateSha256(package.Sha256, "Runtime catalog SHA-256");
+        }
+        else if (!string.IsNullOrWhiteSpace(package.Sha256))
+        {
+            throw new InvalidDataException("Runtime catalog SHA-256 cannot be specified without a download URL.");
         }
     }
 
-    private static bool IsSafePathSegment(string value) =>
-        !string.IsNullOrWhiteSpace(value) &&
-        value is not "." and not ".." &&
-        value.IndexOfAny(Path.GetInvalidFileNameChars()) < 0 &&
-        !value.Contains(Path.DirectorySeparatorChar) &&
-        !value.Contains(Path.AltDirectorySeparatorChar);
+    private static void ValidateSha256(string? value, string label)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Trim().Length != 64)
+            throw new InvalidDataException($"{label} must contain 64 hexadecimal characters.");
+        try
+        {
+            if (Convert.FromHexString(value.Trim()).Length != 32)
+                throw new InvalidDataException($"{label} must contain 64 hexadecimal characters.");
+        }
+        catch (FormatException ex)
+        {
+            throw new InvalidDataException($"{label} must contain 64 hexadecimal characters.", ex);
+        }
+    }
 
-    private static void ValidateRelativePackagePath(string value, string description)
+    private static void ValidateSegment(string? value, string label)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value is "." or ".." ||
+            value.Any(character => !char.IsLetterOrDigit(character) && character is not '.' and not '-' and not '_'))
+            throw new InvalidDataException($"{label} is invalid.");
+    }
+
+    private static void ValidateRelativePath(string? value, string label)
     {
         if (string.IsNullOrWhiteSpace(value) || Path.IsPathRooted(value))
-            throw new InvalidDataException($"{description} must be relative.");
-        var normalized = value.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
-        if (normalized.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries).Any(segment => segment == ".."))
-            throw new InvalidDataException($"{description} cannot contain parent traversal.");
+            throw new InvalidDataException($"{label} must be a non-empty relative path.");
+        var normalized = value.Replace('/', Path.DirectorySeparatorChar);
+        if (normalized.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries).Any(part => part is "." or ".."))
+            throw new InvalidDataException($"{label} cannot contain traversal segments.");
     }
 
     private static void VerifySha256(string path, string expected)
     {
-        byte[] expectedBytes;
-        try
-        {
-            expectedBytes = Convert.FromHexString(expected.Trim());
-        }
-        catch (FormatException ex)
-        {
-            throw new InvalidDataException("Expected runtime archive SHA-256 is invalid.", ex);
-        }
-        if (expectedBytes.Length != 32)
-            throw new InvalidDataException("Expected runtime archive SHA-256 must contain 64 hexadecimal characters.");
+        ValidateSha256(expected, "Expected runtime archive SHA-256");
+        var expectedBytes = Convert.FromHexString(expected.Trim());
         using var stream = File.OpenRead(path);
         var actual = SHA256.HashData(stream);
         if (!CryptographicOperations.FixedTimeEquals(actual, expectedBytes))

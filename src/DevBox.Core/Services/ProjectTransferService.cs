@@ -394,7 +394,9 @@ public sealed class ProjectTransferService
         if (!Directory.Exists(root))
             throw new DirectoryNotFoundException($"Project directory was not found: {root}");
         return PathSafety.EnsureUnderRootWithoutReparsePoints(
-            _wwwRoot, root, "Project transfer is restricted to the DevBox www directory and cannot traverse a reparse point.");
+            _wwwRoot,
+            root,
+            "Project transfer is restricted to the DevBox www directory and cannot traverse a reparse point.");
     }
 
     private static JsonObject ReadManifest(string projectRoot)

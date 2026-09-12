@@ -92,6 +92,7 @@ public sealed class DatabaseRuntimeService : IDisposable
             return instance;
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var createdDataDirectory = false;
         try
         {
             using var initializationLock = await CrossProcessFileLock.AcquireAsync(
@@ -102,9 +103,14 @@ public sealed class DatabaseRuntimeService : IDisposable
                 return ToCurrentInstance(instance);
 
             var dataPath = instance.DataPath;
-            if (Directory.Exists(dataPath) && Directory.EnumerateFileSystemEntries(dataPath).Any())
+            var dataDirectoryExisted = Directory.Exists(dataPath);
+            if (dataDirectoryExisted && Directory.EnumerateFileSystemEntries(dataPath).Any())
                 throw new InvalidOperationException($"Database data directory is non-empty but not recognized as initialized: {dataPath}");
-            Directory.CreateDirectory(dataPath);
+            if (!dataDirectoryExisted)
+            {
+                Directory.CreateDirectory(dataPath);
+                createdDataDirectory = true;
+            }
             var runtime = instance.RuntimePath;
             ProcessResult result;
 
@@ -134,7 +140,7 @@ public sealed class DatabaseRuntimeService : IDisposable
         }
         catch
         {
-            if (Directory.Exists(instance.DataPath) && !IsInitialized(instance.Engine, instance.Version))
+            if (createdDataDirectory && Directory.Exists(instance.DataPath) && !IsInitialized(instance.Engine, instance.Version))
                 TryDeleteDirectory(instance.DataPath);
             throw;
         }
@@ -416,7 +422,7 @@ public sealed class DatabaseRuntimeService : IDisposable
                     throw new InvalidDataException("Database runtime registration contains an invalid port.");
             }
             var duplicateIdentity = materialized
-                .GroupBy(item => $"{item.Engine}|{item.Version}", StringComparer.OrdinalIgnoreCase)
+                .GroupBy(item => $"{NormalizeEngine(ParseEngine(item.Engine))}|{item.Version}", StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault(group => group.Count() > 1);
             if (duplicateIdentity is not null)
                 throw new InvalidDataException($"Database runtime registrations contain duplicate runtime '{duplicateIdentity.Key}'.");
@@ -567,7 +573,6 @@ public sealed class DatabaseRuntimeService : IDisposable
     private static IReadOnlyDictionary<string, string?>? MySqlPasswordEnvironment(DatabaseConnectionOptions options) =>
         string.IsNullOrEmpty(options.Password) ? null : new Dictionary<string, string?> { ["MYSQL_PWD"] = options.Password };
 
-
     private static async Task<ProcessResult> RunProcessAsync(
         string executable,
         IReadOnlyList<string> arguments,
@@ -633,7 +638,7 @@ public sealed class DatabaseRuntimeService : IDisposable
             var stderr = await stderrTask.ConfigureAwait(false);
             return new ProcessResult(process.ExitCode, stdout, stderr);
         }
-        catch (OperationCanceledException)
+        catch
         {
             try
             {
@@ -641,6 +646,7 @@ public sealed class DatabaseRuntimeService : IDisposable
                     process.Kill(entireProcessTree: true);
             }
             catch (InvalidOperationException) { }
+            catch (System.ComponentModel.Win32Exception) { }
             throw;
         }
         finally

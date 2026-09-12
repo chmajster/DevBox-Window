@@ -517,7 +517,9 @@ public sealed class EnvironmentLockService : IDisposable
         if (!Directory.Exists(root))
             throw new DirectoryNotFoundException($"Project directory was not found: {root}");
         return PathSafety.EnsureUnderRootWithoutReparsePoints(
-            _wwwRoot, root, "Environment operations are restricted to the DevBox www directory and cannot traverse a reparse point.");
+            _wwwRoot,
+            root,
+            "Environment operations are restricted to project directories inside the DevBox www directory and cannot traverse a reparse point.");
     }
 
     private string? ReadActiveVersion(string key)

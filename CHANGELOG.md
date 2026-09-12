@@ -9,6 +9,8 @@ All notable changes to DevBox Windows are documented here.
 
 ### Added
 
+- Main window now opens maximized and exposes a dedicated Modules/Runtimes workflow with on-demand installation, percentage progress, and immediate post-install status refresh.
+- Missing optional/runtime components no longer force a blocking First Run loop; the dashboard remains available so modules can be installed later from the main UI.
 - GitHub Actions now separates automatic pull-request validation from publishing: PRs run the reusable Windows test/package validation workflow, while releases are started manually with a `patch`, `minor`, or `major` version increment that updates version metadata, creates the tag and publishes the GitHub Release.
 - Project Manager WPF workflow for creating, importing, diagnosing, repairing and operating local projects.
 - Automatic stack detection for Laravel, Symfony, WordPress, Composer PHP and Node projects, including Composer `ext-*` requirement discovery.
@@ -43,19 +45,39 @@ All notable changes to DevBox Windows are documented here.
 
 ### Fixed
 
+- Clean reinstall now removes DevBox-managed runtime/module payloads as well as application files, verifies cleanup, and preserves directories that are not proven to be DevBox-owned.
+- Release-generated runtime catalogs keep PHP, Nginx and MySQL on verified HTTPS/SHA-256 delivery paths instead of silently accepting unverified remote packages.
+- Interrupted or oversized runtime downloads remove partial destination files, while runtime activation/import failures roll back newly installed payloads instead of leaving half-installed versions.
+- Runtime catalog entries now reject unsafe keys, versions, executable/archive traversal, non-HTTPS URLs, malformed/non-hex SHA-256 values and inconsistent URL/hash pairs.
+- PHP runtime removal is blocked centrally when a Site is still pinned to that version, including callers that bypass the main WPF screen.
+- Database runtime initialization preserves pre-existing non-empty/unrecognized data directories and rejects duplicate engine/version registrations instead of deleting or ambiguously reusing user data.
+- Environment Center snapshot restore/import no longer silently overwrites an existing project; replacement requires an explicit overwrite-capable workflow.
+- MySQL create/restore operations reject system schemas, and project provisioning also blocks MariaDB system schemas plus PostgreSQL `postgres`, `template0` and `template1` from destructive mutation.
+- ADDONS use ownership markers/legacy ownership validation before overwrite, Repair or uninstall, preventing user-owned project directories and vhosts from being deleted as if they were DevBox modules.
+- ADDON marketplace manifests serialize install/entry-point paths relative to the DevBox root and reject paths outside it; malformed PEM/signature data is surfaced as controlled data errors.
 - ADDONS install/entry-point paths now reject junctions, symbolic links and other reparse-point traversal, including direct installer calls that bypass the catalog.
+- ADDONS installed-state detection no longer follows a reparse point to an externally owned directory and requires DevBox ownership in addition to the entry point.
 - ADDONS local URLs are restricted to plain `http://*.test` on port 80, matching the Nginx vhost DevBox actually generates; unsupported HTTPS/custom-port URLs are rejected instead of producing unreachable addons.
 - ADDON keys are capped at 64 characters so hand-edited or marketplace catalogs cannot generate invalid Windows lock/temp paths.
-- ADDON installation now observes cancellation while copying staged files and immediately before the irreversible directory swap, and rejects reparse points in staged payloads.
-- Configuration backup restore now rejects reparse-point traversal out of `backups/configuration`.
+- ADDON installation now observes cancellation while copying staged files and immediately before the irreversible directory swap, rejects reparse points before recursive descent, and keeps the previous installation until configuration succeeds.
+- Configuration reads/writes, validation temp files and backup/restore paths reject reparse-point traversal out of the DevBox root and `backups/configuration`.
+- Managed-service executable, working-directory, stop-executable and log paths now reject reparse-point escape instead of relying on textual path prefixes alone.
+- `LogReader` rejects symlink/reparse-point log targets, preventing Clear/Read operations from truncating or reading a file outside `logs`.
+- `RuntimeLayout.EnsureInitialized` now refuses existing reparse points in critical `config`, `logs`, `tmp`, `www`, `data`, `backups` and `runtime` paths before creating defaults.
 - Project actions, command presets, snapshots, transfers and environment-lock operations now consistently reject project roots that traverse a junction/symbolic link outside the DevBox `www` tree; project-action working directories receive the same protection.
+- Project imports and ADDON staging copy directory trees top-down and reject reparse points before recursion rather than discovering them only after recursive enumeration.
+- Environment profiles and project-action manifests validate the same executable allow-list, argument limits, timeouts and relative working-directory rules, including explicit rejection of `..` parent traversal.
 - Project action and preset command output is drained with a bounded in-memory capture, preventing noisy child processes from growing DevBox memory without limit.
+- Composer installer/signature downloads now use explicit byte limits and safe DevBox temp/tool paths while retaining SHA-384 signature verification.
+- Project snapshot creation is atomic, cleans cancelled partial archives, records only actually included database backups, validates metadata/schema/entry uniqueness/size/compression, and restores database/project backups transactionally.
+- Git bootstrap and WordPress setup rollback now preserve the original failure while also reporting cleanup/rollback failures instead of masking the primary error.
+- A runtime can be successfully installed even when a subsequent service restart fails; the UI reports the restart problem as a warning rather than falsely reporting installation failure.
+- WPF `Application` is explicitly aliased to `System.Windows.Application`, removing the ambiguous type compile failure introduced by implicit global usings.
 - Command event subscribers are isolated so failing `CanExecuteChanged`/`ExecutionFailed` handlers cannot corrupt asynchronous command state.
 - Persisted project-action, environment-profile, runtime-catalog, secret-store and Task Center duplicate identities are rejected deterministically instead of being silently overwritten or surfacing collection exceptions.
 - ADDONS catalogs reject conflicting install directories/domains, initialize safely across competing processes and report malformed marketplace keys as controlled data errors.
 - Managed-service database-port reservations now parse registration property names case-insensitively and reject malformed registration records.
 - Service shutdown re-checks cancellation immediately before forced process-tree termination, closing the graceful-timeout/kill race.
-
 - Local TLS and Local CA mutations now avoid re-entrant lock deadlocks, serialize CA lifecycle operations, and roll back failed CA creation/rotation transactionally.
 - ADDON install/repair/uninstall operations and mutable environment/runtime/service catalogs are serialized across GUI and CLI processes.
 - phpMyAdmin Repair now refreshes a stale MySQL/MariaDB port instead of accepting an otherwise complete obsolete configuration.
@@ -66,7 +88,6 @@ All notable changes to DevBox Windows are documented here.
 - Self-update verifies that a trusted installer is signed by the same publisher identity as the currently running signed DevBox executable and enables certificate revocation checks.
 - Project/Site path validation rejects junctions and other reparse points that could escape the DevBox `www` tree.
 - Runtime activation/import copy loops now observe cancellation between files and directories.
-
 - Environment profile application no longer writes `devbox.lock.json` when prerequisites fail or the apply operation reports warnings.
 - Site, TLS and runtime mutations are serialized across DevBox processes to prevent lost updates and concurrent replacement races.
 - Project and WordPress provisioning now roll back databases created by the failing operation without deleting pre-existing user databases.
@@ -118,6 +139,9 @@ All notable changes to DevBox Windows are documented here.
 
 ### Security
 
+- Reparse-point/junction boundaries are enforced across project execution/archive operations, ADDONS, configuration, managed services, logs and runtime-layout initialization so DevBox cannot be redirected to read, truncate, execute, archive or delete content outside its managed roots.
+- Mutable database operations protect MySQL/MariaDB system schemas and PostgreSQL maintenance/template databases from project-level create/drop/restore paths.
+- Composer installer/signature downloads are bounded before cryptographic verification, closing unbounded-memory/disk consumption paths while preserving the upstream SHA-384 trust check.
 - Self-update now requires both the published SHA-256 checksum and a valid trusted Authenticode signature before the downloaded installer can execute.
 - Manual releases now require the Windows code-signing certificate; unsigned release artifacts are rejected instead of being published for an updater that will not trust them.
 - Runtime and ADDONS downloads now enforce explicit byte limits, and ZIP extraction enforces entry-count/extracted-size limits while rejecting traversal, NTFS alternate data streams, symbolic-link entries and suspicious compression ratios.

@@ -92,13 +92,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         _addonDefinitions = _addonCatalog.GetDefaultAddons().ToDictionary(item => item.Key, StringComparer.OrdinalIgnoreCase);
 
         foreach (var definition in _definitions.Values)
-        {
             Services.Add(new ServiceRowViewModel(definition));
-        }
         foreach (var addon in _addonDefinitions.Values)
-        {
             Addons.Add(new AddonRowViewModel(addon));
-        }
 
         NavigateCommand = new RelayCommand(parameter => Navigate(parameter as string ?? "Dashboard"));
         StartServiceCommand = new AsyncRelayCommand(parameter => RunServiceAsync(parameter, ServiceAction.Start));
@@ -157,9 +153,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         set
         {
             if (SetProperty(ref _newSiteName, value))
-            {
                 ((AsyncRelayCommand)CreateSiteCommand).RaiseCanExecuteChanged();
-            }
         }
     }
 
@@ -206,9 +200,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     public async Task RefreshAddonHealthAsync()
     {
         if (_addonHealthRefreshRunning)
-        {
             return;
-        }
 
         _addonHealthRefreshRunning = true;
         try
@@ -217,9 +209,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             {
                 var row = GetAddonRow(addon.Key);
                 if (!_addonCatalog.IsInstalled(addon) || _busyAddons.Contains(addon.Key))
-                {
                     continue;
-                }
 
                 var domain = new Uri(addon.LocalUrl).Host;
                 var hostConfigured = _hostMappingService.Has(domain);
@@ -238,9 +228,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     public void Dispose()
     {
         if (_disposed)
-        {
             return;
-        }
         _disposed = true;
         _refreshTimer.Stop();
         _refreshTimer.Tick -= RefreshTimerOnTick;
@@ -249,9 +237,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private async void RefreshTimerOnTick(object? sender, EventArgs e)
     {
         if (_refreshTickRunning || _disposed)
-        {
             return;
-        }
 
         _refreshTickRunning = true;
         try
@@ -265,9 +251,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                 await RefreshAddonHealthAsync();
             }
             if (CurrentSection == "Logs" && SelectedLog is not null)
-            {
                 LoadSelectedLog();
-            }
         }
         catch (Exception ex)
         {
@@ -308,9 +292,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private async Task RunServiceAsync(object? parameter, ServiceAction action)
     {
         if (parameter is not ServiceRowViewModel row || !_definitions.TryGetValue(row.Key, out var definition))
-        {
             return;
-        }
         _ = await ExecuteServiceAsync(definition, action, showDialog: true);
     }
 
@@ -330,13 +312,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
             var error = await ExecuteServiceAsync(definition, action, showDialog: false);
             if (error is null)
-            {
                 succeeded++;
-            }
             else
-            {
                 failures.Add($"{definition.DisplayName}: {error}");
-            }
         }
 
         var operation = action switch
@@ -378,9 +356,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         {
             error = ex.Message;
             if (showDialog)
-            {
                 _dialogs.Error($"{definition.DisplayName} error", ex.Message);
-            }
         }
         finally
         {
@@ -397,8 +373,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             await _addonInstaller.InstallAsync(addon);
             RuntimeLayout.EnsureInitialized(_rootPath);
             var phpCheck = await _phpExtensionInspector.CheckAsync(addon.RequiredPhpExtensions);
-            var phpConfigChanged = phpCheck.RuntimeAvailable &&
-                                   _phpExtensionInspector.EnsureConfigured(addon.RequiredPhpExtensions);
+            var phpConfigChanged = phpCheck.RuntimeAvailable && _phpExtensionInspector.EnsureConfigured(addon.RequiredPhpExtensions);
             var domain = new Uri(addon.LocalUrl).Host;
             var hostConfigured = await _hostMappingService.EnsureAsync(domain);
             if (phpConfigChanged) await RestartIfRunningAsync("php");
@@ -409,7 +384,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             {
                 _dialogs.Warning(
                     $"{addon.DisplayName} downloaded",
-                    $"{addon.DisplayName} {addon.Version} was downloaded and configured, but PHP is not installed. Open Runtimes and click Download for PHP.");
+                    $"{addon.DisplayName} {addon.Version} was downloaded and configured, but PHP is not installed. Open Modules and click Install for PHP.");
             }
             else
             {
@@ -535,9 +510,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             NewSiteDomain = string.Empty;
             RefreshSites();
             if (!hostConfigured)
-            {
                 _dialogs.Warning("Site created", $"{site.Domain} was created, but the hosts mapping could not be configured.");
-            }
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
@@ -557,13 +530,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             }
 
             if (string.IsNullOrWhiteSpace(site.PhpVersion))
-            {
                 await EnsureRunningAsync("php");
-            }
             else
-            {
                 _ = await _phpRuntimePoolManager.EnsureRunningAsync(site.PhpVersion);
-            }
 
             await EnsureRunningAsync("nginx");
             _shell.Open(site.Url);
@@ -577,9 +546,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private void OpenSiteFolder(object? parameter)
     {
         if (parameter is SiteRowViewModel site)
-        {
             TryOpen(site.DocumentRoot);
-        }
     }
 
     private async Task DeleteSiteAsync(object? parameter)
@@ -603,29 +570,17 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         if (parameter is not RuntimeRowViewModel runtime || !runtime.CanDownload) return;
 
+        runtime.BeginInstall();
+        var progress = new DispatcherProgress<int>(Application.Current.Dispatcher, runtime.SetInstallProgress);
         _definitions.TryGetValue(runtime.Key, out var service);
         var wasRunning = service is not null && _processManager.GetStatus(service).State == ServiceState.Running;
 
         try
         {
             if (wasRunning)
-            {
                 await _processManager.StopAsync(service!);
-            }
 
-            // RuntimeManager.InstallAsync verifies SHA-256 and atomically activates the downloaded version.
-            await _runtimePlatformService.InstallAsync(runtime.Key, runtime.Version);
-
-            if (wasRunning)
-            {
-                await _processManager.StartAsync(service!);
-            }
-
-            RefreshRuntimes();
-            RefreshStatuses();
-            _dialogs.Info(
-                $"{runtime.Name} downloaded",
-                $"{runtime.Name} {runtime.Version} was downloaded, verified and activated.");
+            await _runtimePlatformService.InstallAsync(runtime.Key, runtime.Version, progress);
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException or FileNotFoundException or Win32Exception)
         {
@@ -641,14 +596,42 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                 {
                     _dialogs.Warning(
                         "Service recovery failed",
-                        $"{runtime.Name} download failed and {service.DisplayName} could not be restarted: {recoveryError.Message}");
+                        $"{runtime.Name} installation failed and {service.DisplayName} could not be restarted: {recoveryError.Message}");
                 }
             }
 
-            RefreshRuntimes();
+            runtime.SetInstallFailed();
             RefreshStatuses();
-            _dialogs.Error($"{runtime.Name} download failed", ex.Message);
+            RefreshDiagnostics();
+            _dialogs.Error($"{runtime.Name} installation failed", ex.Message);
+            return;
         }
+
+        runtime.SetInstallProgress(100);
+        if (wasRunning && service is not null)
+        {
+            try
+            {
+                await _processManager.StartAsync(service);
+            }
+            catch (Exception restartError) when (restartError is IOException or UnauthorizedAccessException or InvalidOperationException or FileNotFoundException or Win32Exception)
+            {
+                RefreshRuntimes();
+                RefreshStatuses();
+                RefreshDiagnostics();
+                _dialogs.Warning(
+                    $"{runtime.Name} installed",
+                    $"{runtime.Name} {runtime.Version} was installed and activated, but {service.DisplayName} could not be restarted: {restartError.Message}");
+                return;
+            }
+        }
+
+        RefreshRuntimes();
+        RefreshStatuses();
+        RefreshDiagnostics();
+        _dialogs.Info(
+            $"{runtime.Name} installed",
+            $"{runtime.Name} {runtime.Version} was downloaded, verified, installed and activated.");
     }
 
     private async Task ActivateRuntimeAsync(object? parameter)
@@ -661,16 +644,12 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         try
         {
             if (wasRunning)
-            {
                 await _processManager.StopAsync(service!);
-            }
 
             await _runtimeManager.ActivateAsync(runtime.Key, runtime.Version, executableRelativePath);
 
             if (wasRunning)
-            {
                 await _processManager.StartAsync(service!);
-            }
 
             RefreshRuntimes();
             RefreshStatuses();
@@ -738,9 +717,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         foreach (var row in Addons)
         {
             if (!_busyAddons.Contains(row.Key))
-            {
                 row.ApplyInstallation(_addonCatalog.IsInstalled(_addonDefinitions[row.Key]));
-            }
         }
     }
 
@@ -756,8 +733,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         var supportedKeys = new HashSet<string>(["php", "nginx", "mysql"], StringComparer.OrdinalIgnoreCase);
         var represented = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var status in _runtimePlatformService.GetStatuses()
-                     .Where(item => supportedKeys.Contains(item.Package.Key)))
+        foreach (var status in _runtimePlatformService.GetStatuses().Where(item => supportedKeys.Contains(item.Package.Key)))
         {
             Runtimes.Add(new RuntimeRowViewModel(status, _rootPath));
             represented.Add($"{status.Package.Key}|{status.Package.Version}");
@@ -773,9 +749,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             foreach (var runtime in _runtimeManager.GetInstalled(descriptor.Key, descriptor.Executable))
             {
                 if (represented.Add($"{runtime.Key}|{runtime.Version}"))
-                {
                     Runtimes.Add(new RuntimeRowViewModel(runtime));
-                }
             }
         }
     }
@@ -910,6 +884,17 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
     private static bool IsExpectedAddonError(Exception ex) =>
         ex is HttpRequestException or InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException or FileNotFoundException or Win32Exception;
+
+    private sealed class DispatcherProgress<T>(Dispatcher dispatcher, Action<T> callback) : IProgress<T>
+    {
+        public void Report(T value)
+        {
+            if (dispatcher.CheckAccess())
+                callback(value);
+            else
+                dispatcher.Invoke(() => callback(value));
+        }
+    }
 
     private enum ServiceAction
     {

@@ -495,7 +495,9 @@ public sealed class ProjectSnapshotService
         if (!Directory.Exists(root))
             throw new DirectoryNotFoundException($"Project directory was not found: {root}");
         return PathSafety.EnsureUnderRootWithoutReparsePoints(
-            _wwwRoot, root, "Project snapshots are restricted to the DevBox www directory and cannot traverse a reparse point.");
+            _wwwRoot,
+            root,
+            "Project snapshots are restricted to the DevBox www directory and cannot traverse a reparse point.");
     }
 
     private static string? GetString(JsonObject value, string name)

@@ -149,6 +149,8 @@ public sealed partial class ProjectWorkspaceService
     {
         ArgumentNullException.ThrowIfNull(request);
         var source = RequireExistingDirectory(request.SourcePath);
+        if (request.CopyIntoDevBox && (File.GetAttributes(source) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException($"Project import source cannot be a reparse point: {source}");
         var detection = Detect(source);
 
         var projectRoot = request.CopyIntoDevBox
@@ -596,35 +598,39 @@ public sealed partial class ProjectWorkspaceService
 
     private static void CopyDirectorySafely(string source, string destination)
     {
-        var sourceRoot = Path.GetFullPath(source).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        var destinationRoot = Path.GetFullPath(destination).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (destinationRoot.StartsWith(sourceRoot, StringComparison.OrdinalIgnoreCase))
-        {
+        var sourcePath = Path.GetFullPath(source).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var destinationPath = Path.GetFullPath(destination).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var sourcePrefix = sourcePath + Path.DirectorySeparatorChar;
+        var destinationPrefix = destinationPath + Path.DirectorySeparatorChar;
+        if (destinationPrefix.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Import destination cannot be inside the source project directory.");
-        }
+        if ((File.GetAttributes(sourcePath) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException($"Project import source cannot be a reparse point: {sourcePath}");
 
-        foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+        Directory.CreateDirectory(destinationPath);
+        var pending = new Stack<string>();
+        pending.Push(sourcePath);
+        while (pending.Count > 0)
         {
-            var info = new DirectoryInfo(directory);
-            if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+            var current = pending.Pop();
+            foreach (var file in Directory.EnumerateFiles(current, "*", SearchOption.TopDirectoryOnly))
             {
-                throw new InvalidDataException($"Project import does not follow reparse points: {directory}");
+                if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException($"Project import does not follow reparse points: {file}");
+                var relative = Path.GetRelativePath(sourcePath, file);
+                var target = Path.Combine(destinationPath, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(file, target, overwrite: false);
             }
-            var relative = Path.GetRelativePath(source, directory);
-            Directory.CreateDirectory(Path.Combine(destination, relative));
-        }
 
-        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
-        {
-            var info = new FileInfo(file);
-            if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+            foreach (var directory in Directory.EnumerateDirectories(current, "*", SearchOption.TopDirectoryOnly))
             {
-                throw new InvalidDataException($"Project import does not follow reparse points: {file}");
+                if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException($"Project import does not follow reparse points: {directory}");
+                var relative = Path.GetRelativePath(sourcePath, directory);
+                Directory.CreateDirectory(Path.Combine(destinationPath, relative));
+                pending.Push(directory);
             }
-            var relative = Path.GetRelativePath(source, file);
-            var target = Path.Combine(destination, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.Copy(file, target, overwrite: false);
         }
     }
 

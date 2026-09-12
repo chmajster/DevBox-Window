@@ -157,6 +157,198 @@ begin
     Result := Candidate;
 end;
 
+function EffectiveInstalledLocation: String;
+var
+  Uninstaller: String;
+begin
+  Result := InstalledLocation;
+  if Result <> '' then
+    Exit;
+
+  Uninstaller := ExistingUninstallerPath;
+  if Uninstaller <> '' then
+    Result := ExtractFileDir(Uninstaller);
+end;
+
+function IsSafeManagedRoot(const BaseDir: String): Boolean;
+var
+  ModuleRoot: String;
+  ParentRoot: String;
+  WindowsRoot: String;
+  SystemRoot: String;
+begin
+  Result := False;
+  if Trim(BaseDir) = '' then
+    Exit;
+
+  ModuleRoot := RemoveBackslashUnlessRoot(BaseDir);
+  if ModuleRoot = '' then
+    Exit;
+
+  ParentRoot := RemoveBackslashUnlessRoot(ExtractFileDir(ModuleRoot));
+  if (ParentRoot = '') or (Lowercase(ParentRoot) = Lowercase(ModuleRoot)) then
+  begin
+    Log('Refusing managed cleanup for filesystem root: ' + ModuleRoot);
+    Exit;
+  end;
+
+  WindowsRoot := RemoveBackslashUnlessRoot(ExpandConstant('{win}'));
+  SystemRoot := RemoveBackslashUnlessRoot(ExpandConstant('{sys}'));
+  if (Lowercase(ModuleRoot) = Lowercase(WindowsRoot)) or
+     (Lowercase(ModuleRoot) = Lowercase(SystemRoot)) then
+  begin
+    Log('Refusing managed cleanup for protected Windows directory: ' + ModuleRoot);
+    Exit;
+  end;
+
+  Result := True;
+end;
+
+function HasDevBoxInstallEvidence(const BaseDir: String): Boolean;
+var
+  RootPrefix: String;
+begin
+  Result := False;
+  if not IsSafeManagedRoot(BaseDir) then
+    Exit;
+
+  RootPrefix := AddBackslash(RemoveBackslashUnlessRoot(BaseDir));
+  Result :=
+    FileExists(RootPrefix + '{#MyAppExeName}') or
+    FileExists(RootPrefix + 'unins000.exe');
+end;
+
+function HasExactDirective(const Lines: TArrayOfString; const Directive: String): Boolean;
+var
+  I: Integer;
+  CommentPos: Integer;
+  Line: String;
+begin
+  Result := False;
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    Line := Trim(Lines[I]);
+    if Line <> '' then
+    begin
+      if Line[1] <> '#' then
+      begin
+        CommentPos := Pos('#', Line);
+        if CommentPos > 0 then
+        begin
+          Delete(Line, CommentPos, Length(Line) - CommentPos + 1);
+          Line := Trim(Line);
+        end;
+
+        if Lowercase(Line) = Lowercase(Directive) then
+        begin
+          Result := True;
+          Exit;
+        end;
+      end;
+    end;
+  end;
+end;
+
+function IsManagedPhpMyAdmin(const RootPrefix: String): Boolean;
+var
+  PhpMyAdminPath: String;
+  PhpMyAdminVhost: String;
+  PhpMyAdminMarker: String;
+  MarkerLines: TArrayOfString;
+  VhostLines: TArrayOfString;
+begin
+  Result := False;
+  PhpMyAdminPath := RootPrefix + 'www\phpmyadmin';
+  PhpMyAdminVhost := RootPrefix + 'config\nginx\sites-enabled\phpmyadmin.test.conf';
+  PhpMyAdminMarker := PhpMyAdminPath + '\.devbox-addon';
+
+  if FileExists(PhpMyAdminMarker) then
+  begin
+    if LoadStringsFromFile(PhpMyAdminMarker, MarkerLines) and
+       (GetArrayLength(MarkerLines) > 0) and
+       (Lowercase(Trim(MarkerLines[0])) = 'phpmyadmin') then
+      Result := True
+    else
+      Log('Preserving www\phpmyadmin because its ownership marker is invalid.');
+    Exit;
+  end;
+
+  if not FileExists(PhpMyAdminVhost) then
+    Exit;
+
+  if not LoadStringsFromFile(PhpMyAdminVhost, VhostLines) then
+    Exit;
+
+  Result :=
+    HasExactDirective(VhostLines, 'server_name phpmyadmin.test;') and
+    HasExactDirective(VhostLines, 'root www/phpmyadmin;');
+end;
+
+function RemoveGeneratedModules(const BaseDir: String): Boolean;
+var
+  ModuleRoot: String;
+  RootPrefix: String;
+  PhpMyAdminPath: String;
+  PhpMyAdminVhost: String;
+  ManagedPhpMyAdmin: Boolean;
+begin
+  Result := False;
+  if not IsSafeManagedRoot(BaseDir) then
+  begin
+    MsgBox(
+      'DevBox refused to remove downloaded modules because the installation directory is unsafe or invalid:' + #13#10 +
+      BaseDir,
+      mbError, MB_OK);
+    Exit;
+  end;
+
+  ModuleRoot := RemoveBackslashUnlessRoot(BaseDir);
+  RootPrefix := AddBackslash(ModuleRoot);
+  PhpMyAdminPath := RootPrefix + 'www\phpmyadmin';
+  PhpMyAdminVhost := RootPrefix + 'config\nginx\sites-enabled\phpmyadmin.test.conf';
+  ManagedPhpMyAdmin := IsManagedPhpMyAdmin(RootPrefix);
+
+  Log('Removing generated DevBox modules from: ' + ModuleRoot);
+
+  DelTree(RootPrefix + 'runtime', True, True, True);
+  DelTree(RootPrefix + 'tmp\runtimes', True, True, True);
+  DelTree(RootPrefix + 'tmp\runtime-imports', True, True, True);
+  DelTree(RootPrefix + 'tmp\addons', True, True, True);
+
+  if ManagedPhpMyAdmin then
+  begin
+    DelTree(PhpMyAdminPath, True, True, True);
+    DeleteFile(PhpMyAdminVhost);
+  end
+  else
+  begin
+    if DirExists(PhpMyAdminPath) then
+      Log('Preserving www\phpmyadmin because no valid DevBox ownership marker or exact legacy DevBox vhost was found.');
+    if FileExists(PhpMyAdminVhost) then
+      Log('Preserving phpmyadmin.test.conf because it is not recognized as a DevBox-managed vhost.');
+  end;
+
+  Result :=
+    not DirExists(RootPrefix + 'runtime') and
+    not DirExists(RootPrefix + 'tmp\runtimes') and
+    not DirExists(RootPrefix + 'tmp\runtime-imports') and
+    not DirExists(RootPrefix + 'tmp\addons');
+
+  if ManagedPhpMyAdmin then
+    Result := Result and
+      not DirExists(PhpMyAdminPath) and
+      not FileExists(PhpMyAdminVhost);
+
+  if not Result then
+  begin
+    Log('Generated module cleanup is incomplete. One or more managed module paths still exist.');
+    MsgBox(
+      'DevBox could not remove all downloaded modules.' + #13#10 +
+      'Close processes that may still be using PHP, Nginx, MySQL or phpMyAdmin files, then run Setup again.',
+      mbError, MB_OK);
+  end;
+end;
+
 function RunExistingUninstaller(const SilentMode: Boolean): Boolean;
 var
   Uninstaller: String;
@@ -220,7 +412,7 @@ begin
     False);
 
   MaintenancePage.Add('&Upgrade / update - keep the installation and replace application files');
-  MaintenancePage.Add('&Reinstall - remove the installed application first, then install this package');
+  MaintenancePage.Add('&Reinstall - remove the application and downloaded modules, then install this package');
   MaintenancePage.Add('&Uninstall - remove DevBox and exit Setup');
 
   if InstalledVersion = '{#MyAppVersion}' then
@@ -241,11 +433,37 @@ begin
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  PreviousInstallLocation: String;
 begin
   Result := True;
 
+  if CurPageID = wpSelectDir then
+  begin
+    if not IsSafeManagedRoot(WizardDirValue) then
+    begin
+      MsgBox(
+        'Choose a dedicated DevBox installation directory. Installing directly into a filesystem root or protected Windows directory is not allowed.',
+        mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+  end;
+
   if (MaintenancePage = nil) or (CurPageID <> MaintenancePage.ID) then
     Exit;
+
+  PreviousInstallLocation := EffectiveInstalledLocation;
+  if not HasDevBoxInstallEvidence(PreviousInstallLocation) then
+  begin
+    MsgBox(
+      'The existing DevBox registry entry points to an unsafe or unverified installation directory:' + #13#10 +
+      PreviousInstallLocation + #13#10 +
+      'Setup will not modify or clean this directory automatically.',
+      mbError, MB_OK);
+    Result := False;
+    Exit;
+  end;
 
   case MaintenancePage.SelectedValueIndex of
     0:
@@ -262,8 +480,16 @@ begin
           Exit;
         end;
 
+        { The old uninstaller may predate managed cleanup, therefore perform
+          explicit cleanup here as well so the first reinstall also removes modules. }
+        if not RemoveGeneratedModules(PreviousInstallLocation) then
+        begin
+          Result := False;
+          Exit;
+        end;
+
         ExistingInstallation := False;
-        Log('Existing installation removed successfully; continuing with reinstall.');
+        Log('Existing installation and generated modules removed successfully; continuing with reinstall.');
       end;
 
     2:
@@ -283,8 +509,16 @@ begin
           Exit;
         end;
 
+        if not RemoveGeneratedModules(PreviousInstallLocation) then
+        begin
+          MaintenanceExit := True;
+          PostMessage(WizardForm.Handle, WM_CLOSE, 0, 0);
+          Result := False;
+          Exit;
+        end;
+
         MaintenanceExit := True;
-        MsgBox('DevBox was uninstalled successfully.', mbInformation, MB_OK);
+        MsgBox('DevBox and downloaded modules were uninstalled successfully.', mbInformation, MB_OK);
         PostMessage(WizardForm.Handle, WM_CLOSE, 0, 0);
         Result := False;
       end;
@@ -294,6 +528,12 @@ begin
       Result := False;
     end;
   end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    RemoveGeneratedModules(ExpandConstant('{app}'));
 end;
 
 procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);

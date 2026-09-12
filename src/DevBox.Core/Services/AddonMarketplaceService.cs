@@ -251,20 +251,33 @@ public sealed class AddonMarketplaceService : IDisposable
             throw new InvalidDataException("Marketplace source requires an RSA public key in PEM format.");
     }
 
-    private object ToManifestEntry(AddonDefinition addon) => new
+    private object ToManifestEntry(AddonDefinition addon)
     {
-        key = addon.Key,
-        displayName = addon.DisplayName,
-        description = addon.Description,
-        installRelativePath = Path.GetRelativePath(_rootPath, Path.GetFullPath(addon.InstallPath)).Replace('\\', '/'),
-        entryPointRelativePath = Path.GetRelativePath(_rootPath, Path.GetFullPath(addon.EntryPointPath)).Replace('\\', '/'),
-        localUrl = addon.LocalUrl,
-        requiredPhpExtensions = addon.RequiredPhpExtensions,
-        version = addon.Version,
-        downloadUrl = addon.DownloadUrl,
-        sha256 = addon.Sha256,
-        archiveRootDirectory = addon.ArchiveRootDirectory
-    };
+        ArgumentNullException.ThrowIfNull(addon);
+        return new
+        {
+            key = addon.Key,
+            displayName = addon.DisplayName,
+            description = addon.Description,
+            installRelativePath = ToRootRelativePath(addon.InstallPath, "ADDON install path"),
+            entryPointRelativePath = ToRootRelativePath(addon.EntryPointPath, "ADDON entry point"),
+            localUrl = addon.LocalUrl,
+            requiredPhpExtensions = addon.RequiredPhpExtensions,
+            version = addon.Version,
+            downloadUrl = addon.DownloadUrl,
+            sha256 = addon.Sha256,
+            archiveRootDirectory = addon.ArchiveRootDirectory
+        };
+    }
+
+    private string ToRootRelativePath(string path, string label)
+    {
+        var root = _rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var full = Path.GetFullPath(path);
+        if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"{label} must be inside the DevBox root.");
+        return Path.GetRelativePath(_rootPath, full).Replace('\\', '/');
+    }
 
     private static void AtomicWrite(string path, string content)
     {

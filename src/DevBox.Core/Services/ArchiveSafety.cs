@@ -13,7 +13,8 @@ internal static class ArchiveSafety
         string destination,
         long maximumBytes,
         string packageName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IProgress<int>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(uri);
@@ -24,6 +25,7 @@ internal static class ArchiveSafety
             throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         }
 
+        progress?.Report(0);
         using var response = await httpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
@@ -33,9 +35,23 @@ internal static class ArchiveSafety
             throw new InvalidDataException($"{packageName} download is too large ({declaredLength.Value} bytes; limit {maximumBytes} bytes).");
         }
 
-        await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        await using var target = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true);
-        await CopyToWithLimitAsync(source, target, maximumBytes, packageName, cancellationToken).ConfigureAwait(false);
+        var destinationCreated = false;
+        try
+        {
+            await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            await using var target = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+            destinationCreated = true;
+            await CopyToWithLimitAsync(source, target, maximumBytes, declaredLength, packageName, cancellationToken, progress).ConfigureAwait(false);
+            progress?.Report(100);
+        }
+        catch
+        {
+            if (destinationCreated)
+            {
+                TryDeletePartialDownload(destination);
+            }
+            throw;
+        }
     }
 
     public static async Task<byte[]> ReadContentBytesWithLimitAsync(
@@ -55,7 +71,7 @@ internal static class ArchiveSafety
 
         await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var target = new MemoryStream();
-        await CopyToWithLimitAsync(source, target, maximumBytes, contentName, cancellationToken).ConfigureAwait(false);
+        await CopyToWithLimitAsync(source, target, maximumBytes, declaredLength, contentName, cancellationToken, progress: null).ConfigureAwait(false);
         return target.ToArray();
     }
 
@@ -136,11 +152,14 @@ internal static class ArchiveSafety
         Stream source,
         Stream target,
         long maximumBytes,
+        long? declaredLength,
         string packageName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IProgress<int>? progress)
     {
         var buffer = new byte[81920];
         long total = 0;
+        var lastProgress = -1;
         while (true)
         {
             var read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken).ConfigureAwait(false);
@@ -156,6 +175,16 @@ internal static class ArchiveSafety
             }
 
             await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+
+            if (progress is not null && declaredLength is > 0)
+            {
+                var percentage = (int)Math.Min(100L, total * 100L / declaredLength.Value);
+                if (percentage != lastProgress)
+                {
+                    lastProgress = percentage;
+                    progress.Report(percentage);
+                }
+            }
         }
     }
 
@@ -185,6 +214,23 @@ internal static class ArchiveSafety
         if (unixFileType == UnixSymbolicLink)
         {
             throw new InvalidDataException($"{packageName} archive contains a symbolic link entry: {entry.FullName}");
+        }
+    }
+
+    private static void TryDeletePartialDownload(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 }
