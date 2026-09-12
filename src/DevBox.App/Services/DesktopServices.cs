@@ -53,6 +53,7 @@ public interface IHostMappingService
 public sealed class HostMappingService : IHostMappingService
 {
     private const string IpAddress = "127.0.0.1";
+    private static readonly TimeSpan ElevatedHelperTimeout = TimeSpan.FromSeconds(30);
     private readonly HostsFileManager _hostsFileManager;
 
     public HostMappingService(HostsFileManager hostsFileManager)
@@ -90,7 +91,7 @@ public sealed class HostMappingService : IHostMappingService
         }
         catch (UnauthorizedAccessException)
         {
-            return await RunElevatedAsync("--hosts-ensure", domain, IpAddress) && Has(domain);
+            return await RunElevatedAsync("--hosts-ensure", domain, IpAddress).ConfigureAwait(false) && Has(domain);
         }
     }
 
@@ -104,7 +105,7 @@ public sealed class HostMappingService : IHostMappingService
         }
         catch (UnauthorizedAccessException)
         {
-            return await RunElevatedAsync("--hosts-remove", domain) && !Has(domain);
+            return await RunElevatedAsync("--hosts-remove", domain).ConfigureAwait(false) && !Has(domain);
         }
     }
 
@@ -134,12 +135,34 @@ public sealed class HostMappingService : IHostMappingService
             {
                 return false;
             }
-            await process.WaitForExitAsync();
+
+            using var timeout = new CancellationTokenSource(ElevatedHelperTimeout);
+            try
+            {
+                await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+            {
+                TryKill(process);
+                return false;
+            }
             return process.ExitCode == 0;
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
         {
             return false;
+        }
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+        {
         }
     }
 
