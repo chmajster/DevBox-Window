@@ -96,7 +96,7 @@ public sealed class RemoteEnvironmentService
         EnsureNoSensitiveMaterial(content);
         Directory.CreateDirectory(_shareRoot);
         var destination = string.IsNullOrWhiteSpace(destinationPath)
-            ? Path.Combine(_shareRoot, $"{SafeFileName(name)}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.devbox-env.json")
+            ? Path.Combine(_shareRoot, $"{SafeFileName(name)}-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.devbox-env.json")
             : Path.GetFullPath(destinationPath);
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         AtomicWrite(destination, content);

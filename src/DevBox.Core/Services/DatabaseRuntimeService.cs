@@ -59,13 +59,16 @@ public sealed class DatabaseRuntimeService : IDisposable
 
         using var registrationLock = AcquireRegistrationLock();
         var registrations = LoadRegistrations().ToList();
+        var managedServicePorts = GetEnabledManagedServicePorts();
         var index = registrations.FindIndex(item => item.Engine.Equals(normalizedEngine, StringComparison.OrdinalIgnoreCase) && item.Version.Equals(version, StringComparison.OrdinalIgnoreCase));
         var existing = index >= 0 ? registrations[index] : null;
-        var selectedPort = port ?? existing?.Port ?? ChooseAvailablePort(kind, registrations);
+        var selectedPort = port ?? existing?.Port ?? ChooseAvailablePort(kind, registrations, managedServicePorts);
         if (selectedPort is < 1 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(port), "Database port must be between 1 and 65535.");
         if (registrations.Any(item => item.Port == selectedPort && !(item.Engine.Equals(normalizedEngine, StringComparison.OrdinalIgnoreCase) && item.Version.Equals(version, StringComparison.OrdinalIgnoreCase))))
             throw new InvalidOperationException($"Port {selectedPort} is already assigned to another DevBox database runtime.");
+        if ((existing is null || existing.Port != selectedPort) && managedServicePorts.Contains(selectedPort))
+            throw new InvalidOperationException($"Port {selectedPort} is already assigned to an enabled managed service.");
         if (port.HasValue && (existing is null || existing.Port != selectedPort) && IsTcpPortInUse(selectedPort))
             throw new InvalidOperationException($"Port {selectedPort} is already in use by another process.");
 
@@ -183,7 +186,7 @@ public sealed class DatabaseRuntimeService : IDisposable
         Directory.CreateDirectory(backupRoot);
         var extension = kind == DatabaseEngineKind.PostgreSql ? ".dump" : ".sql";
         var destination = string.IsNullOrWhiteSpace(destinationPath)
-            ? Path.Combine(backupRoot, $"{databaseName}-{DateTime.UtcNow:yyyyMMdd-HHmmss}{extension}")
+            ? Path.Combine(backupRoot, $"{databaseName}-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}{extension}")
             : Path.GetFullPath(destinationPath);
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         var temporaryDestination = destination + $".{Guid.NewGuid():N}.tmp";
@@ -394,18 +397,33 @@ public sealed class DatabaseRuntimeService : IDisposable
             return DiscoverRegistrations();
         try
         {
-            var values = JsonSerializer.Deserialize<List<DatabaseRuntimeRegistration>>(File.ReadAllText(_registrationsPath), JsonOptions) ?? [];
-            foreach (var item in values)
+            var values = JsonSerializer.Deserialize<List<DatabaseRuntimeRegistration?>>(File.ReadAllText(_registrationsPath), JsonOptions) ?? [];
+            if (values.Any(item => item is null))
+                throw new InvalidDataException("Database runtime registrations contain a null entry.");
+            var materialized = values.Select(item => item!).ToArray();
+            foreach (var item in materialized)
             {
-                _ = ParseEngine(item.Engine);
-                ValidateVersion(item.Version);
+                try
+                {
+                    _ = ParseEngine(item.Engine);
+                    ValidateVersion(item.Version);
+                }
+                catch (ArgumentException ex)
+                {
+                    throw new InvalidDataException("Database runtime registration contains an invalid engine or version.", ex);
+                }
                 if (item.Port is < 1 or > 65535)
                     throw new InvalidDataException("Database runtime registration contains an invalid port.");
             }
-            var duplicatePort = values.GroupBy(item => item.Port).FirstOrDefault(group => group.Count() > 1);
+            var duplicateIdentity = materialized
+                .GroupBy(item => $"{item.Engine}|{item.Version}", StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(group => group.Count() > 1);
+            if (duplicateIdentity is not null)
+                throw new InvalidDataException($"Database runtime registrations contain duplicate runtime '{duplicateIdentity.Key}'.");
+            var duplicatePort = materialized.GroupBy(item => item.Port).FirstOrDefault(group => group.Count() > 1);
             if (duplicatePort is not null)
                 throw new InvalidDataException($"Database runtime registrations contain duplicate port {duplicatePort.Key}.");
-            return values;
+            return materialized;
         }
         catch (JsonException ex)
         {
@@ -444,7 +462,13 @@ public sealed class DatabaseRuntimeService : IDisposable
     private static bool IsTcpPortInUse(int port) =>
         IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Any(endpoint => endpoint.Port == port);
 
-    private int ChooseAvailablePort(DatabaseEngineKind kind, IReadOnlyList<DatabaseRuntimeRegistration> registrations)
+    private HashSet<int> GetEnabledManagedServicePorts() =>
+        new ManagedServiceCatalog(_rootPath).GetManifests()
+            .Where(item => item.Enabled)
+            .Select(item => item.Port)
+            .ToHashSet();
+
+    private int ChooseAvailablePort(DatabaseEngineKind kind, IReadOnlyList<DatabaseRuntimeRegistration> registrations, IReadOnlySet<int>? additionalReservedPorts = null)
     {
         var start = kind switch
         {
@@ -454,10 +478,11 @@ public sealed class DatabaseRuntimeService : IDisposable
             _ => 5500
         };
         var assigned = registrations.Select(item => item.Port).ToHashSet();
+        var reserved = additionalReservedPorts ?? GetEnabledManagedServicePorts();
         var listeners = IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Select(endpoint => endpoint.Port).ToHashSet();
         for (var port = start; port <= 65535; port++)
         {
-            if (!assigned.Contains(port) && !listeners.Contains(port))
+            if (!assigned.Contains(port) && !reserved.Contains(port) && !listeners.Contains(port))
                 return port;
         }
         throw new InvalidOperationException("No available TCP port could be assigned to the database runtime.");

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using DevBox.Core.Models;
 
@@ -219,7 +220,20 @@ public sealed class PlatformTaskCenter : IDisposable
 
     private void Publish(PlatformTaskSnapshot snapshot, bool persist)
     {
-        TaskChanged?.Invoke(this, snapshot);
+        if (TaskChanged is not null)
+        {
+            foreach (EventHandler<PlatformTaskSnapshot> handler in TaskChanged.GetInvocationList())
+            {
+                try
+                {
+                    handler(this, snapshot);
+                }
+                catch (Exception ex)
+                {
+                    Trace.TraceError($"PlatformTaskCenter TaskChanged subscriber failed: {ex}");
+                }
+            }
+        }
         if (persist)
             PersistHistory();
     }

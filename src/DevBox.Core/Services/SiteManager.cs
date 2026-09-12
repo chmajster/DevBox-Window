@@ -29,11 +29,14 @@ public sealed partial class SiteManager
             if (string.IsNullOrWhiteSpace(json))
                 return Array.Empty<SiteDefinition>();
 
-            var sites = JsonSerializer.Deserialize<List<SiteDefinition>>(json, JsonOptions) ?? new List<SiteDefinition>();
-            foreach (var site in sites)
+            var sites = JsonSerializer.Deserialize<List<SiteDefinition?>>(json, JsonOptions) ?? new List<SiteDefinition?>();
+            if (sites.Any(site => site is null))
+                throw new InvalidDataException("config/sites.json contains a null site entry.");
+            var materialized = sites.Select(site => site!).ToArray();
+            foreach (var site in materialized)
                 ValidateLoadedSite(site);
-            ValidateLoadedCollection(sites);
-            return sites;
+            ValidateLoadedCollection(materialized);
+            return materialized;
         }
         catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException or InvalidDataException)
         {

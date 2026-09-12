@@ -218,11 +218,14 @@ public sealed class RuntimePlatformService : IDisposable
             return Array.Empty<RuntimePackageEntry>();
         try
         {
-            var packages = JsonSerializer.Deserialize<List<RuntimePackageEntry>>(File.ReadAllText(_catalogPath), JsonOptions)
-                ?? new List<RuntimePackageEntry>();
-            foreach (var package in packages)
+            var packages = JsonSerializer.Deserialize<List<RuntimePackageEntry?>>(File.ReadAllText(_catalogPath), JsonOptions)
+                ?? new List<RuntimePackageEntry?>();
+            if (packages.Any(package => package is null))
+                throw new InvalidDataException("config/runtime-catalog.json contains a null runtime entry.");
+            var materialized = packages.Select(package => package!).ToArray();
+            foreach (var package in materialized)
                 ValidatePackage(package);
-            return packages;
+            return materialized;
         }
         catch (JsonException ex)
         {

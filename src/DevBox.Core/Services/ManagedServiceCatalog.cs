@@ -10,6 +10,7 @@ public sealed partial class ManagedServiceCatalog
     {
         "nginx", "php", "mysql"
     };
+    private static readonly string[] ReservedKeyPrefixes = ["db-", "php-pool-"];
 
     private readonly string _rootPath;
     private readonly string _manifestPath;
@@ -30,10 +31,13 @@ public sealed partial class ManagedServiceCatalog
 
         try
         {
-            var manifests = JsonSerializer.Deserialize<List<ManagedServiceManifest>>(File.ReadAllText(_manifestPath), JsonOptions)
-                ?? new List<ManagedServiceManifest>();
-            ValidateAll(manifests);
-            return manifests.OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase).ToArray();
+            var manifests = JsonSerializer.Deserialize<List<ManagedServiceManifest?>>(File.ReadAllText(_manifestPath), JsonOptions)
+                ?? new List<ManagedServiceManifest?>();
+            if (manifests.Any(item => item is null))
+                throw new InvalidDataException("config/services.json contains a null managed-service entry.");
+            var materialized = manifests.Select(item => item!).ToArray();
+            ValidateAll(materialized);
+            return materialized.OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase).ToArray();
         }
         catch (JsonException ex)
         {
@@ -171,7 +175,9 @@ public sealed partial class ManagedServiceCatalog
         {
             throw new InvalidDataException($"Unsupported managed service schema version: {manifest.SchemaVersion}.");
         }
-        if (!SafeKeyRegex().IsMatch(manifest.Key) || ReservedKeys.Contains(manifest.Key))
+        var manifestKey = manifest.Key ?? string.Empty;
+        if (!SafeKeyRegex().IsMatch(manifestKey) || ReservedKeys.Contains(manifestKey) ||
+            ReservedKeyPrefixes.Any(prefix => manifestKey.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
         {
             throw new InvalidDataException($"Managed service key '{manifest.Key}' is invalid or reserved.");
         }
@@ -187,11 +193,13 @@ public sealed partial class ManagedServiceCatalog
         {
             throw new InvalidDataException("Managed service graceful-stop timeout must be between 1 and 60 seconds.");
         }
-        if (manifest.Arguments.Count > 64 || manifest.Arguments.Any(argument => argument.Contains('\0')))
+        if (string.IsNullOrWhiteSpace(manifest.ExecutableRelativePath) || string.IsNullOrWhiteSpace(manifest.WorkingDirectoryRelativePath) ||
+            string.IsNullOrWhiteSpace(manifest.Version) || manifest.Arguments is null || manifest.Arguments.Count > 64 ||
+            manifest.Arguments.Any(argument => argument is null || argument.Contains('\0')))
         {
-            throw new InvalidDataException("Managed service arguments are invalid.");
+            throw new InvalidDataException("Managed service executable, working directory, version or arguments are invalid.");
         }
-        if (manifest.StopArguments is { Count: > 64 } || manifest.StopArguments?.Any(argument => argument.Contains('\0')) == true)
+        if (manifest.StopArguments is { Count: > 64 } || manifest.StopArguments?.Any(argument => argument is null || argument.Contains('\0')) == true)
         {
             throw new InvalidDataException("Managed service stop arguments are invalid.");
         }
@@ -210,7 +218,7 @@ public sealed partial class ManagedServiceCatalog
 
     private bool IsReservedCorePort(int port)
     {
-        if (port is 80 or 443 or 3306 or 3316 or 5432 or 9084)
+        if (port is 80 or 443 or 3306 or 3316 or 5432 or 9084 || port is >= 20000 and <= 49999)
             return true;
 
         var databaseRegistrations = Path.Combine(_rootPath, "config", "database-runtimes.json");
@@ -235,19 +243,21 @@ public sealed partial class ManagedServiceCatalog
         }
     }
 
-    private string ResolveRelativeFile(string relativePath, string name) => ResolveInsideRoot(relativePath, name);
-    private string ResolveRelativeDirectory(string relativePath, string name) => ResolveInsideRoot(relativePath, name);
+    private string ResolveRelativeFile(string relativePath, string name) => ResolveInsideRoot(relativePath, name, allowRoot: false);
+    private string ResolveRelativeDirectory(string relativePath, string name) => ResolveInsideRoot(relativePath, name, allowRoot: true);
 
-    private string ResolveInsideRoot(string relativePath, string name)
+    private string ResolveInsideRoot(string relativePath, string name, bool allowRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath, name);
         if (Path.IsPathRooted(relativePath))
         {
             throw new InvalidDataException($"{name} must be relative to the DevBox root.");
         }
-        var root = _rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        var full = Path.GetFullPath(Path.Combine(_rootPath, relativePath.Replace('/', Path.DirectorySeparatorChar)));
-        if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+        var root = _rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var full = Path.GetFullPath(Path.Combine(_rootPath, relativePath.Replace('/', Path.DirectorySeparatorChar)))
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var isRoot = full.Equals(root, StringComparison.OrdinalIgnoreCase);
+        if ((!allowRoot || !isRoot) && !full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException($"{name} escapes the DevBox root.");
         }
