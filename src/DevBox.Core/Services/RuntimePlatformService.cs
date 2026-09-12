@@ -19,8 +19,12 @@ public sealed class RuntimePlatformService : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         _rootPath = Path.GetFullPath(rootPath);
-        _catalogPath = Path.Combine(_rootPath, "config", "runtime-catalog.json");
-        _releaseCatalogPath = Path.Combine(_rootPath, "config", "runtime-catalog.release.json");
+        _catalogPath = SafeManagedPath(
+            Path.Combine(_rootPath, "config", "runtime-catalog.json"),
+            "Runtime catalog cannot escape the DevBox root or traverse a reparse point.");
+        _releaseCatalogPath = SafeManagedPath(
+            Path.Combine(_rootPath, "config", "runtime-catalog.release.json"),
+            "Release runtime catalog cannot escape the DevBox root or traverse a reparse point.");
         _runtimeManager = new RuntimeManager(_rootPath, httpClient);
     }
 
@@ -94,11 +98,17 @@ public sealed class RuntimePlatformService : IDisposable
         }
         else
         {
-            var runtimeRoot = Path.Combine(_rootPath, "runtime");
+            var runtimeRoot = SafeManagedPath(
+                Path.Combine(_rootPath, "runtime"),
+                "Runtime discovery root cannot escape the DevBox root or be a reparse point.");
             if (Directory.Exists(runtimeRoot))
             {
                 foreach (var directory in Directory.GetDirectories(runtimeRoot))
+                {
+                    if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                        continue;
                     candidateKeys.Add(Path.GetFileName(directory));
+                }
             }
         }
 
@@ -197,30 +207,45 @@ public sealed class RuntimePlatformService : IDisposable
             throw new FileNotFoundException("Runtime archive was not found.", sourceArchive);
         VerifySha256(sourceArchive, expectedSha256);
 
-        var tempRoot = Path.Combine(_rootPath, "tmp", "runtime-imports", Guid.NewGuid().ToString("N"));
-        var extractRoot = Path.Combine(tempRoot, "extract");
-        var staging = Path.Combine(tempRoot, "staging");
+        var tempRoot = SafeManagedPath(
+            Path.Combine(_rootPath, "tmp", "runtime-imports", Guid.NewGuid().ToString("N")),
+            "Runtime import temporary directory cannot escape the DevBox root or traverse a reparse point.");
+        var extractRoot = SafeManagedPath(
+            Path.Combine(tempRoot, "extract"),
+            "Runtime import extraction directory cannot escape the DevBox root or traverse a reparse point.");
+        var staging = SafeManagedPath(
+            Path.Combine(tempRoot, "staging"),
+            "Runtime import staging directory cannot escape the DevBox root or traverse a reparse point.");
         Directory.CreateDirectory(tempRoot);
         try
         {
             ArchiveSafety.ExtractZipSafely(sourceArchive, extractRoot, MaximumImportedRuntimeBytes, MaximumImportedEntries, "Runtime import");
             var source = string.IsNullOrWhiteSpace(package.ArchiveRootDirectory)
                 ? extractRoot
-                : Path.GetFullPath(Path.Combine(extractRoot, package.ArchiveRootDirectory));
-            EnsureUnderOrEqual(source, extractRoot, "Runtime archive root escapes the extracted directory.");
+                : PathSafety.EnsureUnderRootWithoutReparsePoints(
+                    extractRoot,
+                    Path.GetFullPath(Path.Combine(extractRoot, package.ArchiveRootDirectory)),
+                    "Runtime archive root escapes the extracted directory or traverses a reparse point.",
+                    allowRoot: true);
             if (!Directory.Exists(source))
                 throw new InvalidDataException($"Archive root '{package.ArchiveRootDirectory}' does not exist.");
 
             CopyDirectory(source, staging, cancellationToken);
-            var executable = Path.GetFullPath(Path.Combine(staging, package.ExecutableRelativePath));
-            EnsureUnder(executable, staging, "Runtime executable path escapes the package directory.");
+            var executable = PathSafety.EnsureUnderRootWithoutReparsePoints(
+                staging,
+                Path.GetFullPath(Path.Combine(staging, package.ExecutableRelativePath)),
+                "Runtime executable path escapes the package directory or traverses a reparse point.");
             if (!File.Exists(executable))
                 throw new InvalidDataException($"Runtime executable '{package.ExecutableRelativePath}' was not found in the package.");
             File.WriteAllText(Path.Combine(staging, ".devbox-version"), package.Version);
 
             using var runtimeLock = await _runtimeManager.AcquireRuntimeLockAsync(package.Key, cancellationToken).ConfigureAwait(false);
-            var installRoot = Path.Combine(_rootPath, "runtime", package.Key);
-            var installPath = Path.Combine(installRoot, package.Version);
+            var installRoot = SafeManagedPath(
+                Path.Combine(_rootPath, "runtime", package.Key),
+                "Runtime import install root cannot escape the DevBox root or traverse a reparse point.");
+            var installPath = SafeManagedPath(
+                Path.Combine(installRoot, package.Version),
+                "Runtime import install path cannot escape the DevBox root or traverse a reparse point.");
             Directory.CreateDirectory(installRoot);
             if (Directory.Exists(installPath))
                 throw new InvalidOperationException($"Runtime {package.Key} {package.Version} is already installed.");
@@ -259,7 +284,10 @@ public sealed class RuntimePlatformService : IDisposable
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(package);
         ValidatePackage(package);
-        using var mutationLock = CrossProcessFileLock.Acquire(_catalogPath + ".lock", TimeSpan.FromSeconds(15));
+        var lockPath = SafeManagedPath(
+            _catalogPath + ".lock",
+            "Runtime catalog lock cannot escape the DevBox root or traverse a reparse point.");
+        using var mutationLock = CrossProcessFileLock.Acquire(lockPath, TimeSpan.FromSeconds(15));
         var custom = LoadCatalog(_catalogPath, "config/runtime-catalog.json").ToList();
         var index = custom.FindIndex(item =>
             item.Key.Equals(package.Key, StringComparison.OrdinalIgnoreCase) &&
@@ -290,7 +318,9 @@ public sealed class RuntimePlatformService : IDisposable
         }
         catch (KeyNotFoundException)
         {
-            var runtimeRoot = Path.Combine(_rootPath, "runtime", key, version);
+            var runtimeRoot = SafeManagedPath(
+                Path.Combine(_rootPath, "runtime", key, version),
+                "Installed runtime path cannot escape the DevBox root or traverse a reparse point.");
             if (!Directory.Exists(runtimeRoot))
                 throw;
             var executable = GuessExecutable(key);
@@ -478,27 +508,14 @@ public sealed class RuntimePlatformService : IDisposable
             throw new InvalidDataException("SHA-256 verification failed for imported runtime archive.");
     }
 
-    private static void EnsureUnder(string candidate, string root, string message)
-    {
-        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        var fullCandidate = Path.GetFullPath(candidate);
-        if (!fullCandidate.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException(message);
-    }
-
-    private static void EnsureUnderOrEqual(string candidate, string root, string message)
-    {
-        var normalizedRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var normalizedCandidate = Path.GetFullPath(candidate).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var childPrefix = normalizedRoot + Path.DirectorySeparatorChar;
-        if (!normalizedCandidate.Equals(normalizedRoot, StringComparison.OrdinalIgnoreCase) &&
-            !normalizedCandidate.StartsWith(childPrefix, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException(message);
-    }
+    private string SafeManagedPath(string path, string message) =>
+        PathSafety.EnsureUnderRootWithoutReparsePoints(_rootPath, path, message);
 
     private static void CopyDirectory(string source, string destination, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if ((File.GetAttributes(source) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("Runtime package root cannot be a reparse point.");
         Directory.CreateDirectory(destination);
         foreach (var file in Directory.GetFiles(source))
         {
