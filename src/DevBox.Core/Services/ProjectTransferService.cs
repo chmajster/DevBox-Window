@@ -394,9 +394,7 @@ public sealed class ProjectTransferService
         if (!Directory.Exists(root))
             throw new DirectoryNotFoundException($"Project directory was not found: {root}");
         return PathSafety.EnsureUnderRootWithoutReparsePoints(
-            _wwwRoot,
-            root,
-            "Project transfer is restricted to the DevBox www directory and cannot traverse a reparse point.");
+            _wwwRoot, root, "Project transfer is restricted to the DevBox www directory and cannot traverse a reparse point.");
     }
 
     private static JsonObject ReadManifest(string projectRoot)
@@ -457,14 +455,7 @@ public sealed class ProjectTransferService
         return trimmed;
     }
 
-    private static string NormalizeDomain(string value)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(value);
-        var normalized = value.Trim().ToLowerInvariant();
-        if (!normalized.EndsWith(".test", StringComparison.Ordinal) || normalized.Length > 253 || normalized.Any(ch => !char.IsLetterOrDigit(ch) && ch is not '-' and not '.'))
-            throw new ArgumentException("Project domain must be a valid .test domain.", nameof(value));
-        return normalized;
-    }
+    private static string NormalizeDomain(string value) => LocalCertificateManager.NormalizeDomain(value);
 
     private static string SafeFileName(string value) => new(value.Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '-').ToArray());
 

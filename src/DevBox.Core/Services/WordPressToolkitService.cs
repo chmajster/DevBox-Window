@@ -186,11 +186,9 @@ public sealed class WordPressToolkitService
                 cleanupErrors.Add(ex);
             }
             if (cleanupErrors.Count > 0)
-            {
-                var allErrors = new List<Exception> { original };
-                allErrors.AddRange(cleanupErrors);
-                throw new AggregateException("WordPress setup failed and cleanup was incomplete.", allErrors);
-            }
+                throw new AggregateException(
+                    "WordPress setup failed and cleanup was incomplete.",
+                    new[] { original }.Concat(cleanupErrors));
             throw;
         }
     }
@@ -293,17 +291,17 @@ public sealed class WordPressToolkitService
             throw new InvalidOperationException($"Unable to start WP-CLI: {ex.Message}", ex);
         }
 
-        if (standardInput is not null)
-        {
-            await process.StandardInput.WriteAsync(standardInput.AsMemory(), cancellationToken).ConfigureAwait(false);
-            process.StandardInput.Close();
-        }
-        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stdout = ProcessOutputCapture.ReadBoundedAsync(process.StandardOutput, cancellationToken: cancellationToken);
+        var stderr = ProcessOutputCapture.ReadBoundedAsync(process.StandardError, cancellationToken: cancellationToken);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(10));
         try
         {
+            if (standardInput is not null)
+            {
+                await process.StandardInput.WriteAsync(standardInput.AsMemory(), timeout.Token).ConfigureAwait(false);
+                process.StandardInput.Close();
+            }
             await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -313,7 +311,7 @@ public sealed class WordPressToolkitService
                 throw new TimeoutException("WP-CLI operation exceeded the 10 minute timeout.");
             throw;
         }
-        return new WpCliResult(process.ExitCode, Truncate(await stdout.ConfigureAwait(false)), Truncate(await stderr.ConfigureAwait(false)));
+        return new WpCliResult(process.ExitCode, await stdout.ConfigureAwait(false), await stderr.ConfigureAwait(false));
     }
 
     private static void EnsureSuccess(WpCliResult result, string operation)
