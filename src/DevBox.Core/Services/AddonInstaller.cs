@@ -62,12 +62,16 @@ public sealed class AddonInstaller : IDisposable
                 ConfigureAddon(addon);
                 AddonOwnership.WriteMarker(addon);
             }
-            catch
+            catch (Exception original)
             {
-                RollbackInstallation(addon.InstallPath, backupPath);
+                var rollbackActions = new List<Action>
+                {
+                    () => RollbackInstallation(addon.InstallPath, backupPath)
+                };
                 if (backupPath is null)
-                    DeleteAddonNginxConfig(addon);
-                throw;
+                    rollbackActions.Add(() => DeleteAddonNginxConfig(addon));
+                RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
+                throw new InvalidOperationException("Addon installation rollback executor returned unexpectedly.");
             }
 
             TryDeleteDirectory(backupPath);
@@ -128,11 +132,13 @@ public sealed class AddonInstaller : IDisposable
             if (owned)
                 DeleteAddonNginxConfig(addon);
         }
-        catch
+        catch (Exception original)
         {
+            var rollbackActions = new List<Action>();
             if (trashPath is not null && Directory.Exists(trashPath) && !Directory.Exists(addon.InstallPath))
-                Directory.Move(trashPath, addon.InstallPath);
-            throw;
+                rollbackActions.Add(() => Directory.Move(trashPath, addon.InstallPath));
+            RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
+            throw new InvalidOperationException("Addon uninstall rollback executor returned unexpectedly.");
         }
 
         TryDeleteDirectory(trashPath);
@@ -383,11 +389,13 @@ server {
             Directory.Move(stagingPath, installPath);
             return backupPath;
         }
-        catch
+        catch (Exception original)
         {
+            var rollbackActions = new List<Action>();
             if (backupPath is not null && Directory.Exists(backupPath) && !Directory.Exists(installPath))
-                Directory.Move(backupPath, installPath);
-            throw;
+                rollbackActions.Add(() => Directory.Move(backupPath, installPath));
+            RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
+            throw new InvalidOperationException("Addon staging rollback executor returned unexpectedly.");
         }
     }
 
