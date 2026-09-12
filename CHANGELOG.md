@@ -43,6 +43,10 @@ All notable changes to DevBox Windows are documented here.
 
 ### Fixed
 
+- Database runtime registration now rejects port changes while the existing server process is still running, preventing persisted port state from diverging from the active listener.
+- Database runtime commands and legacy MySQL first-start initialization use bounded stdout/stderr capture, preventing noisy native tools from growing DevBox memory without limit.
+- `devbox.lock.json` validates null collections/database definitions as controlled data errors, applies strict `.test` domain validation and reuses canonical Project Action validation.
+- Portable environment imports report missing/null profile action collections as controlled invalid data instead of `NullReferenceException`.
 - ZIP extraction rejects duplicate and case-insensitive alias output paths so later archive entries cannot overwrite previously validated runtime/ADDON files.
 - Protected-path validation rejects a `www`/backup/service root that is itself a junction or symbolic link; managed-service executable, working-directory, stop-executable and log paths now use the same reparse-aware boundary checks.
 - Environment profiles reuse the canonical Project Action policy, preventing profiles with unsupported executables or incompatible action definitions from being saved and then failing only during apply.

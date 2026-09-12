@@ -72,6 +72,14 @@ public sealed class DatabaseRuntimeService : IDisposable
         if (port.HasValue && (existing is null || existing.Port != selectedPort) && IsTcpPortInUse(selectedPort))
             throw new InvalidOperationException($"Port {selectedPort} is already in use by another process.");
 
+        if (existing is not null && existing.Port != selectedPort)
+        {
+            var current = _processes.GetStatus(BuildServiceDefinition(kind, version, existing.Port));
+            if (current.State == ServiceState.Running)
+                throw new InvalidOperationException(
+                    $"Stop {DisplayEngine(kind)} {version} before changing its registered port from {existing.Port} to {selectedPort}.");
+        }
+
         var registration = new DatabaseRuntimeRegistration(normalizedEngine, version, selectedPort);
         if (index >= 0)
             registrations[index] = registration;
@@ -605,7 +613,7 @@ public sealed class DatabaseRuntimeService : IDisposable
         Task copyTask = Task.CompletedTask;
         if (stdoutFile is null)
         {
-            stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            stdoutTask = ProcessOutputCapture.ReadBoundedAsync(process.StandardOutput, cancellationToken: cancellationToken);
         }
         else
         {
@@ -614,7 +622,7 @@ public sealed class DatabaseRuntimeService : IDisposable
             copyTask = process.StandardOutput.BaseStream.CopyToAsync(outputStream, cancellationToken);
             stdoutTask = Task.FromResult(string.Empty);
         }
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stderrTask = ProcessOutputCapture.ReadBoundedAsync(process.StandardError, cancellationToken: cancellationToken);
         Task inputTask = Task.CompletedTask;
         if (stdinFile is not null)
         {
