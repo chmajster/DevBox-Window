@@ -168,9 +168,20 @@ public sealed class RuntimePlatformService : IDisposable
                 if (activate)
                     await _runtimeManager.ActivateUnderLockAsync(package.Key, package.Version, package.ExecutableRelativePath, cancellationToken).ConfigureAwait(false);
             }
-            catch
+            catch (Exception original)
             {
-                TryDeleteDirectory(installPath);
+                try
+                {
+                    if (Directory.Exists(installPath))
+                        Directory.Delete(installPath, recursive: true);
+                }
+                catch (Exception rollbackError) when (rollbackError is IOException or UnauthorizedAccessException)
+                {
+                    throw new AggregateException(
+                        $"Runtime import failed and rollback of {package.Key} {package.Version} was incomplete.",
+                        original,
+                        rollbackError);
+                }
                 throw;
             }
         }
@@ -237,11 +248,24 @@ public sealed class RuntimePlatformService : IDisposable
             return Array.Empty<RuntimePackageEntry>();
         try
         {
-            var packages = JsonSerializer.Deserialize<List<RuntimePackageEntry>>(File.ReadAllText(path), JsonOptions)
-                ?? new List<RuntimePackageEntry>();
-            foreach (var package in packages)
+            var packages = JsonSerializer.Deserialize<List<RuntimePackageEntry?>>(File.ReadAllText(path), JsonOptions)
+                ?? new List<RuntimePackageEntry?>();
+            if (packages.Any(package => package is null))
+                throw new InvalidDataException($"{displayPath} contains a null entry.");
+
+            var materialized = packages.Select(package => package!).ToArray();
+            foreach (var package in materialized)
                 ValidatePackage(package);
-            return packages;
+
+            var duplicate = materialized
+                .GroupBy(
+                    package => $"{package.Key}|{package.Version}|{package.Architecture}",
+                    StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(group => group.Count() > 1);
+            if (duplicate is not null)
+                throw new InvalidDataException($"{displayPath} contains a duplicate runtime key/version/architecture entry.");
+
+            return materialized;
         }
         catch (JsonException ex)
         {
