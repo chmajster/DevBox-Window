@@ -259,6 +259,9 @@ public sealed class PlatformTaskCenter : IDisposable
                     throw new InvalidDataException("Task Center history contains an invalid entry.");
                 }
             }
+            var duplicateId = materialized.GroupBy(item => item.Id).FirstOrDefault(group => group.Count() > 1);
+            if (duplicateId is not null)
+                throw new InvalidDataException($"Task Center history contains duplicate task id '{duplicateId.Key}'.");
 
             return materialized.Select(item => item.State is PlatformTaskState.Queued or PlatformTaskState.Running
                     ? item with

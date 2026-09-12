@@ -161,9 +161,11 @@ public sealed class AddonMarketplaceService : IDisposable
                 if (node is not JsonObject item)
                     throw new InvalidDataException("ADDONS catalog contains a non-object entry.");
                 var keyNode = item.FirstOrDefault(pair => pair.Key.Equals("key", StringComparison.OrdinalIgnoreCase)).Value;
-                var key = keyNode?.GetValue<string>();
+                string? key = null;
+                if (keyNode is JsonValue keyValue && keyValue.TryGetValue<string>(out var parsedKey))
+                    key = parsedKey;
                 if (string.IsNullOrWhiteSpace(key))
-                    throw new InvalidDataException("ADDONS catalog entry is missing key.");
+                    throw new InvalidDataException("ADDONS catalog entry has a missing or non-string key.");
                 byKey[key] = item.DeepClone() as JsonObject ?? throw new InvalidDataException("Unable to clone ADDONS catalog entry.");
             }
         }

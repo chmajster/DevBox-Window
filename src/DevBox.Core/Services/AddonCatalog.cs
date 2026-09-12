@@ -49,6 +49,16 @@ public sealed class AddonCatalog
             {
                 throw new InvalidDataException($"Addon manifest contains duplicate key '{duplicate.Key}'.");
             }
+            var duplicateInstallPath = entries
+                .GroupBy(entry => ResolveRelativePath(entry.InstallRelativePath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(group => group.Count() > 1);
+            if (duplicateInstallPath is not null)
+                throw new InvalidDataException("Addon manifest assigns the same install directory to multiple addons.");
+            var duplicateDomain = entries
+                .GroupBy(entry => new Uri(entry.LocalUrl).Host, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(group => group.Count() > 1);
+            if (duplicateDomain is not null)
+                throw new InvalidDataException($"Addon manifest assigns local domain '{duplicateDomain.Key}' to multiple addons.");
 
             return entries.Select(ToDefinition).ToArray();
         }
@@ -117,7 +127,14 @@ public sealed class AddonCatalog
             File.WriteAllText(tempPath, json);
             if (!File.Exists(_catalogPath))
             {
-                File.Move(tempPath, _catalogPath);
+                try
+                {
+                    File.Move(tempPath, _catalogPath);
+                }
+                catch (IOException) when (File.Exists(_catalogPath))
+                {
+                    // Another process initialized the default catalog first.
+                }
             }
         }
         finally

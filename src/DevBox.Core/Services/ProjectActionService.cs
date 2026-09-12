@@ -39,8 +39,7 @@ public sealed class ProjectActionService
             if (actionsNode is null)
                 return Array.Empty<ProjectActionDefinition>();
             var actions = actionsNode.Deserialize<List<ProjectActionDefinition?>>(JsonOptions) ?? new List<ProjectActionDefinition?>();
-            foreach (var action in actions)
-                ValidateAction(action);
+            ValidateActions(actions);
             return actions.Select(item => item!).Where(item => item.Enabled).ToArray();
         }
         catch (JsonException ex)
@@ -56,8 +55,7 @@ public sealed class ProjectActionService
         var manifestPath = Path.Combine(root, ProjectWorkspaceService.ManifestFileName);
         if (!File.Exists(manifestPath))
             throw new FileNotFoundException("devbox.json is required before project actions can be configured.", manifestPath);
-        foreach (var action in actions)
-            ValidateAction(action);
+        ValidateActions(actions);
 
         JsonObject manifest;
         try
@@ -132,6 +130,19 @@ public sealed class ProjectActionService
                 break;
         }
         return results;
+    }
+
+    private static void ValidateActions(IEnumerable<ProjectActionDefinition?> actions)
+    {
+        var materialized = actions.ToArray();
+        foreach (var action in materialized)
+            ValidateAction(action);
+        var duplicate = materialized
+            .Where(action => action is not null)
+            .GroupBy(action => action!.Key, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicate is not null)
+            throw new InvalidDataException($"Project actions contain duplicate key '{duplicate.Key}'.");
     }
 
     private static void ValidateAction(ProjectActionDefinition? action)

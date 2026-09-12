@@ -89,6 +89,9 @@ public sealed partial class ProjectStackProfileService
                 throw new InvalidDataException("config/project-profiles.json contains a null profile entry.");
             var materialized = profiles.Select(profile => profile!).ToArray();
             foreach (var profile in materialized) Validate(profile);
+            var duplicate = materialized.GroupBy(profile => profile.Key, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);
+            if (duplicate is not null)
+                throw new InvalidDataException($"config/project-profiles.json contains duplicate profile key '{duplicate.Key}'.");
             return materialized;
         }
         catch (JsonException ex)
