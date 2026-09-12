@@ -99,25 +99,22 @@ public sealed class GitProjectBootstrapService
 
             return new GitBootstrapResult(projectRoot, detection.Kind, environment, actions);
         }
-        catch
+        catch (Exception original)
         {
+            var rollbackActions = new List<Action>();
             if (Directory.Exists(destination))
             {
-                try
+                rollbackActions.Add(() =>
                 {
                     var site = _sites.GetSites().FirstOrDefault(item => item.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase));
                     if (site is not null)
                         _sites.Delete(site.Name);
-                }
-                catch (Exception) { }
-                TryRollbackDestination(destination, destinationExisted);
+                });
+                rollbackActions.Add(() => RollbackDestination(destination, destinationExisted));
             }
-            try { tlsRollback.Restore(tlsState); }
-            catch (Exception rollbackError)
-            {
-                throw new AggregateException("Git bootstrap failed and TLS rollback was incomplete.", rollbackError);
-            }
-            throw;
+            rollbackActions.Add(() => tlsRollback.Restore(tlsState));
+            RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
+            throw new InvalidOperationException("Git bootstrap rollback executor returned unexpectedly.");
         }
         finally
         {
@@ -229,24 +226,19 @@ public sealed class GitProjectBootstrapService
         catch (Win32Exception) { }
     }
 
-    private static void TryRollbackDestination(string path, bool existedBefore)
+    private static void RollbackDestination(string path, bool existedBefore)
     {
-        try
+        if (!Directory.Exists(path))
+            return;
+        if (!existedBefore)
         {
-            if (!Directory.Exists(path))
-                return;
-            if (!existedBefore)
-            {
-                Directory.Delete(path, recursive: true);
-                return;
-            }
-            foreach (var file in Directory.EnumerateFiles(path))
-                File.Delete(file);
-            foreach (var directory in Directory.EnumerateDirectories(path))
-                Directory.Delete(directory, recursive: true);
+            Directory.Delete(path, recursive: true);
+            return;
         }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+        foreach (var file in Directory.EnumerateFiles(path))
+            File.Delete(file);
+        foreach (var directory in Directory.EnumerateDirectories(path))
+            Directory.Delete(directory, recursive: true);
     }
 
     private static void TryDeleteDirectory(string path)
