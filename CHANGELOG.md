@@ -43,6 +43,16 @@ All notable changes to DevBox Windows are documented here.
 
 ### Fixed
 
+- ZIP extraction rejects duplicate and case-insensitive alias output paths so later archive entries cannot overwrite previously validated runtime/ADDON files.
+- Protected-path validation rejects a `www`/backup/service root that is itself a junction or symbolic link; managed-service executable, working-directory, stop-executable and log paths now use the same reparse-aware boundary checks.
+- Environment profiles reuse the canonical Project Action policy, preventing profiles with unsupported executables or incompatible action definitions from being saved and then failing only during apply.
+- Git bootstrap, project transfer and project manifests use the same strict `.test` domain validation as Sites/TLS, rejecting empty labels, oversized labels and leading/trailing hyphens before mutation begins.
+- Git bootstrap and WordPress setup preserve the original operation exception when TLS/database/site cleanup also fails, instead of reporting only the rollback failure.
+- Developer tools, PHP extension checks, configuration validators, Git bootstrap, WordPress CLI, project database clients, MySQL text commands and service stop helpers retain bounded stdout/stderr while continuing to drain child-process pipes.
+- WP-CLI cancellation now covers stdin writes as well as process waiting, terminating the child process instead of leaving an interactive command running after cancellation.
+- Configuration read/restore enforces the 2 MiB safety limit before loading a configuration or backup into memory.
+- Composer installer temporary-directory cleanup is best-effort so an antivirus/lock cleanup error cannot replace the primary installation result.
+
 - ADDONS install/entry-point paths now reject junctions, symbolic links and other reparse-point traversal, including direct installer calls that bypass the catalog.
 - ADDONS local URLs are restricted to plain `http://*.test` on port 80, matching the Nginx vhost DevBox actually generates; unsupported HTTPS/custom-port URLs are rejected instead of producing unreachable addons.
 - ADDON keys are capped at 64 characters so hand-edited or marketplace catalogs cannot generate invalid Windows lock/temp paths.

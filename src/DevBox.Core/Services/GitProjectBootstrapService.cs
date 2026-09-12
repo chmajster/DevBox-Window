@@ -99,7 +99,7 @@ public sealed class GitProjectBootstrapService
 
             return new GitBootstrapResult(projectRoot, detection.Kind, environment, actions);
         }
-        catch
+        catch (Exception original)
         {
             if (Directory.Exists(destination))
             {
@@ -115,7 +115,9 @@ public sealed class GitProjectBootstrapService
             try { tlsRollback.Restore(tlsState); }
             catch (Exception rollbackError)
             {
-                throw new AggregateException("Git bootstrap failed and TLS rollback was incomplete.", rollbackError);
+                throw new AggregateException(
+                    "Git bootstrap failed and TLS rollback was incomplete.",
+                    new[] { original, rollbackError });
             }
             throw;
         }
@@ -173,14 +175,7 @@ public sealed class GitProjectBootstrapService
         return normalized;
     }
 
-    private static string NormalizeDomain(string value)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(value);
-        var normalized = value.Trim().ToLowerInvariant();
-        if (!normalized.EndsWith(".test", StringComparison.Ordinal) || normalized.Length > 253 || normalized.Any(ch => !char.IsLetterOrDigit(ch) && ch is not '-' and not '.'))
-            throw new ArgumentException("Project domain must be a normalized .test domain.", nameof(value));
-        return normalized;
-    }
+    private static string NormalizeDomain(string value) => LocalCertificateManager.NormalizeDomain(value);
 
     private static async Task<ProcessResult> RunGitAsync(string executable, IReadOnlyList<string> arguments, string workingDirectory, CancellationToken cancellationToken)
     {
@@ -198,8 +193,8 @@ public sealed class GitProjectBootstrapService
         {
             throw new InvalidOperationException($"Unable to start Git: {ex.Message}", ex);
         }
-        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stdout = ProcessOutputCapture.ReadBoundedAsync(process.StandardOutput, cancellationToken: cancellationToken);
+        var stderr = ProcessOutputCapture.ReadBoundedAsync(process.StandardError, cancellationToken: cancellationToken);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(10));
         try

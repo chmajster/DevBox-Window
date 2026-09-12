@@ -132,6 +132,8 @@ public sealed class ProjectActionService
         return results;
     }
 
+    internal static void ValidateDefinitions(IEnumerable<ProjectActionDefinition?> actions) => ValidateActions(actions);
+
     private static void ValidateActions(IEnumerable<ProjectActionDefinition?> actions)
     {
         var materialized = actions.ToArray();

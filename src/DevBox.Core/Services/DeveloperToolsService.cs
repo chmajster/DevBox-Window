@@ -145,10 +145,7 @@ public sealed class DeveloperToolsService : IDisposable
         }
         finally
         {
-            if (Directory.Exists(tempRoot))
-            {
-                Directory.Delete(tempRoot, recursive: true);
-            }
+            TryDeleteDirectory(tempRoot);
         }
     }
 
@@ -216,8 +213,8 @@ public sealed class DeveloperToolsService : IDisposable
             throw new InvalidOperationException($"Unable to start {Path.GetFileName(executable)}.");
         }
 
-        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        var outputTask = ProcessOutputCapture.ReadBoundedAsync(process.StandardOutput, cancellationToken: cancellationToken);
+        var errorTask = ProcessOutputCapture.ReadBoundedAsync(process.StandardError, cancellationToken: cancellationToken);
         try
         {
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
@@ -236,6 +233,17 @@ public sealed class DeveloperToolsService : IDisposable
                 : error.Trim());
         }
         return string.IsNullOrWhiteSpace(output) ? error : output;
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+                Directory.Delete(path, recursive: true);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     private static void TryKill(Process process)

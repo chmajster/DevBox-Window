@@ -250,8 +250,8 @@ public sealed class ProcessManager : IProcessManager
             return false;
         }
 
-        var outputTask = stopProcess.StandardOutput.ReadToEndAsync(cancellationToken);
-        var errorTask = stopProcess.StandardError.ReadToEndAsync(cancellationToken);
+        var outputTask = ProcessOutputCapture.ReadBoundedAsync(stopProcess.StandardOutput, 64 * 1024, cancellationToken);
+        var errorTask = ProcessOutputCapture.ReadBoundedAsync(stopProcess.StandardError, 64 * 1024, cancellationToken);
         bool exited;
         try
         {

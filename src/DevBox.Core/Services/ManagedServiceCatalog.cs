@@ -265,15 +265,17 @@ public sealed partial class ManagedServiceCatalog
         {
             throw new InvalidDataException($"{name} must be relative to the DevBox root.");
         }
-        var root = _rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var full = Path.GetFullPath(Path.Combine(_rootPath, relativePath.Replace('/', Path.DirectorySeparatorChar)))
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var isRoot = full.Equals(root, StringComparison.OrdinalIgnoreCase);
-        if ((!allowRoot || !isRoot) && !full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        try
         {
-            throw new InvalidDataException($"{name} escapes the DevBox root.");
+            return PathSafety.EnsureUnderRootWithoutReparsePoints(
+                _rootPath, full, $"{name} escapes the DevBox root or traverses a reparse point.", allowRoot);
         }
-        return full;
+        catch (InvalidOperationException ex)
+        {
+            throw new InvalidDataException(ex.Message, ex);
+        }
     }
 
     private static void AtomicWrite(string path, string content)

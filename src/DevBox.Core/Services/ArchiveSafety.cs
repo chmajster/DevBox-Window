@@ -88,10 +88,15 @@ internal static class ArchiveSafety
         }
 
         long totalUncompressedBytes = 0;
+        var outputPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in archive.Entries)
         {
             ValidateEntryPath(entry, destinationPath, destinationRoot, packageName);
             RejectSymbolicLink(entry, packageName);
+            var outputPath = ResolveOutputPath(entry, destinationPath)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (!outputPaths.Add(outputPath))
+                throw new InvalidDataException($"{packageName} archive contains multiple entries targeting the same output path: {entry.FullName}");
 
             try
             {

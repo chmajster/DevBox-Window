@@ -220,8 +220,8 @@ public sealed class ProjectDatabaseProvisioner
 
         using var process = new Process { StartInfo = startInfo };
         if (!process.Start()) throw new InvalidOperationException($"Unable to start {Path.GetFileName(executable)}.");
-        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stdout = ProcessOutputCapture.ReadBoundedAsync(process.StandardOutput, cancellationToken: cancellationToken);
+        var stderr = ProcessOutputCapture.ReadBoundedAsync(process.StandardError, cancellationToken: cancellationToken);
         try
         {
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
