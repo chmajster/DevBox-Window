@@ -638,7 +638,7 @@ public sealed class DatabaseRuntimeService : IDisposable
             var stderr = await stderrTask.ConfigureAwait(false);
             return new ProcessResult(process.ExitCode, stdout, stderr);
         }
-        catch (OperationCanceledException)
+        catch
         {
             try
             {
