@@ -25,7 +25,22 @@ public sealed class RelayCommand : ICommand
 
     public event EventHandler? CanExecuteChanged;
 
-    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+    public void RaiseCanExecuteChanged()
+    {
+        if (CanExecuteChanged is null)
+            return;
+        foreach (EventHandler handler in CanExecuteChanged.GetInvocationList())
+        {
+            try
+            {
+                handler(this, EventArgs.Empty);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceError($"RelayCommand CanExecuteChanged subscriber failed: {ex}");
+            }
+        }
+    }
 }
 
 public sealed class AsyncRelayCommand : ICommand
@@ -65,7 +80,7 @@ public sealed class AsyncRelayCommand : ICommand
         catch (Exception ex)
         {
             Trace.TraceError($"Unhandled asynchronous command exception: {ex}");
-            ExecutionFailed?.Invoke(ex);
+            RaiseExecutionFailed(ex);
         }
         finally
         {
@@ -77,5 +92,37 @@ public sealed class AsyncRelayCommand : ICommand
     public event EventHandler? CanExecuteChanged;
     public event Action<Exception>? ExecutionFailed;
 
-    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+    public void RaiseCanExecuteChanged()
+    {
+        if (CanExecuteChanged is null)
+            return;
+        foreach (EventHandler handler in CanExecuteChanged.GetInvocationList())
+        {
+            try
+            {
+                handler(this, EventArgs.Empty);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceError($"AsyncRelayCommand CanExecuteChanged subscriber failed: {ex}");
+            }
+        }
+    }
+
+    private void RaiseExecutionFailed(Exception exception)
+    {
+        if (ExecutionFailed is null)
+            return;
+        foreach (Action<Exception> handler in ExecutionFailed.GetInvocationList())
+        {
+            try
+            {
+                handler(exception);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceError($"AsyncRelayCommand ExecutionFailed subscriber failed: {ex}");
+            }
+        }
+    }
 }

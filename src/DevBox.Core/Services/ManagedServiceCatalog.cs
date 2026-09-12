@@ -228,11 +228,23 @@ public sealed partial class ManagedServiceCatalog
         {
             using var document = JsonDocument.Parse(File.ReadAllText(databaseRegistrations));
             if (document.RootElement.ValueKind != JsonValueKind.Array)
-                return false;
+                throw new InvalidDataException("config/database-runtimes.json root must be a JSON array.");
             foreach (var item in document.RootElement.EnumerateArray())
             {
-                if ((item.TryGetProperty("Port", out var value) || item.TryGetProperty("port", out value)) &&
-                    value.TryGetInt32(out var registeredPort) && registeredPort == port)
+                if (item.ValueKind != JsonValueKind.Object)
+                    throw new InvalidDataException("config/database-runtimes.json contains a non-object entry.");
+                JsonElement? portValue = null;
+                foreach (var property in item.EnumerateObject())
+                {
+                    if (property.Name.Equals("port", StringComparison.OrdinalIgnoreCase))
+                    {
+                        portValue = property.Value;
+                        break;
+                    }
+                }
+                if (portValue is null || !portValue.Value.TryGetInt32(out var registeredPort) || registeredPort is < 1 or > 65535)
+                    throw new InvalidDataException("config/database-runtimes.json contains an invalid or missing port.");
+                if (registeredPort == port)
                     return true;
             }
             return false;

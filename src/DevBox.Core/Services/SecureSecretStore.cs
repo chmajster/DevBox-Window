@@ -126,6 +126,9 @@ public sealed partial class SecureSecretStore
                 ?? new Dictionary<string, string?>();
             if (values.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || pair.Value is null))
                 throw new InvalidDataException("config/secrets.dpapi.json contains an invalid secret entry.");
+            var duplicateKey = values.Keys.GroupBy(key => key, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);
+            if (duplicateKey is not null)
+                throw new InvalidDataException($"config/secrets.dpapi.json contains duplicate secret key '{duplicateKey.Key}'.");
             return values.ToDictionary(pair => pair.Key, pair => pair.Value!, StringComparer.OrdinalIgnoreCase);
         }
         catch (JsonException ex)

@@ -147,6 +147,7 @@ public sealed class ProcessManager : IProcessManager
 
                 if (!managed.Process.HasExited)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     AppendLog(managed, "APP", "Graceful shutdown was unavailable or timed out; killing managed process tree.");
                     managed.Process.Kill(entireProcessTree: true);
                     await managed.Process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
