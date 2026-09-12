@@ -237,16 +237,19 @@ public sealed class ProjectDatabaseProvisioner
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        foreach (var argument in arguments)
+            startInfo.ArgumentList.Add(argument);
         if (environment is not null)
         {
-            foreach (var item in environment) startInfo.Environment[item.Key] = item.Value;
+            foreach (var item in environment)
+                startInfo.Environment[item.Key] = item.Value;
         }
 
         using var process = new Process { StartInfo = startInfo };
-        if (!process.Start()) throw new InvalidOperationException($"Unable to start {Path.GetFileName(executable)}.");
-        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+        if (!process.Start())
+            throw new InvalidOperationException($"Unable to start {Path.GetFileName(executable)}.");
+        var stdout = ProcessOutputCapture.ReadBoundedAsync(process.StandardOutput, cancellationToken: cancellationToken);
+        var stderr = ProcessOutputCapture.ReadBoundedAsync(process.StandardError, cancellationToken: cancellationToken);
         try
         {
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
