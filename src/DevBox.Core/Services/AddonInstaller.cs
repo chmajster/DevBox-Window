@@ -346,10 +346,28 @@ server {
 
     private void EnsureInstallPathIsSafe(AddonDefinition addon)
     {
-        var wwwRoot = Path.GetFullPath(Path.Combine(_rootPath, "www")).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        var installPath = Path.GetFullPath(addon.InstallPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!installPath.StartsWith(wwwRoot, StringComparison.OrdinalIgnoreCase) || installPath.Equals(wwwRoot, StringComparison.OrdinalIgnoreCase))
+        var wwwPath = Path.GetFullPath(Path.Combine(_rootPath, "www"))
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var installPath = Path.GetFullPath(addon.InstallPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var wwwPrefix = wwwPath + Path.DirectorySeparatorChar;
+        if (!installPath.StartsWith(wwwPrefix, StringComparison.OrdinalIgnoreCase) || installPath.Equals(wwwPath, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Addon install path must be a child of the DevBox www directory.");
+
+        RejectExistingReparsePoint(wwwPath);
+        var current = wwwPath;
+        var relative = Path.GetRelativePath(wwwPath, installPath);
+        foreach (var segment in relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            RejectExistingReparsePoint(current);
+        }
+    }
+
+    private static void RejectExistingReparsePoint(string path)
+    {
+        if (Directory.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidOperationException($"Addon install path cannot traverse a reparse point: {path}");
     }
 
     private static void CopyDirectory(string sourcePath, string destinationPath)
