@@ -81,6 +81,9 @@ public sealed partial class EnvironmentProfileService
             var materialized = profiles.Select(profile => profile!).ToArray();
             foreach (var profile in materialized)
                 Validate(profile);
+            var duplicate = materialized.GroupBy(profile => profile.Key, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);
+            if (duplicate is not null)
+                throw new InvalidDataException($"config/environment-profiles.json contains duplicate profile key '{duplicate.Key}'.");
             return materialized.Select(Normalize).ToArray();
         }
         catch (JsonException ex)
@@ -140,6 +143,9 @@ public sealed partial class EnvironmentProfileService
             if (!SafeKeyRegex().IsMatch(pair.Key ?? string.Empty) || !SafeVersionRegex().IsMatch(pair.Value ?? string.Empty))
                 throw new InvalidDataException($"Environment profile contains an invalid runtime pin: {pair.Key}={pair.Value}.");
         }
+        var duplicateRuntime = profile.Runtimes.Keys.GroupBy(key => key, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);
+        if (duplicateRuntime is not null)
+            throw new InvalidDataException($"Environment profile contains duplicate runtime key '{duplicateRuntime.Key}'.");
 
         var engine = profile.Database.Engine?.Trim().ToLowerInvariant();
         if (engine is not ("mysql" or "mariadb" or "postgresql" or "none"))
@@ -161,6 +167,12 @@ public sealed partial class EnvironmentProfileService
             if (action.TimeoutSeconds is < 1 or > 3600)
                 throw new InvalidDataException($"Action '{action.Key}' timeout must be between 1 and 3600 seconds.");
         }
+        var duplicateAction = profile.Actions
+            .Where(action => action is not null)
+            .GroupBy(action => action!.Key, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateAction is not null)
+            throw new InvalidDataException($"Environment profile contains duplicate action key '{duplicateAction.Key}'.");
     }
 
     private static void AtomicWrite(string path, string content)

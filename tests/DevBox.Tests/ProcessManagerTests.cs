@@ -164,13 +164,13 @@ public sealed class ProcessManagerTests
                 root, 0, "test",
                 StopExecutablePath: stopExecutable,
                 StopArguments: new[] { "/d", "/c", "exit 0" },
-                ShutdownTimeout: TimeSpan.FromMilliseconds(500));
+                ShutdownTimeout: TimeSpan.FromSeconds(5));
 
             using var manager = new ProcessManager();
             var started = await manager.StartAsync(definition);
             Assert.Equal(ServiceState.Running, started.State);
 
-            using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.StopAsync(definition, cancellation.Token));
 
             Assert.Equal(ServiceState.Running, manager.GetStatus(definition).State);

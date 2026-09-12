@@ -225,6 +225,11 @@ public sealed class RuntimePlatformService : IDisposable
             var materialized = packages.Select(package => package!).ToArray();
             foreach (var package in materialized)
                 ValidatePackage(package);
+            var duplicate = materialized
+                .GroupBy(package => $"{package.Key}|{package.Version}|{package.Architecture}", StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(group => group.Count() > 1);
+            if (duplicate is not null)
+                throw new InvalidDataException($"config/runtime-catalog.json contains duplicate runtime identity '{duplicate.Key}'.");
             return materialized;
         }
         catch (JsonException ex)
