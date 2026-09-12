@@ -78,7 +78,7 @@ public sealed class RuntimeCatalogLayeringTests
             File.WriteAllText(Path.Combine(installed, "php-cgi.exe"), "legacy runtime");
 
             using var service = new RuntimePlatformService(root);
-            var status = Assert.Single(service.GetStatuses("php").Where(item => item.Package.Version == "7.4.99"));
+            var status = Assert.Single(service.GetStatuses("php"), item => item.Package.Version == "7.4.99");
 
             Assert.True(status.Installed);
             Assert.True(status.Valid);
