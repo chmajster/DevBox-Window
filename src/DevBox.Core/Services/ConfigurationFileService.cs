@@ -115,11 +115,12 @@ public sealed class ConfigurationFileService
     {
         var normalized = NormalizeKey(key);
         var source = Path.GetFullPath(backupPath);
-        var allowedRoot = Path.GetFullPath(_backupRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!source.StartsWith(allowedRoot, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Configuration backups can only be restored from the DevBox backup directory.");
         if (!File.Exists(source))
             throw new FileNotFoundException("Configuration backup does not exist.", source);
+        source = PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _backupRoot,
+            source,
+            "Configuration backups can only be restored from the DevBox backup directory and cannot traverse a reparse point.");
         var fileName = Path.GetFileName(source);
         if (!fileName.StartsWith(normalized + "-", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"Backup '{fileName}' does not belong to configuration '{normalized}'.");
