@@ -122,9 +122,11 @@ public sealed partial class SecureSecretStore
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            var values = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(_storePath))
-                ?? new Dictionary<string, string>();
-            return new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase);
+            var values = JsonSerializer.Deserialize<Dictionary<string, string?>>(File.ReadAllText(_storePath))
+                ?? new Dictionary<string, string?>();
+            if (values.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || pair.Value is null))
+                throw new InvalidDataException("config/secrets.dpapi.json contains an invalid secret entry.");
+            return values.ToDictionary(pair => pair.Key, pair => pair.Value!, StringComparer.OrdinalIgnoreCase);
         }
         catch (JsonException ex)
         {

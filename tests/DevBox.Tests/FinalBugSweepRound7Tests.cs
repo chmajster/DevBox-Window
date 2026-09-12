@@ -48,6 +48,57 @@ public sealed class FinalBugSweepRound7Tests
     }
 
     [Fact]
+    public void ManagedServiceTemplates_AcceptDevBoxRootWorkingDirectory()
+    {
+        var root = NewRoot();
+        try
+        {
+            var catalog = new ManagedServiceCatalog(root);
+            catalog.Upsert(ManagedServiceCatalog.MailpitTemplate());
+            catalog.Upsert(ManagedServiceCatalog.RedisTemplate());
+            var keys = catalog.GetManifests().Select(item => item.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            Assert.Contains("mailpit", keys);
+            Assert.Contains("redis", keys);
+        }
+        finally { TryDelete(root); }
+    }
+
+    [Fact]
+    public void PersistedCatalogs_NullEntriesAreHandledWithoutNullReferenceCrashes()
+    {
+        var root = NewRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "config", "project-profiles.json"), "[null]");
+            Assert.Throws<InvalidDataException>(() => new ProjectStackProfileService(root).GetProfiles());
+
+            File.WriteAllText(Path.Combine(root, "config", "runtime-catalog.json"), "[null]");
+            using (var runtimes = new RuntimePlatformService(root))
+                Assert.Throws<InvalidDataException>(() => runtimes.GetCatalog());
+
+            File.WriteAllText(Path.Combine(root, "config", "sites.json"), "[null]");
+            Assert.Empty(new SiteManager(root).GetSites());
+            Assert.False(File.Exists(Path.Combine(root, "config", "sites.json")));
+        }
+        finally { TryDelete(root); }
+    }
+
+    [Fact]
+    public void SecureSecretStore_NullEncodedValueIsControlledInvalidData()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        var root = NewRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "config", "secrets.dpapi.json"), "{\"fixture\":null}");
+            var store = new SecureSecretStore(root);
+            Assert.Throws<InvalidDataException>(() => store.Get("fixture"));
+        }
+        finally { TryDelete(root); }
+    }
+
+    [Fact]
     public void ManagedServices_RejectNullStateReservedPidPrefixesAndPhpPoolPorts()
     {
         var root = NewRoot();

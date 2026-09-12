@@ -243,19 +243,21 @@ public sealed partial class ManagedServiceCatalog
         }
     }
 
-    private string ResolveRelativeFile(string relativePath, string name) => ResolveInsideRoot(relativePath, name);
-    private string ResolveRelativeDirectory(string relativePath, string name) => ResolveInsideRoot(relativePath, name);
+    private string ResolveRelativeFile(string relativePath, string name) => ResolveInsideRoot(relativePath, name, allowRoot: false);
+    private string ResolveRelativeDirectory(string relativePath, string name) => ResolveInsideRoot(relativePath, name, allowRoot: true);
 
-    private string ResolveInsideRoot(string relativePath, string name)
+    private string ResolveInsideRoot(string relativePath, string name, bool allowRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath, name);
         if (Path.IsPathRooted(relativePath))
         {
             throw new InvalidDataException($"{name} must be relative to the DevBox root.");
         }
-        var root = _rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        var full = Path.GetFullPath(Path.Combine(_rootPath, relativePath.Replace('/', Path.DirectorySeparatorChar)));
-        if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+        var root = _rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var full = Path.GetFullPath(Path.Combine(_rootPath, relativePath.Replace('/', Path.DirectorySeparatorChar)))
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var isRoot = full.Equals(root, StringComparison.OrdinalIgnoreCase);
+        if ((!allowRoot || !isRoot) && !full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException($"{name} escapes the DevBox root.");
         }

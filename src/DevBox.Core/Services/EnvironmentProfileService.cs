@@ -74,11 +74,14 @@ public sealed partial class EnvironmentProfileService
 
         try
         {
-            var profiles = JsonSerializer.Deserialize<List<EnvironmentProfile>>(File.ReadAllText(_profilesPath), JsonOptions)
-                ?? new List<EnvironmentProfile>();
-            foreach (var profile in profiles)
+            var profiles = JsonSerializer.Deserialize<List<EnvironmentProfile?>>(File.ReadAllText(_profilesPath), JsonOptions)
+                ?? new List<EnvironmentProfile?>();
+            if (profiles.Any(profile => profile is null))
+                throw new InvalidDataException("config/environment-profiles.json contains a null profile entry.");
+            var materialized = profiles.Select(profile => profile!).ToArray();
+            foreach (var profile in materialized)
                 Validate(profile);
-            return profiles.Select(Normalize).ToArray();
+            return materialized.Select(Normalize).ToArray();
         }
         catch (JsonException ex)
         {
