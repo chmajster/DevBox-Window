@@ -166,6 +166,28 @@ public sealed class FinalAuditRegressionTests
         }
     }
 
+    [Fact]
+    public void RuntimeLayout_RejectsExistingTopLevelReparsePoint()
+    {
+        var root = TemporaryRoot();
+        var outside = Path.Combine(Path.GetTempPath(), "devbox-layout-outside-tests", Guid.NewGuid().ToString("N"));
+        var link = Path.Combine(root, "tmp");
+        try
+        {
+            Directory.CreateDirectory(outside);
+            if (!TryCreateDirectoryLink(link, outside))
+                return;
+
+            Assert.Throws<InvalidOperationException>(() => RuntimeLayout.EnsureInitialized(root));
+        }
+        finally
+        {
+            TryDeleteLink(link);
+            Cleanup(root);
+            Cleanup(outside);
+        }
+    }
+
     private static EnvironmentProfile BaseProfile() => new()
     {
         Key = "final-audit",
