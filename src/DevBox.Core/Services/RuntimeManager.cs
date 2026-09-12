@@ -130,7 +130,18 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
             var installPath = VersionPath(definition.Key, definition.Version);
             ReplaceDirectory(stagingPath, installPath);
             progress?.Report(95);
-            await ActivateUnderLockAsync(definition.Key, definition.Version, definition.ExecutableRelativePath, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await ActivateUnderLockAsync(definition.Key, definition.Version, definition.ExecutableRelativePath, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception original)
+            {
+                var rollbackActions = new List<Action>();
+                if (Directory.Exists(installPath))
+                    rollbackActions.Add(() => Directory.Delete(installPath, recursive: true));
+                RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
+                throw new InvalidOperationException("Runtime installation rollback executor returned unexpectedly.");
+            }
             progress?.Report(100);
         }
         finally
