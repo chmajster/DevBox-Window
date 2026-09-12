@@ -133,7 +133,7 @@ public sealed class RuntimeRowViewModel : ObservableObject
                        !string.IsNullOrWhiteSpace(status.Package.DownloadUrl) &&
                        !string.IsNullOrWhiteSpace(status.Package.Sha256);
         CanActivate = status.Installed && status.Valid && !status.Active;
-        CanRemove = status.Installed;
+        CanRemove = status.Installed && !status.Active;
         _status = !status.Installed
             ? _canDownload ? "Available online" : "Not installed"
             : !status.Valid ? "Broken" : status.Active ? "Active" : "Installed";
@@ -153,7 +153,7 @@ public sealed class RuntimeRowViewModel : ObservableObject
         IsInstalled = true;
         _canDownload = false;
         CanActivate = runtime.IsValid && !runtime.IsActive;
-        CanRemove = true;
+        CanRemove = !runtime.IsActive;
     }
 
     public string Key { get; }
@@ -171,9 +171,7 @@ public sealed class RuntimeRowViewModel : ObservableObject
         private set
         {
             if (SetProperty(ref _progressPercent, value))
-            {
                 OnPropertyChanged(nameof(ProgressText));
-            }
         }
     }
     public string ProgressText => $"{ProgressPercent}%";
@@ -191,9 +189,7 @@ public sealed class RuntimeRowViewModel : ObservableObject
     {
         var normalized = Math.Clamp(percentage, 0, 100);
         if (normalized < ProgressPercent)
-        {
             return;
-        }
 
         ProgressPercent = normalized;
         Status = ProgressPercent switch
