@@ -364,12 +364,15 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
             Directory.Move(stagingPath, installPath);
             TryDeleteDirectory(backupPath);
         }
-        catch
+        catch (Exception original)
         {
-            TryDeleteDirectory(installPath);
+            var rollbackActions = new List<Action>();
+            if (Directory.Exists(installPath))
+                rollbackActions.Add(() => Directory.Delete(installPath, recursive: true));
             if (Directory.Exists(backupPath))
-                Directory.Move(backupPath, installPath);
-            throw;
+                rollbackActions.Add(() => Directory.Move(backupPath, installPath));
+            RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
+            throw new InvalidOperationException("Runtime directory rollback executor returned unexpectedly.");
         }
     }
 
