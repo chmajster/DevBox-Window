@@ -22,7 +22,7 @@ jobs:
 
       - name: Apply fixes, tests and changelog
         shell: pwsh
-        run: python .github/scripts/apply-final-bug-sweep-round9.py
+        run: python .github/scripts/run-final-bug-sweep-round9.py
 
       - name: Commit product changes
         shell: pwsh
