@@ -60,15 +60,6 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDi
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait; Tasks: launchafterinstall
 
-; Runtime modules and temporary package data are always DevBox-owned.
-; Addon project directories and their vhosts are removed conditionally from [Code]
-; only when ownership can be established.
-[UninstallDelete]
-Type: filesandordirs; Name: "{app}\runtime"
-Type: filesandordirs; Name: "{app}\tmp\runtimes"
-Type: filesandordirs; Name: "{app}\tmp\runtime-imports"
-Type: filesandordirs; Name: "{app}\tmp\addons"
-
 [Code]
 const
   AppUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{C87C96C9-E130-4BB4-90A2-14F80D69B58F}_is1';
@@ -166,6 +157,67 @@ begin
     Result := Candidate;
 end;
 
+function EffectiveInstalledLocation: String;
+var
+  Uninstaller: String;
+begin
+  Result := InstalledLocation;
+  if Result <> '' then
+    Exit;
+
+  Uninstaller := ExistingUninstallerPath;
+  if Uninstaller <> '' then
+    Result := ExtractFileDir(Uninstaller);
+end;
+
+function IsSafeManagedRoot(const BaseDir: String): Boolean;
+var
+  ModuleRoot: String;
+  ParentRoot: String;
+  WindowsRoot: String;
+  SystemRoot: String;
+begin
+  Result := False;
+  if Trim(BaseDir) = '' then
+    Exit;
+
+  ModuleRoot := RemoveBackslashUnlessRoot(BaseDir);
+  if ModuleRoot = '' then
+    Exit;
+
+  ParentRoot := RemoveBackslashUnlessRoot(ExtractFileDir(ModuleRoot));
+  if (ParentRoot = '') or (Lowercase(ParentRoot) = Lowercase(ModuleRoot)) then
+  begin
+    Log('Refusing managed cleanup for filesystem root: ' + ModuleRoot);
+    Exit;
+  end;
+
+  WindowsRoot := RemoveBackslashUnlessRoot(ExpandConstant('{win}'));
+  SystemRoot := RemoveBackslashUnlessRoot(ExpandConstant('{sys}'));
+  if (Lowercase(ModuleRoot) = Lowercase(WindowsRoot)) or
+     (Lowercase(ModuleRoot) = Lowercase(SystemRoot)) then
+  begin
+    Log('Refusing managed cleanup for protected Windows directory: ' + ModuleRoot);
+    Exit;
+  end;
+
+  Result := True;
+end;
+
+function HasDevBoxInstallEvidence(const BaseDir: String): Boolean;
+var
+  RootPrefix: String;
+begin
+  Result := False;
+  if not IsSafeManagedRoot(BaseDir) then
+    Exit;
+
+  RootPrefix := AddBackslash(RemoveBackslashUnlessRoot(BaseDir));
+  Result :=
+    FileExists(RootPrefix + '{#MyAppExeName}') or
+    FileExists(RootPrefix + 'unins000.exe');
+end;
+
 function HasExactDirective(const Lines: TArrayOfString; const Directive: String): Boolean;
 var
   I: Integer;
@@ -240,9 +292,15 @@ var
   PhpMyAdminVhost: String;
   ManagedPhpMyAdmin: Boolean;
 begin
-  Result := True;
-  if BaseDir = '' then
+  Result := False;
+  if not IsSafeManagedRoot(BaseDir) then
+  begin
+    MsgBox(
+      'DevBox refused to remove downloaded modules because the installation directory is unsafe or invalid:' + #13#10 +
+      BaseDir,
+      mbError, MB_OK);
     Exit;
+  end;
 
   ModuleRoot := RemoveBackslashUnlessRoot(BaseDir);
   RootPrefix := AddBackslash(ModuleRoot);
@@ -380,8 +438,32 @@ var
 begin
   Result := True;
 
+  if CurPageID = wpSelectDir then
+  begin
+    if not IsSafeManagedRoot(WizardDirValue) then
+    begin
+      MsgBox(
+        'Choose a dedicated DevBox installation directory. Installing directly into a filesystem root or protected Windows directory is not allowed.',
+        mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+  end;
+
   if (MaintenancePage = nil) or (CurPageID <> MaintenancePage.ID) then
     Exit;
+
+  PreviousInstallLocation := EffectiveInstalledLocation;
+  if not HasDevBoxInstallEvidence(PreviousInstallLocation) then
+  begin
+    MsgBox(
+      'The existing DevBox registry entry points to an unsafe or unverified installation directory:' + #13#10 +
+      PreviousInstallLocation + #13#10 +
+      'Setup will not modify or clean this directory automatically.',
+      mbError, MB_OK);
+    Result := False;
+    Exit;
+  end;
 
   case MaintenancePage.SelectedValueIndex of
     0:
@@ -392,14 +474,13 @@ begin
     1:
       begin
         Log('Existing installation action selected: reinstall.');
-        PreviousInstallLocation := InstalledLocation;
         if not RunExistingUninstaller(True) then
         begin
           Result := False;
           Exit;
         end;
 
-        { The old uninstaller may predate [UninstallDelete], therefore perform
+        { The old uninstaller may predate managed cleanup, therefore perform
           explicit cleanup here as well so the first reinstall also removes modules. }
         if not RemoveGeneratedModules(PreviousInstallLocation) then
         begin
@@ -422,7 +503,6 @@ begin
         end;
 
         Log('Existing installation action selected: uninstall.');
-        PreviousInstallLocation := InstalledLocation;
         if not RunExistingUninstaller(False) then
         begin
           Result := False;
