@@ -47,7 +47,7 @@ internal static class Program
                 _ => Fail($"Unknown command '{args[0]}'. Use 'devbox --help'.", json)
             };
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or HttpRequestException or ArgumentException or NotSupportedException or KeyNotFoundException or System.ComponentModel.Win32Exception or System.Security.Cryptography.CryptographicException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or HttpRequestException or ArgumentException or NotSupportedException or KeyNotFoundException or FormatException or OverflowException or System.ComponentModel.Win32Exception or System.Security.Cryptography.CryptographicException)
         {
             return Fail(ex.Message, json, 1);
         }
@@ -193,7 +193,13 @@ internal static class Program
                 }
                 case "register" when args.Count is 4 or 5:
                 {
-                    var port = args.Count == 5 ? int.Parse(args[4], System.Globalization.CultureInfo.InvariantCulture) : (int?)null;
+                    int? port = null;
+                    if (args.Count == 5)
+                    {
+                        if (!int.TryParse(args[4], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var parsedPort) || parsedPort is < 1 or > 65535)
+                            return Fail("Database runtime port must be a number from 1 to 65535.", json);
+                        port = parsedPort;
+                    }
                     var value = runtime.Register(args[2], args[3], port);
                     WriteValue(value, json, $"Registered {value.Engine} {value.Version} on port {value.Port}.");
                     return 0;

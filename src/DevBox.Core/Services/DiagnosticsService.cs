@@ -27,7 +27,23 @@ public sealed class DiagnosticsService
             CheckFile("Configuration", "MySQL configuration", Path.Combine(_rootPath, "config", "mysql", "my.ini"))
         };
 
-        foreach (var service in _serviceCatalog.GetDefaultServices())
+        IReadOnlyList<ServiceDefinition> services;
+        try
+        {
+            services = _serviceCatalog.GetDefaultServices();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or ArgumentException)
+        {
+            results.Add(new DiagnosticCheck(
+                "Configuration",
+                "Managed services configuration",
+                false,
+                $"Optional managed services were ignored: {ex.Message}",
+                DiagnosticSeverity.Warning));
+            services = _serviceCatalog.GetCoreServices();
+        }
+
+        foreach (var service in services)
         {
             var runtimeExists = File.Exists(service.ExecutablePath);
             results.Add(new DiagnosticCheck(

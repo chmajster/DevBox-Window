@@ -46,7 +46,7 @@ public sealed partial class SiteManager
     {
         using var mutationLock = AcquireMutationLock();
         var normalizedName = NormalizeName(name);
-        var normalizedDomain = NormalizeDomain(domain ?? $"{normalizedName}.test");
+        var normalizedDomain = NormalizeDomain(domain ?? LocalDomainName.FromName(normalizedName));
         var root = documentRoot is null
             ? Path.Combine(_wwwRoot, normalizedName)
             : EnsureDocumentRootUnderWww(documentRoot);
@@ -54,6 +54,7 @@ public sealed partial class SiteManager
         var sites = GetSites().ToList();
         ValidateNewSite(sites, normalizedName, normalizedDomain);
 
+        var rootExisted = Directory.Exists(root);
         Directory.CreateDirectory(root);
         var indexPath = Path.Combine(root, "index.php");
         var scaffoldedIndex = false;
@@ -72,6 +73,8 @@ public sealed partial class SiteManager
         {
             if (scaffoldedIndex)
                 TryDeleteFile(indexPath);
+            if (!rootExisted)
+                TryDeleteEmptyDirectory(root);
             throw;
         }
     }
@@ -453,6 +456,21 @@ server {
         }
     }
 
+    private static void TryDeleteEmptyDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path) && !Directory.EnumerateFileSystemEntries(path).Any())
+                Directory.Delete(path, recursive: false);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
     private void ValidateLoadedSite(SiteDefinition? site)
     {
         if (site is null)
@@ -558,7 +576,7 @@ server {
         PropertyNameCaseInsensitive = true
     };
 
-    [GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,62}$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,79}$", RegexOptions.CultureInvariant)]
     private static partial Regex SafeNameRegex();
 
     [GeneratedRegex("^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+test$", RegexOptions.CultureInvariant)]

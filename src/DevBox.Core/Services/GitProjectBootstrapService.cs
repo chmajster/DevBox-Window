@@ -26,7 +26,7 @@ public sealed class GitProjectBootstrapService
         var repository = ValidateRepositoryUrl(request.RepositoryUrl);
         var projectName = NormalizeProjectName(request.ProjectName);
         var branch = NormalizeBranch(request.Branch);
-        var domain = NormalizeDomain(request.Domain ?? $"{projectName}.test");
+        var domain = NormalizeDomain(request.Domain ?? LocalDomainName.FromName(projectName));
         var tlsRollback = new TlsRollbackStateService(_rootPath);
         var tlsState = tlsRollback.Capture(domain);
         Directory.CreateDirectory(_wwwRoot);
@@ -99,21 +99,25 @@ public sealed class GitProjectBootstrapService
 
             return new GitBootstrapResult(projectRoot, detection.Kind, environment, actions);
         }
-        catch (Exception original)
+        catch
         {
-            var rollbackActions = new List<Action>
+            if (Directory.Exists(destination))
             {
-                () =>
+                try
                 {
                     var site = _sites.GetSites().FirstOrDefault(item => item.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase));
                     if (site is not null)
                         _sites.Delete(site.Name);
-                },
-                () => RollbackDestination(destination, destinationExisted),
-                () => tlsRollback.Restore(tlsState)
-            };
-            RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
-            throw new InvalidOperationException("Git bootstrap rollback executor returned unexpectedly.");
+                }
+                catch (Exception) { }
+                TryRollbackDestination(destination, destinationExisted);
+            }
+            try { tlsRollback.Restore(tlsState); }
+            catch (Exception rollbackError)
+            {
+                throw new AggregateException("Git bootstrap failed and TLS rollback was incomplete.", rollbackError);
+            }
+            throw;
         }
         finally
         {
@@ -225,19 +229,24 @@ public sealed class GitProjectBootstrapService
         catch (Win32Exception) { }
     }
 
-    private static void RollbackDestination(string path, bool existedBefore)
+    private static void TryRollbackDestination(string path, bool existedBefore)
     {
-        if (!Directory.Exists(path))
-            return;
-        if (!existedBefore)
+        try
         {
-            Directory.Delete(path, recursive: true);
-            return;
+            if (!Directory.Exists(path))
+                return;
+            if (!existedBefore)
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            foreach (var file in Directory.EnumerateFiles(path))
+                File.Delete(file);
+            foreach (var directory in Directory.EnumerateDirectories(path))
+                Directory.Delete(directory, recursive: true);
         }
-        foreach (var file in Directory.EnumerateFiles(path))
-            File.Delete(file);
-        foreach (var directory in Directory.EnumerateDirectories(path))
-            Directory.Delete(directory, recursive: true);
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     private static void TryDeleteDirectory(string path)

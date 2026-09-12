@@ -57,7 +57,7 @@ public sealed class WordPressToolkitService
         var databaseName = string.IsNullOrWhiteSpace(request.DatabaseName) ? SafeDatabaseName(request.Name) : SafeDatabaseName(request.DatabaseName);
         var databaseOptions = request.DatabaseOptions ?? ResolveDatabaseOptions(request.DatabaseEngine);
         var tlsRollback = new TlsRollbackStateService(_rootPath);
-        var tlsState = tlsRollback.Capture(request.Domain ?? $"{request.Name.Trim().ToLowerInvariant()}.test");
+        var tlsState = tlsRollback.Capture(request.Domain ?? LocalDomainName.FromName(request.Name));
         var databaseManager = new DatabaseManager(_rootPath);
         var projectDatabases = new ProjectDatabaseProvisioner(_rootPath, databaseManager);
         var provisioning = new ProjectProvisioningService(
@@ -155,7 +155,7 @@ public sealed class WordPressToolkitService
                 $"{siteUrl}/wp-admin/",
                 actions);
         }
-        catch (Exception original)
+        catch
         {
             var cleanupErrors = new List<Exception>();
             try
@@ -186,11 +186,7 @@ public sealed class WordPressToolkitService
                 cleanupErrors.Add(ex);
             }
             if (cleanupErrors.Count > 0)
-            {
-                var allErrors = new List<Exception> { original };
-                allErrors.AddRange(cleanupErrors);
-                throw new AggregateException("WordPress setup failed and cleanup was incomplete.", allErrors);
-            }
+                throw new AggregateException("WordPress setup failed and cleanup was incomplete.", cleanupErrors);
             throw;
         }
     }

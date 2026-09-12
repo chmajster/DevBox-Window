@@ -110,25 +110,25 @@ public sealed class RuntimeManagerTests
     }
 
     [Fact]
-    public async Task RemoveAsync_RejectsPhpVersionAssignedToSite()
+    public async Task InstallAsync_CorruptExistingRuntime_RedownloadsVerifiedPackage()
     {
         var root = TemporaryRoot();
         try
         {
-            var runtimePath = Path.Combine(root, "runtime", "php", "8.3.0");
-            Directory.CreateDirectory(runtimePath);
-            File.WriteAllText(Path.Combine(runtimePath, "php-cgi.exe"), "runtime");
-            var project = Path.Combine(root, "www", "demo");
-            Directory.CreateDirectory(project);
-            var sites = new SiteManager(root);
-            _ = sites.Create("demo", "demo.test", project);
-            _ = sites.Update(new SiteDefinition("demo", "demo.test", project, "php", "8.3.0", false));
+            var broken = Path.Combine(root, "runtime", "php", "8.4.0");
+            Directory.CreateDirectory(broken);
+            File.WriteAllText(Path.Combine(broken, "incomplete.txt"), "broken");
+            var package = CreateArchive(("package/php.exe", "repaired"));
+            var checksum = Convert.ToHexString(SHA256.HashData(package)).ToLowerInvariant();
+            using var client = new HttpClient(new StaticHandler(package));
+            using var manager = new RuntimeManager(root, client);
+            var definition = new RuntimeDefinition(
+                "php", "PHP", "8.4.0", "https://example.test/php.zip", checksum, "php.exe", "package");
 
-            using var manager = new RuntimeManager(root, new HttpClient(new StaticHandler(Array.Empty<byte>())));
-            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.RemoveAsync("php", "8.3.0"));
+            await manager.InstallAsync(definition);
 
-            Assert.Contains("demo.test", error.Message, StringComparison.OrdinalIgnoreCase);
-            Assert.True(Directory.Exists(runtimePath));
+            Assert.Equal("repaired", File.ReadAllText(Path.Combine(root, "runtime", "php", "8.4.0", "php.exe")));
+            Assert.True(File.Exists(Path.Combine(root, "runtime", "php", "current", "php.exe")));
         }
         finally
         {
@@ -161,7 +161,9 @@ public sealed class RuntimeManagerTests
     private static void DeleteRoot(string root)
     {
         if (Directory.Exists(root))
+        {
             Directory.Delete(root, recursive: true);
+        }
     }
 
     private sealed class StaticHandler(byte[] content) : HttpMessageHandler

@@ -39,7 +39,7 @@ public sealed class ProjectProvisioningService
 
         var expectedProjectRoot = Path.Combine(_rootPath, "www", request.Name.Trim().ToLowerInvariant());
         var projectRootExisted = Directory.Exists(expectedProjectRoot);
-        var rollbackDomain = request.Domain ?? $"{request.Name.Trim().ToLowerInvariant()}.test";
+        var rollbackDomain = request.Domain ?? LocalDomainName.FromName(request.Name);
         var tlsRollback = new TlsRollbackStateService(_rootPath);
         var tlsState = tlsRollback.Capture(rollbackDomain);
         var site = _workspace.Create(request);

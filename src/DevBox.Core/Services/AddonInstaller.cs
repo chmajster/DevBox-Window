@@ -28,14 +28,6 @@ public sealed class AddonInstaller : IDisposable
         EnsureInstallPathIsSafe(addon);
         using var addonLock = await CrossProcessFileLock.AcquireAsync(AddonLockPath(addon), cancellationToken, TimeSpan.FromSeconds(30)).ConfigureAwait(false);
 
-        if (Directory.Exists(addon.InstallPath) &&
-            Directory.EnumerateFileSystemEntries(addon.InstallPath).Any() &&
-            !AddonOwnership.IsOwned(_rootPath, addon))
-        {
-            throw new InvalidOperationException(
-                $"Refusing to install {addon.DisplayName} over '{addon.InstallPath}' because that directory is not owned by DevBox.");
-        }
-
         var tempRoot = Path.Combine(_rootPath, "tmp", "addons", addon.Key, Guid.NewGuid().ToString("N"));
         var archivePath = Path.Combine(tempRoot, "package.zip");
         var extractPath = Path.Combine(tempRoot, "extract");
@@ -66,8 +58,6 @@ public sealed class AddonInstaller : IDisposable
             try
             {
                 ConfigureAddon(addon);
-                AddonOwnership.WriteMarker(addon);
-                DeleteDirectoryIfExists(backupPath);
             }
             catch
             {
@@ -78,10 +68,12 @@ public sealed class AddonInstaller : IDisposable
                 }
                 throw;
             }
+
+            TryDeleteDirectory(backupPath);
         }
         finally
         {
-            DeleteDirectoryIfExists(tempRoot);
+            TryDeleteDirectory(tempRoot);
         }
     }
 
@@ -98,14 +90,7 @@ public sealed class AddonInstaller : IDisposable
             throw new InvalidOperationException($"{addon.DisplayName} is not installed.");
         }
 
-        if (!AddonOwnership.IsOwned(_rootPath, addon))
-        {
-            throw new InvalidOperationException(
-                $"{addon.InstallPath} exists but is not recognized as a DevBox-managed {addon.DisplayName} installation.");
-        }
-
         ConfigureAddon(addon);
-        AddonOwnership.WriteMarker(addon);
         return Task.CompletedTask;
     }
 
@@ -117,26 +102,27 @@ public sealed class AddonInstaller : IDisposable
         EnsureInstallPathIsSafe(addon);
         using var addonLock = CrossProcessFileLock.Acquire(AddonLockPath(addon), TimeSpan.FromSeconds(30));
 
-        var owned = AddonOwnership.IsOwned(_rootPath, addon);
+        string? trashPath = null;
         if (Directory.Exists(addon.InstallPath))
         {
-            if (!owned)
-            {
-                throw new InvalidOperationException(
-                    $"Refusing to remove '{addon.InstallPath}' because it is not recognized as a DevBox-managed addon directory.");
-            }
-
             var trashRoot = Path.Combine(_rootPath, "tmp", "addons", "trash");
             Directory.CreateDirectory(trashRoot);
-            var trashPath = Path.Combine(trashRoot, $"{addon.Key}-{Guid.NewGuid():N}");
+            trashPath = Path.Combine(trashRoot, $"{addon.Key}-{Guid.NewGuid():N}");
             Directory.Move(addon.InstallPath, trashPath);
-            Directory.Delete(trashPath, recursive: true);
         }
 
-        if (owned)
+        try
         {
             DeleteAddonNginxConfig(addon);
         }
+        catch
+        {
+            if (trashPath is not null && Directory.Exists(trashPath) && !Directory.Exists(addon.InstallPath))
+                Directory.Move(trashPath, addon.InstallPath);
+            throw;
+        }
+
+        TryDeleteDirectory(trashPath);
         return Task.CompletedTask;
     }
 
@@ -437,5 +423,19 @@ server {
             return;
         }
         Directory.Delete(path, recursive: true);
+    }
+
+    private static void TryDeleteDirectory(string? path)
+    {
+        try
+        {
+            DeleteDirectoryIfExists(path);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 }

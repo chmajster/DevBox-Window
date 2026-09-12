@@ -77,7 +77,18 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         _dialogs = dialogs;
         _shell = shell;
 
-        _definitions = _serviceCatalog.GetDefaultServices().ToDictionary(item => item.Key, StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            _definitions = _serviceCatalog.GetDefaultServices().ToDictionary(item => item.Key, StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or ArgumentException)
+        {
+            Trace.TraceError($"Managed service configuration is invalid; continuing with core services: {ex}");
+            _definitions = _serviceCatalog.GetCoreServices().ToDictionary(item => item.Key, StringComparer.OrdinalIgnoreCase);
+            _dialogs.Warning(
+                "Managed service configuration invalid",
+                $"Optional managed services were ignored so DevBox can continue with Nginx, PHP and MySQL. {ex.Message}");
+        }
         _addonDefinitions = _addonCatalog.GetDefaultAddons().ToDictionary(item => item.Key, StringComparer.OrdinalIgnoreCase);
 
         foreach (var definition in _definitions.Values)
@@ -398,7 +409,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             {
                 _dialogs.Warning(
                     $"{addon.DisplayName} downloaded",
-                    $"{addon.DisplayName} {addon.Version} was downloaded and configured, but PHP is not installed. Open Modules and click Install for PHP.");
+                    $"{addon.DisplayName} {addon.Version} was downloaded and configured, but PHP is not installed. Open Runtimes and click Download for PHP.");
             }
             else
             {
@@ -592,8 +603,6 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         if (parameter is not RuntimeRowViewModel runtime || !runtime.CanDownload) return;
 
-        runtime.BeginInstall();
-        var progress = new DispatcherProgress<int>(Application.Current.Dispatcher, runtime.SetInstallProgress);
         _definitions.TryGetValue(runtime.Key, out var service);
         var wasRunning = service is not null && _processManager.GetStatus(service).State == ServiceState.Running;
 
@@ -604,8 +613,19 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                 await _processManager.StopAsync(service!);
             }
 
-            // RuntimeManager verifies SHA-256, installs atomically and reports each installation stage.
-            await _runtimePlatformService.InstallAsync(runtime.Key, runtime.Version, progress);
+            // RuntimeManager.InstallAsync verifies SHA-256 and atomically activates the downloaded version.
+            await _runtimePlatformService.InstallAsync(runtime.Key, runtime.Version);
+
+            if (wasRunning)
+            {
+                await _processManager.StartAsync(service!);
+            }
+
+            RefreshRuntimes();
+            RefreshStatuses();
+            _dialogs.Info(
+                $"{runtime.Name} downloaded",
+                $"{runtime.Name} {runtime.Version} was downloaded, verified and activated.");
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException or FileNotFoundException or Win32Exception)
         {
@@ -621,43 +641,14 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                 {
                     _dialogs.Warning(
                         "Service recovery failed",
-                        $"{runtime.Name} installation failed and {service.DisplayName} could not be restarted: {recoveryError.Message}");
+                        $"{runtime.Name} download failed and {service.DisplayName} could not be restarted: {recoveryError.Message}");
                 }
             }
 
-            runtime.SetInstallFailed();
+            RefreshRuntimes();
             RefreshStatuses();
-            RefreshDiagnostics();
-            _dialogs.Error($"{runtime.Name} installation failed", ex.Message);
-            return;
+            _dialogs.Error($"{runtime.Name} download failed", ex.Message);
         }
-
-        runtime.SetInstallProgress(100);
-
-        if (wasRunning && service is not null)
-        {
-            try
-            {
-                await _processManager.StartAsync(service);
-            }
-            catch (Exception restartError) when (restartError is IOException or UnauthorizedAccessException or InvalidOperationException or FileNotFoundException or Win32Exception)
-            {
-                RefreshRuntimes();
-                RefreshStatuses();
-                RefreshDiagnostics();
-                _dialogs.Warning(
-                    $"{runtime.Name} installed",
-                    $"{runtime.Name} {runtime.Version} was installed and activated, but {service.DisplayName} could not be restarted: {restartError.Message}");
-                return;
-            }
-        }
-
-        RefreshRuntimes();
-        RefreshStatuses();
-        RefreshDiagnostics();
-        _dialogs.Info(
-            $"{runtime.Name} installed",
-            $"{runtime.Name} {runtime.Version} was downloaded, verified, installed and activated.");
     }
 
     private async Task ActivateRuntimeAsync(object? parameter)
@@ -919,17 +910,6 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
     private static bool IsExpectedAddonError(Exception ex) =>
         ex is HttpRequestException or InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException or FileNotFoundException or Win32Exception;
-
-    private sealed class DispatcherProgress<T>(Dispatcher dispatcher, Action<T> callback) : IProgress<T>
-    {
-        public void Report(T value)
-        {
-            if (dispatcher.CheckAccess())
-                callback(value);
-            else
-                dispatcher.Invoke(() => callback(value));
-        }
-    }
 
     private enum ServiceAction
     {

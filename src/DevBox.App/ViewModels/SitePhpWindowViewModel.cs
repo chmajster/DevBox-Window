@@ -40,7 +40,7 @@ public sealed class SitePhpWindowViewModel : ObservableObject
         _runtimeManager = runtimeManager;
         _pool = pool;
         _processManager = processManager;
-        _nginx = serviceCatalog.GetDefaultServices().First(service => service.Key == "nginx");
+        _nginx = serviceCatalog.GetCoreServices().First(service => service.Key == "nginx");
         _dialogs = dialogs;
         RefreshCommand = new RelayCommand(Refresh);
         ApplyCommand = new AsyncRelayCommand(ApplyAsync, () => SelectedSite is not null && SelectedVersion is not null);

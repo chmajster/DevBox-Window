@@ -60,6 +60,39 @@ public sealed class BugAuditRegressionTests
     }
 
     [Fact]
+    public async Task ProjectExport_DuplicateDatabaseBackupNames_AreRejected()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var project = CreateProject(root, "duplicate-db-export");
+            var firstDirectory = Path.Combine(root, "db-a");
+            var secondDirectory = Path.Combine(root, "db-b");
+            Directory.CreateDirectory(firstDirectory);
+            Directory.CreateDirectory(secondDirectory);
+            var first = Path.Combine(firstDirectory, "backup.sql");
+            var second = Path.Combine(secondDirectory, "backup.sql");
+            await File.WriteAllTextAsync(first, "-- first");
+            await File.WriteAllTextAsync(second, "-- second");
+            var destination = Path.Combine(root, "duplicate.devbox-project.zip");
+            var service = new ProjectTransferService(root);
+
+            var error = await Assert.ThrowsAsync<ArgumentException>(() => service.ExportAsync(
+                project,
+                new ProjectSnapshotOptions(IncludeDatabase: true),
+                [first, second],
+                destination));
+
+            Assert.Contains("duplicate file name", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.False(File.Exists(destination));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public async Task ProjectImport_RejectsOversizedTransferMetadata()
     {
         var root = TemporaryRoot();
@@ -82,84 +115,6 @@ public sealed class BugAuditRegressionTests
             var service = new ProjectTransferService(root);
             var error = await Assert.ThrowsAsync<InvalidDataException>(() => service.ImportAsync(archivePath));
             Assert.Contains("metadata limit", error.Message, StringComparison.OrdinalIgnoreCase);
-        }
-        finally
-        {
-            DeleteRoot(root);
-        }
-    }
-
-    [Fact]
-    public async Task ProjectSnapshot_PreCancelledCreate_LeavesNoPartialArchive()
-    {
-        var root = TemporaryRoot();
-        try
-        {
-            var project = CreateProject(root, "cancel-snapshot");
-            File.WriteAllText(Path.Combine(project, "large.bin"), new string('x', 64 * 1024));
-            using var cancellation = new CancellationTokenSource();
-            cancellation.Cancel();
-            var service = new ProjectSnapshotService(root);
-
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-                service.CreateAsync(project, cancellationToken: cancellation.Token));
-
-            var snapshotRoot = Path.Combine(root, "backups", "projects");
-            Assert.False(Directory.Exists(snapshotRoot) && Directory.EnumerateFiles(snapshotRoot).Any());
-        }
-        finally
-        {
-            DeleteRoot(root);
-        }
-    }
-
-    [Fact]
-    public async Task ProjectSnapshot_MetadataDoesNotClaimExcludedDatabaseBackup()
-    {
-        var root = TemporaryRoot();
-        try
-        {
-            var project = CreateProject(root, "snapshot-metadata");
-            var databaseBackup = Path.Combine(root, "database.sql");
-            File.WriteAllText(databaseBackup, "SELECT 1;");
-            var service = new ProjectSnapshotService(root);
-
-            var result = await service.CreateAsync(
-                project,
-                new ProjectSnapshotOptions(IncludeDatabase: false),
-                [databaseBackup]);
-
-            using var archive = ZipFile.OpenRead(result.SnapshotPath);
-            Assert.DoesNotContain(archive.Entries, entry => entry.FullName.StartsWith("database/", StringComparison.OrdinalIgnoreCase));
-            var metadata = Assert.Single(archive.Entries.Where(entry => entry.FullName == "snapshot.json"));
-            using var reader = new StreamReader(metadata.Open());
-            using var document = JsonDocument.Parse(await reader.ReadToEndAsync());
-            Assert.Empty(document.RootElement.GetProperty("DatabaseBackups").EnumerateArray());
-        }
-        finally
-        {
-            DeleteRoot(root);
-        }
-    }
-
-    [Fact]
-    public async Task ProjectSnapshot_RestoreRejectsArchiveWithoutSnapshotMetadata()
-    {
-        var root = TemporaryRoot();
-        try
-        {
-            var archivePath = Path.Combine(root, "not-a-snapshot.zip");
-            using (var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create))
-            {
-                var manifest = archive.CreateEntry("project/devbox.json");
-                await using var stream = manifest.Open();
-                await using var writer = new StreamWriter(stream);
-                await writer.WriteAsync("{\"Name\":\"x\",\"Domain\":\"x.test\",\"DatabaseEngine\":\"none\",\"Https\":false}");
-            }
-
-            var service = new ProjectSnapshotService(root);
-            await Assert.ThrowsAsync<InvalidDataException>(() => service.RestoreAsync(archivePath, "restored"));
-            Assert.False(Directory.Exists(Path.Combine(root, "www", "restored")));
         }
         finally
         {

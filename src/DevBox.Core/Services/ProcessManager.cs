@@ -12,6 +12,8 @@ namespace DevBox.Core.Services;
 public sealed class ProcessManager : IProcessManager
 {
     private static readonly TimeSpan ProcessIdentityTolerance = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan StartupProbeTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan ProcessOnlyStartupDelay = TimeSpan.FromSeconds(1);
     private readonly ConcurrentDictionary<string, ManagedProcess> _processes = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new(StringComparer.OrdinalIgnoreCase);
     private bool _disposed;
@@ -25,9 +27,7 @@ public sealed class ProcessManager : IProcessManager
         {
             using var processLock = await CrossProcessFileLock.AcquireAsync(ProcessLockPath(definition), cancellationToken).ConfigureAwait(false);
             if (_processes.TryGetValue(definition.Key, out var existing) && !existing.Process.HasExited)
-            {
                 return Snapshot(existing, ServiceState.Running);
-            }
 
             RemoveStale(definition.Key);
             var adopted = TryAdopt(definition);
@@ -38,14 +38,10 @@ public sealed class ProcessManager : IProcessManager
             }
 
             if (!File.Exists(definition.ExecutablePath))
-            {
                 throw new FileNotFoundException($"Runtime for {definition.DisplayName} was not found.", definition.ExecutablePath);
-            }
 
             if (definition.Port > 0 && !IsPortAvailable(definition.Port))
-            {
                 throw new InvalidOperationException($"Port {definition.Port} required by {definition.DisplayName} is already in use.");
-            }
 
             Directory.CreateDirectory(definition.WorkingDirectory);
             EnsureLogDirectory(definition.LogPath);
@@ -84,12 +80,18 @@ public sealed class ProcessManager : IProcessManager
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
                 _processes[definition.Key] = managed;
-                AppendLog(managed, "APP", $"Started PID {process.Id}.");
+                AppendLog(managed, "APP", $"Started PID {process.Id}; validating startup.");
+                await VerifyStartupAsync(managed, cancellationToken).ConfigureAwait(false);
+                AppendLog(managed, "APP", definition.Port > 0
+                    ? $"Startup validated on port {definition.Port}."
+                    : "Startup validated.");
             }
             catch
             {
                 _processes.TryRemove(definition.Key, out _);
-                DeletePidMarker(definition, process.Id);
+                var processId = TryGetProcessId(process);
+                if (processId.HasValue)
+                    DeletePidMarker(definition, processId.Value);
                 TryTerminateStartedProcess(process);
                 process.Dispose();
                 throw;
@@ -121,47 +123,36 @@ public sealed class ProcessManager : IProcessManager
                 RemoveStale(definition.Key);
                 managed = TryAdopt(definition);
                 if (managed is not null)
-                {
                     _processes[definition.Key] = managed;
-                }
             }
 
             if (managed is null)
-            {
                 return Stopped(definition);
-            }
 
             var timeout = definition.ShutdownTimeout ?? TimeSpan.FromSeconds(5);
-            var gracefulRequested = false;
-            if (!string.IsNullOrWhiteSpace(definition.StopExecutablePath) && File.Exists(definition.StopExecutablePath))
-            {
-                gracefulRequested = await ExecuteStopCommandAsync(definition, timeout, cancellationToken).ConfigureAwait(false);
-                if (!gracefulRequested)
+                var gracefulRequested = false;
+                if (!string.IsNullOrWhiteSpace(definition.StopExecutablePath) && File.Exists(definition.StopExecutablePath))
                 {
-                    AppendLog(managed, "APP", "Graceful stop command failed; falling back to managed process termination.");
+                    gracefulRequested = await ExecuteStopCommandAsync(definition, timeout, cancellationToken).ConfigureAwait(false);
+                    if (!gracefulRequested)
+                        AppendLog(managed, "APP", "Graceful stop command failed; falling back to managed process termination.");
                 }
-            }
-            else
-            {
-                gracefulRequested = managed.Process.CloseMainWindow();
-            }
+                else
+                {
+                    gracefulRequested = managed.Process.CloseMainWindow();
+                }
 
-            if (gracefulRequested && !managed.Process.HasExited)
-            {
-                await WaitForExitAsync(managed.Process, timeout, cancellationToken).ConfigureAwait(false);
-            }
+                if (gracefulRequested && !managed.Process.HasExited)
+                    await WaitForExitAsync(managed.Process, timeout, cancellationToken).ConfigureAwait(false);
 
-            if (!managed.Process.HasExited)
-            {
-                AppendLog(managed, "APP", "Graceful shutdown was unavailable or timed out; killing managed process tree.");
-                managed.Process.Kill(entireProcessTree: true);
-                await managed.Process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-            }
-
+                if (!managed.Process.HasExited)
+                {
+                    AppendLog(managed, "APP", "Graceful shutdown was unavailable or timed out; killing managed process tree.");
+                    managed.Process.Kill(entireProcessTree: true);
+                    await managed.Process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                }
             AppendLog(managed, "APP", "Stopped.");
-            _processes.TryRemove(definition.Key, out _);
-            DeletePidMarker(definition, managed.Process.Id);
-            managed.Process.Dispose();
+            CleanupStoppedProcess(definition, managed);
             return Stopped(definition);
         }
         finally
@@ -183,15 +174,11 @@ public sealed class ProcessManager : IProcessManager
         {
             var adopted = TryAdopt(definition);
             if (adopted is null)
-            {
                 return Stopped(definition);
-            }
 
             managed = _processes.GetOrAdd(definition.Key, adopted);
             if (!ReferenceEquals(managed, adopted))
-            {
                 adopted.Process.Dispose();
-            }
         }
 
         if (managed.Process.HasExited)
@@ -217,19 +204,13 @@ public sealed class ProcessManager : IProcessManager
     public void Dispose()
     {
         if (_disposed)
-        {
             return;
-        }
 
         _disposed = true;
         foreach (var managed in _processes.Values)
-        {
             managed.Process.Dispose();
-        }
         foreach (var gate in _locks.Values)
-        {
             gate.Dispose();
-        }
         _processes.Clear();
         _locks.Clear();
     }
@@ -246,10 +227,7 @@ public sealed class ProcessManager : IProcessManager
         };
 
         foreach (var argument in arguments)
-        {
             info.ArgumentList.Add(argument);
-        }
-
         return info;
     }
 
@@ -264,9 +242,7 @@ public sealed class ProcessManager : IProcessManager
         try
         {
             if (!stopProcess.Start())
-            {
                 return false;
-            }
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
         {
@@ -314,6 +290,39 @@ public sealed class ProcessManager : IProcessManager
         return process.HasExited;
     }
 
+    private static async Task VerifyStartupAsync(ManagedProcess managed, CancellationToken cancellationToken)
+    {
+        if (managed.Definition.Port <= 0)
+        {
+            await Task.Delay(ProcessOnlyStartupDelay, cancellationToken).ConfigureAwait(false);
+            ThrowIfExitedDuringStartup(managed);
+            return;
+        }
+
+        var deadline = DateTimeOffset.UtcNow + StartupProbeTimeout;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfExitedDuringStartup(managed);
+            if (!IsPortAvailable(managed.Definition.Port))
+                return;
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+        }
+
+        ThrowIfExitedDuringStartup(managed);
+        throw new InvalidOperationException(
+            $"{managed.Definition.DisplayName} started but did not begin listening on port {managed.Definition.Port} within {StartupProbeTimeout.TotalSeconds:0} seconds.");
+    }
+
+    private static void ThrowIfExitedDuringStartup(ManagedProcess managed)
+    {
+        if (!managed.Process.HasExited)
+            return;
+        var exitCode = managed.Process.ExitCode;
+        throw new InvalidOperationException(
+            $"{managed.Definition.DisplayName} exited during startup with code {exitCode}. Check {managed.Definition.LogPath ?? "the service log"} for details.");
+    }
+
     private static bool IsPortAvailable(int port)
     {
         TcpListener? listener = null;
@@ -353,6 +362,15 @@ public sealed class ProcessManager : IProcessManager
     private static ServiceSnapshot Stopped(ServiceDefinition definition) =>
         new(definition.Key, definition.DisplayName, ServiceState.Stopped, null, definition.Port, definition.Version, null, null);
 
+    private void CleanupStoppedProcess(ServiceDefinition definition, ManagedProcess managed)
+    {
+        _processes.TryRemove(definition.Key, out _);
+        var processId = TryGetProcessId(managed.Process);
+        if (processId.HasValue)
+            DeletePidMarker(definition, processId.Value);
+        managed.Process.Dispose();
+    }
+
     private void RemoveStale(string key)
     {
         if (_processes.TryRemove(key, out var stale))
@@ -366,9 +384,7 @@ public sealed class ProcessManager : IProcessManager
     {
         var marker = ReadPidMarker(definition);
         if (marker is null)
-        {
             return null;
-        }
 
         Process? process = null;
         try
@@ -440,6 +456,18 @@ public sealed class ProcessManager : IProcessManager
         }
     }
 
+    private static int? TryGetProcessId(Process process)
+    {
+        try
+        {
+            return process.Id;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
     private static string PidMarkerPath(ServiceDefinition definition) =>
         Path.Combine(definition.WorkingDirectory, "tmp", "services", $"{definition.Key}.pid");
 
@@ -449,9 +477,7 @@ public sealed class ProcessManager : IProcessManager
     private static void WritePidMarker(ManagedProcess managed)
     {
         if (managed.StartedAt is null)
-        {
             throw new InvalidOperationException("Managed process start time is unavailable.");
-        }
 
         var path = PidMarkerPath(managed.Definition);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -470,9 +496,7 @@ public sealed class ProcessManager : IProcessManager
         finally
         {
             if (File.Exists(tempPath))
-            {
                 File.Delete(tempPath);
-            }
         }
     }
 
@@ -480,9 +504,7 @@ public sealed class ProcessManager : IProcessManager
     {
         var path = PidMarkerPath(definition);
         if (!File.Exists(path))
-        {
             return null;
-        }
 
         try
         {
@@ -510,17 +532,13 @@ public sealed class ProcessManager : IProcessManager
     {
         var path = PidMarkerPath(definition);
         if (!File.Exists(path))
-        {
             return;
-        }
 
         try
         {
             var marker = ReadPidMarker(definition);
             if (marker is null || marker.Value.ProcessId == expectedProcessId)
-            {
                 File.Delete(path);
-            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -556,16 +574,12 @@ public sealed class ProcessManager : IProcessManager
     private static async Task PrepareServiceAsync(ServiceDefinition definition, CancellationToken cancellationToken)
     {
         if (!definition.Key.Equals("mysql", StringComparison.OrdinalIgnoreCase))
-        {
             return;
-        }
 
         var dataDirectory = Path.Combine(definition.WorkingDirectory, "data", "mysql");
         Directory.CreateDirectory(dataDirectory);
         if (IsMySqlDataDirectoryInitialized(dataDirectory))
-        {
             return;
-        }
 
         if (Directory.EnumerateFileSystemEntries(dataDirectory).Any())
         {
@@ -580,9 +594,7 @@ public sealed class ProcessManager : IProcessManager
         try
         {
             if (!process.Start())
-            {
                 throw new InvalidOperationException("Unable to start MySQL initialization.");
-            }
         }
         catch (Win32Exception ex)
         {
@@ -612,9 +624,7 @@ public sealed class ProcessManager : IProcessManager
         }
 
         if (!IsMySqlDataDirectoryInitialized(dataDirectory))
-        {
             throw new InvalidOperationException("MySQL initialization completed without creating the expected system database.");
-        }
     }
 
     internal static bool IsMySqlDataDirectoryInitialized(string dataDirectory) =>
@@ -623,29 +633,29 @@ public sealed class ProcessManager : IProcessManager
     private static void EnsureLogDirectory(string? logPath)
     {
         if (string.IsNullOrWhiteSpace(logPath))
-        {
             return;
-        }
 
         var directory = Path.GetDirectoryName(logPath);
         if (!string.IsNullOrWhiteSpace(directory))
-        {
             Directory.CreateDirectory(directory);
-        }
     }
 
     private static void AppendLog(ManagedProcess managed, string stream, string? message)
     {
         if (string.IsNullOrWhiteSpace(message) || string.IsNullOrWhiteSpace(managed.Definition.LogPath))
-        {
             return;
-        }
 
-        lock (managed.Gate)
+        try
         {
-            File.AppendAllText(
-                managed.Definition.LogPath,
-                $"{DateTimeOffset.Now:O} [{stream}] {message}{Environment.NewLine}");
+            lock (managed.Gate)
+            {
+                File.AppendAllText(
+                    managed.Definition.LogPath,
+                    $"{DateTimeOffset.Now:O} [{stream}] {message}{Environment.NewLine}");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ObjectDisposedException)
+        {
         }
     }
 
@@ -655,13 +665,11 @@ public sealed class ProcessManager : IProcessManager
         {
             var exitCode = managed.Process.ExitCode;
             if (exitCode != 0)
-            {
                 managed.LastError = $"Process exited with code {exitCode}.";
-            }
             AppendLog(managed, "APP", $"Exited with code {exitCode}.");
             DeletePidMarker(managed.Definition, managed.Process.Id);
         }
-        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or ObjectDisposedException)
         {
             managed.LastError = "Process exited unexpectedly.";
         }
