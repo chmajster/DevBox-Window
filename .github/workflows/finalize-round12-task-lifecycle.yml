@@ -1,0 +1,28 @@
+name: Finalize round12 task lifecycle
+
+on:
+  push:
+    branches:
+      - fix/final-bug-sweep-round12-changelog
+    paths:
+      - .github/finalize-round12-task-lifecycle-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/final-bug-sweep-round12-changelog
+          fetch-depth: 0
+      - run: python .github/scripts/finalize-round12-task-lifecycle.py
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/DevBox.Core/Services/PlatformTaskCenter.cs CHANGELOG.md
+          git commit -m "fix: register task execution before queued publication"
+          git push origin HEAD:fix/final-bug-sweep-round12-changelog
+      - run: git diff --check
