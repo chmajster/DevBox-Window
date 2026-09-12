@@ -169,8 +169,10 @@ public sealed class ProjectActionService
         var root = Path.GetFullPath(projectPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         if (!Directory.Exists(root))
             throw new DirectoryNotFoundException($"Project directory was not found: {root}");
-        EnsureUnder(root, _wwwRoot, "Project actions are restricted to the DevBox www directory.");
-        return root;
+        return PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _wwwRoot,
+            root,
+            "Project actions are restricted to the DevBox www directory and cannot traverse a reparse point.");
     }
 
     private static string ResolveWorkingDirectory(string projectRoot, string? relative)
@@ -178,10 +180,12 @@ public sealed class ProjectActionService
         if (string.IsNullOrWhiteSpace(relative))
             return projectRoot;
         var path = Path.GetFullPath(Path.Combine(projectRoot, relative));
-        EnsureUnder(path, projectRoot, "Project action working directory escapes the project root.");
         if (!Directory.Exists(path))
             throw new DirectoryNotFoundException($"Project action working directory does not exist: {path}");
-        return path;
+        return PathSafety.EnsureUnderRootWithoutReparsePoints(
+            projectRoot,
+            path,
+            "Project action working directory escapes the project root or traverses a reparse point.");
     }
 
     private static JsonNode? FindProperty(JsonObject value, string name)
@@ -192,15 +196,6 @@ public sealed class ProjectActionService
                 return pair.Value;
         }
         return null;
-    }
-
-    private static void EnsureUnder(string candidate, string root, string message)
-    {
-        var normalizedRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var normalizedCandidate = Path.GetFullPath(candidate).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (!normalizedCandidate.Equals(normalizedRoot, StringComparison.OrdinalIgnoreCase) &&
-            !normalizedCandidate.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException(message);
     }
 
     private static string Truncate(string value) => value.Length <= 1_048_576 ? value : value[..1_048_576] + Environment.NewLine + "[output truncated by DevBox]";
