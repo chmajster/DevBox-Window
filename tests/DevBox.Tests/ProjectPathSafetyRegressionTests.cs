@@ -205,7 +205,7 @@ public sealed class ProjectPathSafetyRegressionTests
                 19001,
                 "1.0");
 
-            Assert.Throws<InvalidOperationException>(() => catalog.Save([manifest]));
+            Assert.Throws<InvalidDataException>(() => catalog.Save([manifest]));
         }
         finally
         {
