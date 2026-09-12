@@ -34,11 +34,17 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         if (!Directory.Exists(runtimeRoot))
             return Array.Empty<RuntimeInstallation>();
 
-        var activeVersion = ReadVersionMarker(Path.Combine(runtimeRoot, "current"));
+        var currentPath = SafeManagedPath(
+            Path.Combine(runtimeRoot, "current"),
+            "Active runtime path cannot escape the DevBox root or traverse a reparse point.");
+        var activeVersion = ReadVersionMarker(currentPath);
         return Directory.GetDirectories(runtimeRoot)
             .Where(path => !Path.GetFileName(path).Equals("current", StringComparison.OrdinalIgnoreCase))
             .Where(path => !Path.GetFileName(path).StartsWith(".", StringComparison.Ordinal))
             .Where(path => !Path.GetFileName(path).Contains(".backup-", StringComparison.OrdinalIgnoreCase))
+            .Select(path => SafeManagedPath(
+                path,
+                "Installed runtime paths cannot escape the DevBox root or traverse a reparse point."))
             .Select(path =>
             {
                 var version = Path.GetFileName(path);
@@ -99,10 +105,18 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         if (!definition.HasRemotePackage)
             throw new InvalidOperationException($"Runtime {definition.DisplayName} {definition.Version} is not bundled and has no verified remote package.");
 
-        var tempRoot = Path.Combine(_rootPath, "tmp", "runtimes", definition.Key, Guid.NewGuid().ToString("N"));
-        var archivePath = Path.Combine(tempRoot, "package.zip");
-        var extractPath = Path.Combine(tempRoot, "extract");
-        var stagingPath = Path.Combine(tempRoot, "staging");
+        var tempRoot = SafeManagedPath(
+            Path.Combine(_rootPath, "tmp", "runtimes", definition.Key, Guid.NewGuid().ToString("N")),
+            "Runtime temporary files cannot escape the DevBox root or traverse a reparse point.");
+        var archivePath = SafeManagedPath(
+            Path.Combine(tempRoot, "package.zip"),
+            "Runtime download path cannot escape the DevBox root or traverse a reparse point.");
+        var extractPath = SafeManagedPath(
+            Path.Combine(tempRoot, "extract"),
+            "Runtime extraction path cannot escape the DevBox root or traverse a reparse point.");
+        var stagingPath = SafeManagedPath(
+            Path.Combine(tempRoot, "staging"),
+            "Runtime staging path cannot escape the DevBox root or traverse a reparse point.");
         Directory.CreateDirectory(tempRoot);
 
         try
@@ -117,7 +131,9 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
 
             var sourcePath = string.IsNullOrWhiteSpace(definition.ArchiveRootDirectory)
                 ? extractPath
-                : Path.Combine(extractPath, definition.ArchiveRootDirectory);
+                : SafeManagedPath(
+                    Path.Combine(extractPath, definition.ArchiveRootDirectory),
+                    "Runtime archive root cannot escape temporary extraction or traverse a reparse point.");
             if (!Directory.Exists(sourcePath))
                 throw new InvalidDataException($"Archive root '{definition.ArchiveRootDirectory}' was not found.");
 
@@ -173,10 +189,15 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
 
         var runtimeRoot = RuntimeRoot(runtimeKey);
         Directory.CreateDirectory(runtimeRoot);
-        var stagingPath = Path.Combine(runtimeRoot, $".current-{Guid.NewGuid():N}");
+        var stagingPath = SafeManagedPath(
+            Path.Combine(runtimeRoot, $".current-{Guid.NewGuid():N}"),
+            "Runtime activation staging path cannot escape the DevBox root or traverse a reparse point.");
+        var currentPath = SafeManagedPath(
+            Path.Combine(runtimeRoot, "current"),
+            "Active runtime path cannot escape the DevBox root or traverse a reparse point.");
         CopyDirectory(sourcePath, stagingPath, cancellationToken);
         File.WriteAllText(Path.Combine(stagingPath, VersionMarker), version);
-        ReplaceDirectory(stagingPath, Path.Combine(runtimeRoot, "current"));
+        ReplaceDirectory(stagingPath, currentPath);
         return Task.CompletedTask;
     }
 
@@ -195,7 +216,10 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
         ValidateSegment(version, nameof(version));
 
         var runtimeRoot = RuntimeRoot(runtimeKey);
-        var activeVersion = ReadVersionMarker(Path.Combine(runtimeRoot, "current"));
+        var currentPath = SafeManagedPath(
+            Path.Combine(runtimeRoot, "current"),
+            "Active runtime path cannot escape the DevBox root or traverse a reparse point.");
+        var activeVersion = ReadVersionMarker(currentPath);
         if (version.Equals(activeVersion, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("The active runtime version cannot be removed. Activate another version first.");
 
@@ -273,15 +297,30 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
     internal Task<FileStream> AcquireRuntimeLockAsync(string runtimeKey, CancellationToken cancellationToken)
     {
         ValidateSegment(runtimeKey, nameof(runtimeKey));
-        return CrossProcessFileLock.AcquireAsync(
+        var lockPath = SafeManagedPath(
             Path.Combine(_rootPath, "tmp", "locks", $"runtime-{runtimeKey.ToLowerInvariant()}.lock"),
-            cancellationToken,
-            TimeSpan.FromSeconds(30));
+            "Runtime lock path cannot escape the DevBox root or traverse a reparse point.");
+        return CrossProcessFileLock.AcquireAsync(lockPath, cancellationToken, TimeSpan.FromSeconds(30));
     }
 
-    private string RuntimeRoot(string runtimeKey) => Path.Combine(_rootPath, "runtime", runtimeKey);
+    private string RuntimeRoot(string runtimeKey)
+    {
+        ValidateSegment(runtimeKey, nameof(runtimeKey));
+        return SafeManagedPath(
+            Path.Combine(_rootPath, "runtime", runtimeKey),
+            "Runtime root cannot escape the DevBox root or traverse a reparse point.");
+    }
 
-    private string VersionPath(string runtimeKey, string version) => Path.Combine(RuntimeRoot(runtimeKey), version);
+    private string VersionPath(string runtimeKey, string version)
+    {
+        ValidateSegment(version, nameof(version));
+        return SafeManagedPath(
+            Path.Combine(RuntimeRoot(runtimeKey), version),
+            "Runtime version path cannot escape the DevBox root or traverse a reparse point.");
+    }
+
+    private string SafeManagedPath(string path, string message) =>
+        PathSafety.EnsureUnderRootWithoutReparsePoints(_rootPath, path, message);
 
     private static Version ParseVersionForSort(string version) =>
         Version.TryParse(version, out var parsed) ? parsed : new Version(0, 0);
