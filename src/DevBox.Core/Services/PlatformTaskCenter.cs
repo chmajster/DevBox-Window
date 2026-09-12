@@ -65,9 +65,17 @@ public sealed class PlatformTaskCenter : IDisposable
             null,
             null);
         var entry = new TaskEntry(snapshot, cancellation);
+        var startSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _entries[id] = entry;
-        Publish(entry, persist: true);
-        entry.Execution = ExecuteAsync(entry, operation);
+        entry.Execution = ExecuteAsync(entry, operation, startSignal.Task);
+        try
+        {
+            Publish(entry, persist: true);
+        }
+        finally
+        {
+            startSignal.TrySetResult();
+        }
         return id;
     }
 
@@ -139,10 +147,12 @@ public sealed class PlatformTaskCenter : IDisposable
 
     private async Task ExecuteAsync(
         TaskEntry entry,
-        Func<IProgress<(double Progress, string? Message)>, CancellationToken, Task> operation)
+        Func<IProgress<(double Progress, string? Message)>, CancellationToken, Task> operation,
+        Task startSignal)
     {
         try
         {
+            await startSignal.ConfigureAwait(false);
             var token = entry.Cancellation!.Token;
             var acquired = false;
             try

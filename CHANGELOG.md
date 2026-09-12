@@ -43,7 +43,7 @@ All notable changes to DevBox Windows are documented here.
 
 ### Fixed
 
-- Task Center `WaitAsync` now waits on a completion handle created before the initial queued notification, closing a race where subscribers could observe completion before execution had even been assigned.
+- Task Center creates and assigns its execution/completion handles before the initial queued notification, closing races where subscribers could observe premature completion or dispose synchronization before execution was registered.
 - Task Center history persistence failures are isolated from task execution, so an unwritable history path can no longer make enqueueing fail or convert a successful operation into a failed task.
 - Environment locks reject null/unsafe ADDON and managed-service keys and require a database version whenever a database engine is pinned.
 - Project snapshot restores and project archive imports reuse canonical environment-lock validation before carrying `devbox.lock.json` into the restored project.
