@@ -65,6 +65,22 @@ public sealed class AddonCatalog
     public bool IsInstalled(AddonDefinition addon)
     {
         ArgumentNullException.ThrowIfNull(addon);
+        try
+        {
+            _ = PathSafety.EnsureUnderRootWithoutReparsePoints(
+                Path.Combine(_rootPath, "www"),
+                addon.InstallPath,
+                "Addon install path must remain inside DevBox www and cannot traverse a reparse point.");
+            _ = PathSafety.EnsureUnderRootWithoutReparsePoints(
+                addon.InstallPath,
+                addon.EntryPointPath,
+                "Addon entry point must remain inside its install directory and cannot traverse a reparse point.");
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+
         return File.Exists(addon.EntryPointPath) && AddonOwnership.IsOwned(_rootPath, addon);
     }
 
