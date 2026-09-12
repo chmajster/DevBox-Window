@@ -372,29 +372,39 @@ server {
 
     private static void CopyDirectory(string sourcePath, string destinationPath, CancellationToken cancellationToken)
     {
+        var sourceRoot = Path.GetFullPath(sourcePath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         cancellationToken.ThrowIfCancellationRequested();
-        if ((File.GetAttributes(sourcePath) & FileAttributes.ReparsePoint) != 0)
+        if ((File.GetAttributes(sourceRoot) & FileAttributes.ReparsePoint) != 0)
             throw new InvalidDataException("Addon package root cannot be a reparse point.");
 
         Directory.CreateDirectory(destinationPath);
-        foreach (var directory in Directory.GetDirectories(sourcePath, "*", SearchOption.AllDirectories))
+        var pending = new Stack<string>();
+        pending.Push(sourceRoot);
+        while (pending.Count > 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
-                throw new InvalidDataException("Addon package contains a reparse point.");
-            var relative = Path.GetRelativePath(sourcePath, directory);
-            Directory.CreateDirectory(Path.Combine(destinationPath, relative));
-        }
+            var current = pending.Pop();
 
-        foreach (var file in Directory.GetFiles(sourcePath, "*", SearchOption.AllDirectories))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
-                throw new InvalidDataException("Addon package contains a reparse point.");
-            var relative = Path.GetRelativePath(sourcePath, file);
-            var target = Path.Combine(destinationPath, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.Copy(file, target, overwrite: true);
+            foreach (var file in Directory.EnumerateFiles(current, "*", SearchOption.TopDirectoryOnly))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException("Addon package contains a reparse point.");
+                var relative = Path.GetRelativePath(sourceRoot, file);
+                var target = Path.Combine(destinationPath, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(file, target, overwrite: true);
+            }
+
+            foreach (var directory in Directory.EnumerateDirectories(current, "*", SearchOption.TopDirectoryOnly))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException("Addon package contains a reparse point.");
+                var relative = Path.GetRelativePath(sourceRoot, directory);
+                Directory.CreateDirectory(Path.Combine(destinationPath, relative));
+                pending.Push(directory);
+            }
         }
     }
 
