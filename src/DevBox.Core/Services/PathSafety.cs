@@ -2,22 +2,31 @@ namespace DevBox.Core.Services;
 
 internal static class PathSafety
 {
-    public static string EnsureUnderRootWithoutReparsePoints(string rootPath, string candidatePath, string message)
+    public static string EnsureUnderRootWithoutReparsePoints(
+        string rootPath,
+        string candidatePath,
+        string message,
+        bool allowRoot = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(candidatePath);
 
         var fullRoot = Path.GetFullPath(rootPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var fullCandidate = Path.GetFullPath(candidatePath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if ((Directory.Exists(fullRoot) || File.Exists(fullRoot)) &&
+            (File.GetAttributes(fullRoot) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidOperationException($"{message} Protected root is a reparse point: {fullRoot}");
+
+        if (fullCandidate.Equals(fullRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!allowRoot)
+                throw new InvalidOperationException(message);
+            return fullCandidate;
+        }
+
         var prefix = fullRoot + Path.DirectorySeparatorChar;
         if (!fullCandidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(message);
-
-        if ((Directory.Exists(fullRoot) || File.Exists(fullRoot)) &&
-            (File.GetAttributes(fullRoot) & FileAttributes.ReparsePoint) != 0)
-        {
-            throw new InvalidOperationException($"{message} Reparse-point root is not allowed: {fullRoot}");
-        }
 
         var relative = Path.GetRelativePath(fullRoot, fullCandidate);
         var current = fullRoot;
