@@ -11,6 +11,7 @@ public sealed class RuntimePlatformService : IDisposable
     private const int MaximumImportedEntries = 100_000;
     private readonly string _rootPath;
     private readonly string _catalogPath;
+    private readonly string _releaseCatalogPath;
     private readonly RuntimeManager _runtimeManager;
     private bool _disposed;
 
@@ -19,14 +20,17 @@ public sealed class RuntimePlatformService : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         _rootPath = Path.GetFullPath(rootPath);
         _catalogPath = Path.Combine(_rootPath, "config", "runtime-catalog.json");
+        _releaseCatalogPath = Path.Combine(_rootPath, "config", "runtime-catalog.release.json");
         _runtimeManager = new RuntimeManager(_rootPath, httpClient);
     }
 
     public IReadOnlyList<RuntimePackageEntry> GetCatalog()
     {
         ThrowIfDisposed();
-        var custom = LoadCustomCatalog();
+        var release = LoadCatalog(_releaseCatalogPath, "config/runtime-catalog.release.json");
+        var custom = LoadCatalog(_catalogPath, "config/runtime-catalog.json");
         return BuiltInCatalog()
+            .Concat(release)
             .Concat(custom)
             .GroupBy(item => $"{item.Key}|{item.Version}|{item.Architecture}", StringComparer.OrdinalIgnoreCase)
             .Select(group => group.Last())
@@ -182,7 +186,7 @@ public sealed class RuntimePlatformService : IDisposable
         ArgumentNullException.ThrowIfNull(package);
         ValidatePackage(package);
         using var mutationLock = CrossProcessFileLock.Acquire(_catalogPath + ".lock", TimeSpan.FromSeconds(15));
-        var custom = LoadCustomCatalog().ToList();
+        var custom = LoadCatalog(_catalogPath, "config/runtime-catalog.json").ToList();
         var index = custom.FindIndex(item =>
             item.Key.Equals(package.Key, StringComparison.OrdinalIgnoreCase) &&
             item.Version.Equals(package.Version, StringComparison.OrdinalIgnoreCase) &&
@@ -227,13 +231,13 @@ public sealed class RuntimePlatformService : IDisposable
         }
     }
 
-    private IReadOnlyList<RuntimePackageEntry> LoadCustomCatalog()
+    private IReadOnlyList<RuntimePackageEntry> LoadCatalog(string path, string displayPath)
     {
-        if (!File.Exists(_catalogPath))
+        if (!File.Exists(path))
             return Array.Empty<RuntimePackageEntry>();
         try
         {
-            var packages = JsonSerializer.Deserialize<List<RuntimePackageEntry>>(File.ReadAllText(_catalogPath), JsonOptions)
+            var packages = JsonSerializer.Deserialize<List<RuntimePackageEntry>>(File.ReadAllText(path), JsonOptions)
                 ?? new List<RuntimePackageEntry>();
             foreach (var package in packages)
                 ValidatePackage(package);
@@ -241,7 +245,7 @@ public sealed class RuntimePlatformService : IDisposable
         }
         catch (JsonException ex)
         {
-            throw new InvalidDataException("config/runtime-catalog.json contains invalid JSON.", ex);
+            throw new InvalidDataException($"{displayPath} contains invalid JSON.", ex);
         }
     }
 
