@@ -516,10 +516,10 @@ public sealed class EnvironmentLockService : IDisposable
         var root = Path.GetFullPath(projectPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         if (!Directory.Exists(root))
             throw new DirectoryNotFoundException($"Project directory was not found: {root}");
-        var www = Path.GetFullPath(_wwwRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (!root.Equals(www, StringComparison.OrdinalIgnoreCase) && !root.StartsWith(www + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Environment operations are restricted to the DevBox www directory.");
-        return root;
+        return PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _wwwRoot,
+            root,
+            "Environment operations are restricted to project directories inside the DevBox www directory and cannot traverse a reparse point.");
     }
 
     private string? ReadActiveVersion(string key)
