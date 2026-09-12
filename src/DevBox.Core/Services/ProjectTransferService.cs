@@ -393,10 +393,8 @@ public sealed class ProjectTransferService
         var root = Path.GetFullPath(projectPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         if (!Directory.Exists(root))
             throw new DirectoryNotFoundException($"Project directory was not found: {root}");
-        var www = Path.GetFullPath(_wwwRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!root.StartsWith(www, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Project transfer is restricted to the DevBox www directory.");
-        return root;
+        return PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _wwwRoot, root, "Project transfer is restricted to the DevBox www directory and cannot traverse a reparse point.");
     }
 
     private static JsonObject ReadManifest(string projectRoot)
