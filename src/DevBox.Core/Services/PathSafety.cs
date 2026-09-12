@@ -13,6 +13,12 @@ internal static class PathSafety
         if (!fullCandidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(message);
 
+        if ((Directory.Exists(fullRoot) || File.Exists(fullRoot)) &&
+            (File.GetAttributes(fullRoot) & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new InvalidOperationException($"{message} Reparse-point root is not allowed: {fullRoot}");
+        }
+
         var relative = Path.GetRelativePath(fullRoot, fullCandidate);
         var current = fullRoot;
         foreach (var segment in relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
