@@ -61,9 +61,17 @@ public sealed class RuntimePlatformService : IDisposable
         ThrowIfDisposed();
         if (!string.IsNullOrWhiteSpace(runtimeKey))
             ValidateSegment(runtimeKey, nameof(runtimeKey));
+
+        var architecture = RuntimeInformation.ProcessArchitecture;
+        var architectureName = CurrentArchitecture();
         var packages = GetCatalog()
             .Where(item => string.IsNullOrWhiteSpace(runtimeKey) || item.Key.Equals(runtimeKey, StringComparison.OrdinalIgnoreCase))
-            .Where(item => IsPackageArchitectureCompatible(item.Architecture, RuntimeInformation.ProcessArchitecture))
+            .Where(item => IsPackageArchitectureCompatible(item.Architecture, architecture))
+            .GroupBy(item => $"{item.Key}|{item.Version}", StringComparer.OrdinalIgnoreCase)
+            .Select(group => group
+                .OrderByDescending(item => item.Architecture.Equals(architectureName, StringComparison.OrdinalIgnoreCase))
+                .ThenByDescending(item => item.Architecture.Equals("any", StringComparison.OrdinalIgnoreCase))
+                .First())
             .ToArray();
         var statuses = new List<RuntimeVersionStatus>();
 
@@ -79,7 +87,62 @@ public sealed class RuntimePlatformService : IDisposable
                 DetermineSupportState(package.EndOfLifeDate)));
         }
 
-        return statuses;
+        var candidateKeys = new HashSet<string>(packages.Select(item => item.Key), StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(runtimeKey))
+        {
+            candidateKeys.Add(runtimeKey);
+        }
+        else
+        {
+            var runtimeRoot = Path.Combine(_rootPath, "runtime");
+            if (Directory.Exists(runtimeRoot))
+            {
+                foreach (var directory in Directory.GetDirectories(runtimeRoot))
+                    candidateKeys.Add(Path.GetFileName(directory));
+            }
+        }
+
+        foreach (var key in candidateKeys)
+        {
+            string executable;
+            try
+            {
+                executable = GuessExecutable(key);
+            }
+            catch (KeyNotFoundException)
+            {
+                continue;
+            }
+
+            var displayName = packages.FirstOrDefault(item => item.Key.Equals(key, StringComparison.OrdinalIgnoreCase))?.DisplayName ?? key;
+            foreach (var installation in _runtimeManager.GetInstalled(key, executable))
+            {
+                if (packages.Any(item => item.Key.Equals(key, StringComparison.OrdinalIgnoreCase) &&
+                                         item.Version.Equals(installation.Version, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+
+                var installedPackage = new RuntimePackageEntry
+                {
+                    Key = key,
+                    DisplayName = displayName,
+                    Version = installation.Version,
+                    Architecture = architectureName,
+                    ExecutableRelativePath = executable
+                };
+                statuses.Add(new RuntimeVersionStatus(
+                    installedPackage,
+                    Installed: true,
+                    Active: installation.IsActive,
+                    Valid: installation.IsValid,
+                    SupportState: RuntimeSupportState.Unknown));
+            }
+        }
+
+        return statuses
+            .OrderBy(item => item.Package.Key, StringComparer.OrdinalIgnoreCase)
+            .ThenByDescending(item => ParseVersion(item.Package.Version))
+            .ThenByDescending(item => item.Package.Version, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     public Task InstallAsync(string key, string version, CancellationToken cancellationToken = default) =>
