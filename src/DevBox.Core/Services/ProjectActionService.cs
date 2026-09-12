@@ -97,8 +97,8 @@ public sealed class ProjectActionService
             throw new InvalidOperationException($"Unable to start project action '{action.DisplayName}': {ex.Message}", ex);
         }
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stdoutTask = ReadBoundedAsync(process.StandardOutput, 1_048_576, cancellationToken);
+        var stderrTask = ReadBoundedAsync(process.StandardError, 1_048_576, cancellationToken);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(action.TimeoutSeconds));
         try
@@ -113,8 +113,8 @@ public sealed class ProjectActionService
             throw;
         }
 
-        var stdout = Truncate(await stdoutTask.ConfigureAwait(false));
-        var stderr = Truncate(await stderrTask.ConfigureAwait(false));
+        var stdout = await stdoutTask.ConfigureAwait(false);
+        var stderr = await stderrTask.ConfigureAwait(false);
         return new ProjectActionResult(action.Key, process.ExitCode, Stopwatch.GetElapsedTime(started), stdout.Trim(), stderr.Trim());
     }
 
@@ -208,7 +208,26 @@ public sealed class ProjectActionService
         return null;
     }
 
-    private static string Truncate(string value) => value.Length <= 1_048_576 ? value : value[..1_048_576] + Environment.NewLine + "[output truncated by DevBox]";
+    private static async Task<string> ReadBoundedAsync(StreamReader reader, int maximumCharacters, CancellationToken cancellationToken)
+    {
+        var buffer = new char[8192];
+        var builder = new System.Text.StringBuilder(Math.Min(maximumCharacters, 64 * 1024));
+        var truncated = false;
+        while (true)
+        {
+            var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+                break;
+            var remaining = maximumCharacters - builder.Length;
+            if (remaining > 0)
+                builder.Append(buffer, 0, Math.Min(remaining, read));
+            if (read > remaining)
+                truncated = true;
+        }
+        if (truncated)
+            builder.Append(Environment.NewLine).Append("[output truncated by DevBox]");
+        return builder.ToString();
+    }
 
     private static void AtomicWrite(string path, string content)
     {
