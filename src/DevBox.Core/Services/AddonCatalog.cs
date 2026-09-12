@@ -29,7 +29,6 @@ public sealed class AddonCatalog
                 ?? throw new InvalidDataException("Addon manifest is empty.");
             if (entries.Count == 0)
                 return Array.Empty<AddonDefinition>();
-
             if (entries.Any(entry => entry is null))
                 throw new InvalidDataException("Addon manifest contains a null entry.");
 
@@ -88,18 +87,31 @@ public sealed class AddonCatalog
     {
         ValidateEntry(entry);
         var installPath = ResolveRelativePath(entry.InstallRelativePath);
-        var wwwRoot = Path.GetFullPath(Path.Combine(_rootPath, "www"))
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        var normalizedInstall = installPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!normalizedInstall.StartsWith(wwwRoot, StringComparison.OrdinalIgnoreCase) ||
-            normalizedInstall.Equals(wwwRoot, StringComparison.OrdinalIgnoreCase))
+        var wwwRoot = Path.GetFullPath(Path.Combine(_rootPath, "www"));
+        try
         {
-            throw new InvalidDataException($"Addon '{entry.Key}' install path must be a child of the DevBox www directory.");
+            installPath = PathSafety.EnsureUnderRootWithoutReparsePoints(
+                wwwRoot,
+                installPath,
+                $"Addon '{entry.Key}' install path must be a child of the DevBox www directory and cannot traverse a reparse point.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new InvalidDataException(ex.Message, ex);
         }
 
         var entryPointPath = ResolveRelativePath(entry.EntryPointRelativePath);
-        if (!entryPointPath.StartsWith(normalizedInstall, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException($"Addon '{entry.Key}' entry point must be inside its install directory.");
+        try
+        {
+            entryPointPath = PathSafety.EnsureUnderRootWithoutReparsePoints(
+                installPath,
+                entryPointPath,
+                $"Addon '{entry.Key}' entry point must be inside its install directory and cannot traverse a reparse point.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new InvalidDataException(ex.Message, ex);
+        }
 
         var requiredPhpExtensions = (entry.RequiredPhpExtensions ?? Array.Empty<string>())
             .Select(NormalizeRequiredPhpExtension)
@@ -166,17 +178,20 @@ public sealed class AddonCatalog
     private static void ValidateEntry(AddonManifestEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        if (string.IsNullOrWhiteSpace(entry.Key) ||
+        if (string.IsNullOrWhiteSpace(entry.Key) || entry.Key.Length > 64 ||
             entry.Key.Any(character => !char.IsLetterOrDigit(character) && character is not '-' and not '_'))
-            throw new InvalidDataException("Addon key contains invalid characters.");
+            throw new InvalidDataException("Addon key contains invalid characters or exceeds 64 characters.");
         if (string.IsNullOrWhiteSpace(entry.DisplayName) || string.IsNullOrWhiteSpace(entry.Version))
             throw new InvalidDataException($"Addon '{entry.Key}' must define displayName and version.");
         if (string.IsNullOrWhiteSpace(entry.InstallRelativePath) || string.IsNullOrWhiteSpace(entry.EntryPointRelativePath))
             throw new InvalidDataException($"Addon '{entry.Key}' must define install and entry-point paths.");
         if (!Uri.TryCreate(entry.LocalUrl, UriKind.Absolute, out var localUri) ||
-            localUri.Scheme is not ("http" or "https") ||
-            !localUri.Host.EndsWith(".test", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException($"Addon '{entry.Key}' localUrl must be an absolute .test URL.");
+            localUri.Scheme != Uri.UriSchemeHttp ||
+            !localUri.Host.EndsWith(".test", StringComparison.OrdinalIgnoreCase) ||
+            !localUri.IsDefaultPort)
+        {
+            throw new InvalidDataException($"Addon '{entry.Key}' localUrl must be an absolute http://*.test URL on the default HTTP port.");
+        }
         if (!Uri.TryCreate(entry.DownloadUrl, UriKind.Absolute, out var downloadUri) || downloadUri.Scheme != Uri.UriSchemeHttps)
             throw new InvalidDataException($"Addon '{entry.Key}' downloadUrl must use HTTPS.");
 
