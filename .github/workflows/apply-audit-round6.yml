@@ -1,0 +1,43 @@
+name: Apply audit round 6
+
+on:
+  push:
+    branches:
+      - fix/post-merge-audit-round6
+    paths:
+      - .github/audit-round6-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/post-merge-audit-round6
+          fetch-depth: 0
+
+      - name: Apply fixes and tests
+        shell: pwsh
+        run: python .github/scripts/apply-audit-round6.py
+
+      - name: Commit fixes
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "fix: harden profile state and runtime rollback"
+            git push origin HEAD:fix/post-merge-audit-round6
+          }
+
+      - name: Validate
+        shell: pwsh
+        run: |
+          git diff --check
+          dotnet build DevBox.sln --configuration Release
+          dotnet test DevBox.sln --configuration Release --no-build
