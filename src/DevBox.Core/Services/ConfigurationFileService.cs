@@ -6,6 +6,7 @@ namespace DevBox.Core.Services;
 
 public sealed class ConfigurationFileService
 {
+    private const long MaximumConfigurationBytes = 2L * 1024 * 1024;
     private readonly string _rootPath;
     private readonly string _backupRoot;
 
@@ -35,7 +36,7 @@ public sealed class ConfigurationFileService
         var path = GetPath(key);
         if (!File.Exists(path))
             throw new FileNotFoundException($"Configuration '{key}' does not exist.", path);
-        return File.ReadAllText(path);
+        return ReadConfigurationText(path, $"Configuration '{key}'");
     }
 
     public async Task<ConfigurationValidationResult> ValidateAsync(
@@ -45,7 +46,7 @@ public sealed class ConfigurationFileService
     {
         ArgumentNullException.ThrowIfNull(content);
         var normalized = NormalizeKey(key);
-        if (content.Length > 2 * 1024 * 1024)
+        if (content.Length > MaximumConfigurationBytes)
             return new ConfigurationValidationResult(false, normalized, null, "Configuration exceeds the 2 MiB safety limit.");
         if (content.Contains('\0'))
             return new ConfigurationValidationResult(false, normalized, null, "Configuration contains a NUL character.");
@@ -134,7 +135,7 @@ public sealed class ConfigurationFileService
         var fileName = Path.GetFileName(source);
         if (!fileName.StartsWith(normalized + "-", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"Backup '{fileName}' does not belong to configuration '{normalized}'.");
-        var content = File.ReadAllText(source);
+        var content = ReadConfigurationText(source, "Configuration backup");
         var validation = ValidateAsync(normalized, content).ConfigureAwait(false).GetAwaiter().GetResult();
         if (!validation.IsValid)
             throw new InvalidDataException($"Configuration backup failed validation: {validation.Message}");
@@ -259,8 +260,8 @@ public sealed class ConfigurationFileService
             return (false, $"Configuration validator failed to start: {ex.Message}");
         }
 
-        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stdout = ProcessOutputCapture.ReadBoundedAsync(process.StandardOutput, 16 * 1024, cancellationToken);
+        var stderr = ProcessOutputCapture.ReadBoundedAsync(process.StandardError, 16 * 1024, cancellationToken);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(15));
         try
@@ -283,6 +284,14 @@ public sealed class ConfigurationFileService
         return process.ExitCode == 0
             ? (true, string.IsNullOrWhiteSpace(output) ? "Configuration validation passed." : output)
             : (false, string.IsNullOrWhiteSpace(output) ? $"Configuration validator exited with code {process.ExitCode}." : output);
+    }
+
+    private static string ReadConfigurationText(string path, string displayName)
+    {
+        var info = new FileInfo(path);
+        if (info.Length > MaximumConfigurationBytes)
+            throw new InvalidDataException($"{displayName} exceeds the {MaximumConfigurationBytes} byte safety limit.");
+        return File.ReadAllText(path);
     }
 
     private string EnsureRootOwnedPath(string path, string message) =>
