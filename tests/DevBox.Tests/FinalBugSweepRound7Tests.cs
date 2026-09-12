@@ -129,6 +129,34 @@ public sealed class FinalBugSweepRound7Tests
     }
 
     [Fact]
+    public void DatabaseRuntime_RegisterRejectsPortAssignedToManagedService()
+    {
+        var root = NewRoot();
+        try
+        {
+            const int port = 3400;
+            var catalog = new ManagedServiceCatalog(root);
+            catalog.Upsert(new ManagedServiceManifest(
+                ManagedServiceManifest.CurrentSchemaVersion,
+                "custom-db-port-fixture",
+                "Custom",
+                "runtime/custom/tool.exe",
+                Array.Empty<string>(),
+                ".",
+                port,
+                "1"));
+
+            var executable = Path.Combine(root, "runtime", "mysql", "8.4.11", "bin", "mysqld.exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+            File.WriteAllText(executable, "fixture");
+
+            using var databases = new DatabaseRuntimeService(root);
+            Assert.Throws<InvalidOperationException>(() => databases.Register("mysql", "8.4.11", port));
+        }
+        finally { TryDelete(root); }
+    }
+
+    [Fact]
     public void DatabaseRuntimeRegistrations_RejectDuplicateIdentityAndNullEntries()
     {
         var root = NewRoot();

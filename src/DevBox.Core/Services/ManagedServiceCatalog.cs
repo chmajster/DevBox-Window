@@ -175,8 +175,9 @@ public sealed partial class ManagedServiceCatalog
         {
             throw new InvalidDataException($"Unsupported managed service schema version: {manifest.SchemaVersion}.");
         }
-        if (!SafeKeyRegex().IsMatch(manifest.Key ?? string.Empty) || ReservedKeys.Contains(manifest.Key) ||
-            ReservedKeyPrefixes.Any(prefix => manifest.Key?.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) == true))
+        var manifestKey = manifest.Key ?? string.Empty;
+        if (!SafeKeyRegex().IsMatch(manifestKey) || ReservedKeys.Contains(manifestKey) ||
+            ReservedKeyPrefixes.Any(prefix => manifestKey.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
         {
             throw new InvalidDataException($"Managed service key '{manifest.Key}' is invalid or reserved.");
         }

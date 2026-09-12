@@ -59,13 +59,16 @@ public sealed class DatabaseRuntimeService : IDisposable
 
         using var registrationLock = AcquireRegistrationLock();
         var registrations = LoadRegistrations().ToList();
+        var managedServicePorts = GetEnabledManagedServicePorts();
         var index = registrations.FindIndex(item => item.Engine.Equals(normalizedEngine, StringComparison.OrdinalIgnoreCase) && item.Version.Equals(version, StringComparison.OrdinalIgnoreCase));
         var existing = index >= 0 ? registrations[index] : null;
-        var selectedPort = port ?? existing?.Port ?? ChooseAvailablePort(kind, registrations);
+        var selectedPort = port ?? existing?.Port ?? ChooseAvailablePort(kind, registrations, managedServicePorts);
         if (selectedPort is < 1 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(port), "Database port must be between 1 and 65535.");
         if (registrations.Any(item => item.Port == selectedPort && !(item.Engine.Equals(normalizedEngine, StringComparison.OrdinalIgnoreCase) && item.Version.Equals(version, StringComparison.OrdinalIgnoreCase))))
             throw new InvalidOperationException($"Port {selectedPort} is already assigned to another DevBox database runtime.");
+        if ((existing is null || existing.Port != selectedPort) && managedServicePorts.Contains(selectedPort))
+            throw new InvalidOperationException($"Port {selectedPort} is already assigned to an enabled managed service.");
         if (port.HasValue && (existing is null || existing.Port != selectedPort) && IsTcpPortInUse(selectedPort))
             throw new InvalidOperationException($"Port {selectedPort} is already in use by another process.");
 
@@ -459,7 +462,13 @@ public sealed class DatabaseRuntimeService : IDisposable
     private static bool IsTcpPortInUse(int port) =>
         IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Any(endpoint => endpoint.Port == port);
 
-    private int ChooseAvailablePort(DatabaseEngineKind kind, IReadOnlyList<DatabaseRuntimeRegistration> registrations)
+    private HashSet<int> GetEnabledManagedServicePorts() =>
+        new ManagedServiceCatalog(_rootPath).GetManifests()
+            .Where(item => item.Enabled)
+            .Select(item => item.Port)
+            .ToHashSet();
+
+    private int ChooseAvailablePort(DatabaseEngineKind kind, IReadOnlyList<DatabaseRuntimeRegistration> registrations, IReadOnlySet<int>? additionalReservedPorts = null)
     {
         var start = kind switch
         {
@@ -469,10 +478,11 @@ public sealed class DatabaseRuntimeService : IDisposable
             _ => 5500
         };
         var assigned = registrations.Select(item => item.Port).ToHashSet();
+        var reserved = additionalReservedPorts ?? GetEnabledManagedServicePorts();
         var listeners = IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Select(endpoint => endpoint.Port).ToHashSet();
         for (var port = start; port <= 65535; port++)
         {
-            if (!assigned.Contains(port) && !listeners.Contains(port))
+            if (!assigned.Contains(port) && !reserved.Contains(port) && !listeners.Contains(port))
                 return port;
         }
         throw new InvalidOperationException("No available TCP port could be assigned to the database runtime.");
