@@ -583,9 +583,13 @@ public sealed partial class ProjectWorkspaceService
             throw new InvalidDataException($"Unsupported devbox.json schema version: {manifest.SchemaVersion}.");
         }
         _ = NormalizeProjectDirectoryName(manifest.Name);
-        if (!manifest.Domain.EndsWith(".test", StringComparison.OrdinalIgnoreCase))
+        try
         {
-            throw new InvalidDataException("Manifest domain must end with .test.");
+            _ = LocalCertificateManager.NormalizeDomain(manifest.Domain);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new InvalidDataException("Manifest domain is not a valid .test domain.", ex);
         }
         _ = NormalizeDatabaseEngine(manifest.DatabaseEngine);
         if (manifest.Addons.Any(addon => string.IsNullOrWhiteSpace(addon) || !SafeAddonKeyRegex().IsMatch(addon)))

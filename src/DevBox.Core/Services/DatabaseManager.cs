@@ -434,9 +434,9 @@ public sealed partial class DatabaseManager
             throw new InvalidOperationException($"Unable to start {Path.GetFileName(executable)}: {ex.Message}", ex);
         }
 
-        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        var errorTask = ProcessOutputCapture.ReadBoundedAsync(process.StandardError, cancellationToken: cancellationToken);
         Task<string>? outputTask = standardOutputPath is null
-            ? process.StandardOutput.ReadToEndAsync(cancellationToken)
+            ? ProcessOutputCapture.ReadBoundedAsync(process.StandardOutput, cancellationToken: cancellationToken)
             : null;
 
         try

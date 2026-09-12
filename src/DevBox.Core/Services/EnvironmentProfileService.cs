@@ -173,6 +173,7 @@ public sealed partial class EnvironmentProfileService
             .FirstOrDefault(group => group.Count() > 1);
         if (duplicateAction is not null)
             throw new InvalidDataException($"Environment profile contains duplicate action key '{duplicateAction.Key}'.");
+        ProjectActionService.ValidateDefinitions(profile.Actions.Cast<ProjectActionDefinition?>());
     }
 
     private static void AtomicWrite(string path, string content)
