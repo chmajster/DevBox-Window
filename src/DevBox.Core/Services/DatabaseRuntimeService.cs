@@ -183,7 +183,7 @@ public sealed class DatabaseRuntimeService : IDisposable
         Directory.CreateDirectory(backupRoot);
         var extension = kind == DatabaseEngineKind.PostgreSql ? ".dump" : ".sql";
         var destination = string.IsNullOrWhiteSpace(destinationPath)
-            ? Path.Combine(backupRoot, $"{databaseName}-{DateTime.UtcNow:yyyyMMdd-HHmmss}{extension}")
+            ? Path.Combine(backupRoot, $"{databaseName}-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}{extension}")
             : Path.GetFullPath(destinationPath);
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         var temporaryDestination = destination + $".{Guid.NewGuid():N}.tmp";
@@ -394,18 +394,33 @@ public sealed class DatabaseRuntimeService : IDisposable
             return DiscoverRegistrations();
         try
         {
-            var values = JsonSerializer.Deserialize<List<DatabaseRuntimeRegistration>>(File.ReadAllText(_registrationsPath), JsonOptions) ?? [];
-            foreach (var item in values)
+            var values = JsonSerializer.Deserialize<List<DatabaseRuntimeRegistration?>>(File.ReadAllText(_registrationsPath), JsonOptions) ?? [];
+            if (values.Any(item => item is null))
+                throw new InvalidDataException("Database runtime registrations contain a null entry.");
+            var materialized = values.Select(item => item!).ToArray();
+            foreach (var item in materialized)
             {
-                _ = ParseEngine(item.Engine);
-                ValidateVersion(item.Version);
+                try
+                {
+                    _ = ParseEngine(item.Engine);
+                    ValidateVersion(item.Version);
+                }
+                catch (ArgumentException ex)
+                {
+                    throw new InvalidDataException("Database runtime registration contains an invalid engine or version.", ex);
+                }
                 if (item.Port is < 1 or > 65535)
                     throw new InvalidDataException("Database runtime registration contains an invalid port.");
             }
-            var duplicatePort = values.GroupBy(item => item.Port).FirstOrDefault(group => group.Count() > 1);
+            var duplicateIdentity = materialized
+                .GroupBy(item => $"{item.Engine}|{item.Version}", StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(group => group.Count() > 1);
+            if (duplicateIdentity is not null)
+                throw new InvalidDataException($"Database runtime registrations contain duplicate runtime '{duplicateIdentity.Key}'.");
+            var duplicatePort = materialized.GroupBy(item => item.Port).FirstOrDefault(group => group.Count() > 1);
             if (duplicatePort is not null)
                 throw new InvalidDataException($"Database runtime registrations contain duplicate port {duplicatePort.Key}.");
-            return values;
+            return materialized;
         }
         catch (JsonException ex)
         {

@@ -38,10 +38,10 @@ public sealed class ProjectActionService
             var actionsNode = FindProperty(node, "actions");
             if (actionsNode is null)
                 return Array.Empty<ProjectActionDefinition>();
-            var actions = actionsNode.Deserialize<List<ProjectActionDefinition>>(JsonOptions) ?? new List<ProjectActionDefinition>();
+            var actions = actionsNode.Deserialize<List<ProjectActionDefinition?>>(JsonOptions) ?? new List<ProjectActionDefinition?>();
             foreach (var action in actions)
                 ValidateAction(action);
-            return actions.Where(item => item.Enabled).ToArray();
+            return actions.Select(item => item!).Where(item => item.Enabled).ToArray();
         }
         catch (JsonException ex)
         {
@@ -134,16 +134,17 @@ public sealed class ProjectActionService
         return results;
     }
 
-    private static void ValidateAction(ProjectActionDefinition action)
+    private static void ValidateAction(ProjectActionDefinition? action)
     {
-        ArgumentNullException.ThrowIfNull(action);
+        if (action is null)
+            throw new InvalidDataException("Project actions cannot contain null entries.");
         if (string.IsNullOrWhiteSpace(action.Key) || action.Key.Length > 64 || action.Key.Any(ch => !char.IsLetterOrDigit(ch) && ch is not '-' and not '_' and not '.'))
             throw new InvalidDataException("Project action key contains unsupported characters.");
         if (string.IsNullOrWhiteSpace(action.DisplayName) || action.DisplayName.Length > 120)
             throw new InvalidDataException($"Project action '{action.Key}' display name is invalid.");
-        if (!AllowedTools.Contains(action.Executable))
+        if (!AllowedTools.Contains(action.Executable ?? string.Empty))
             throw new InvalidDataException($"Project action '{action.Key}' uses unsupported tool '{action.Executable}'. Allowed tools: {string.Join(", ", AllowedTools.OrderBy(value => value))}.");
-        if (action.Arguments.Count > 64 || action.Arguments.Any(value => value.Length > 2048 || value.Contains('\0')))
+        if (action.Arguments is null || action.Arguments.Count > 64 || action.Arguments.Any(value => value is null || value.Length > 2048 || value.Contains('\0')))
             throw new InvalidDataException($"Project action '{action.Key}' contains invalid arguments.");
         if (action.TimeoutSeconds is < 1 or > 3600)
             throw new InvalidDataException($"Project action '{action.Key}' timeout must be between 1 and 3600 seconds.");

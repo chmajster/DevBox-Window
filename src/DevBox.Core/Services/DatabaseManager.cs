@@ -350,7 +350,7 @@ public sealed partial class DatabaseManager
             return full;
         }
 
-        var fileName = $"{databaseName}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.sql";
+        var fileName = $"{databaseName}-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.sql";
         return Path.Combine(_rootPath, "backups", "databases", fileName);
     }
 
