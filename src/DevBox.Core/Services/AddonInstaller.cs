@@ -52,10 +52,12 @@ public sealed class AddonInstaller : IDisposable
             if (!Directory.Exists(sourcePath))
                 throw new InvalidDataException($"Archive root '{addon.ArchiveRootDirectory}' was not found.");
 
-            CopyDirectory(sourcePath, stagingPath);
+            CopyDirectory(sourcePath, stagingPath, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!File.Exists(Path.Combine(stagingPath, "index.php")))
                 throw new InvalidDataException("Downloaded addon does not contain index.php.");
 
+            cancellationToken.ThrowIfCancellationRequested();
             var backupPath = SwapInStagingDirectory(stagingPath, addon.InstallPath);
             try
             {
@@ -187,9 +189,7 @@ public sealed class AddonInstaller : IDisposable
         using var stream = File.OpenRead(filePath);
         var actual = SHA256.HashData(stream);
         if (!CryptographicOperations.FixedTimeEquals(actual, expected))
-        {
             throw new InvalidDataException($"SHA-256 verification failed. Expected {Convert.ToHexString(expected).ToLowerInvariant()}, got {Convert.ToHexString(actual).ToLowerInvariant()}.");
-        }
     }
 
     internal static void ExtractZipSafely(string archivePath, string destinationPath) =>
@@ -274,9 +274,11 @@ $cfg['TempDir'] = 'tmp';
     private void WriteAddonNginxConfig(AddonDefinition addon)
     {
         if (!Uri.TryCreate(addon.LocalUrl, UriKind.Absolute, out var uri) ||
-            !uri.Host.EndsWith(".test", StringComparison.OrdinalIgnoreCase))
+            uri.Scheme != Uri.UriSchemeHttp ||
+            !uri.Host.EndsWith(".test", StringComparison.OrdinalIgnoreCase) ||
+            !uri.IsDefaultPort)
         {
-            throw new InvalidDataException("Addon local URL must use a valid .test host.");
+            throw new InvalidDataException("Addon local URL must use http:// on a valid .test host and the default HTTP port.");
         }
 
         var relativeRoot = Path.GetRelativePath(_rootPath, addon.InstallPath).Replace('\\', '/');
@@ -346,41 +348,49 @@ server {
 
     private void EnsureInstallPathIsSafe(AddonDefinition addon)
     {
-        var wwwPath = Path.GetFullPath(Path.Combine(_rootPath, "www"))
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var installPath = Path.GetFullPath(addon.InstallPath)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var wwwPrefix = wwwPath + Path.DirectorySeparatorChar;
-        if (!installPath.StartsWith(wwwPrefix, StringComparison.OrdinalIgnoreCase) || installPath.Equals(wwwPath, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Addon install path must be a child of the DevBox www directory.");
+        if (string.IsNullOrWhiteSpace(addon.Key) || addon.Key.Length > 64 ||
+            addon.Key.Any(character => !char.IsLetterOrDigit(character) && character is not '-' and not '_'))
+            throw new InvalidDataException("Addon key contains invalid characters or exceeds 64 characters.");
 
-        RejectExistingReparsePoint(wwwPath);
-        var current = wwwPath;
-        var relative = Path.GetRelativePath(wwwPath, installPath);
-        foreach (var segment in relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
+        _ = PathSafety.EnsureUnderRootWithoutReparsePoints(
+            Path.Combine(_rootPath, "www"),
+            addon.InstallPath,
+            "Addon install path must be a child of the DevBox www directory and cannot traverse a reparse point.");
+        _ = PathSafety.EnsureUnderRootWithoutReparsePoints(
+            addon.InstallPath,
+            addon.EntryPointPath,
+            "Addon entry point must remain inside the addon install directory and cannot traverse a reparse point.");
+
+        if (!Uri.TryCreate(addon.LocalUrl, UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttp ||
+            !uri.Host.EndsWith(".test", StringComparison.OrdinalIgnoreCase) ||
+            !uri.IsDefaultPort)
         {
-            current = Path.Combine(current, segment);
-            RejectExistingReparsePoint(current);
+            throw new InvalidDataException("Addon local URL must use http:// on a valid .test host and the default HTTP port.");
         }
     }
 
-    private static void RejectExistingReparsePoint(string path)
+    private static void CopyDirectory(string sourcePath, string destinationPath, CancellationToken cancellationToken)
     {
-        if (Directory.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-            throw new InvalidOperationException($"Addon install path cannot traverse a reparse point: {path}");
-    }
+        cancellationToken.ThrowIfCancellationRequested();
+        if ((File.GetAttributes(sourcePath) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("Addon package root cannot be a reparse point.");
 
-    private static void CopyDirectory(string sourcePath, string destinationPath)
-    {
         Directory.CreateDirectory(destinationPath);
         foreach (var directory in Directory.GetDirectories(sourcePath, "*", SearchOption.AllDirectories))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException("Addon package contains a reparse point.");
             var relative = Path.GetRelativePath(sourcePath, directory);
             Directory.CreateDirectory(Path.Combine(destinationPath, relative));
         }
 
         foreach (var file in Directory.GetFiles(sourcePath, "*", SearchOption.AllDirectories))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException("Addon package contains a reparse point.");
             var relative = Path.GetRelativePath(sourcePath, file);
             var target = Path.Combine(destinationPath, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
