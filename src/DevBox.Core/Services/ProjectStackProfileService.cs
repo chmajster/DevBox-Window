@@ -53,6 +53,7 @@ public sealed partial class ProjectStackProfileService
     {
         ArgumentNullException.ThrowIfNull(profile);
         Validate(profile);
+        using var mutationLock = CrossProcessFileLock.Acquire(_profilesPath + ".lock", TimeSpan.FromSeconds(15));
 
         var profiles = LoadCustomProfiles().ToList();
         var existing = profiles.FindIndex(item => item.Key.Equals(profile.Key, StringComparison.OrdinalIgnoreCase));
@@ -66,6 +67,7 @@ public sealed partial class ProjectStackProfileService
     public bool RemoveCustomProfile(string key)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        using var mutationLock = CrossProcessFileLock.Acquire(_profilesPath + ".lock", TimeSpan.FromSeconds(15));
         var profiles = LoadCustomProfiles().ToList();
         var removed = profiles.RemoveAll(item => item.Key.Equals(key, StringComparison.OrdinalIgnoreCase)) > 0;
         if (!removed) return false;
@@ -94,12 +96,13 @@ public sealed partial class ProjectStackProfileService
 
     private static void Validate(ProjectStackProfile profile)
     {
-        if (!SafeKeyRegex().IsMatch(profile.Key)) throw new InvalidDataException("Profile key contains unsupported characters.");
+        if (!SafeKeyRegex().IsMatch(profile.Key ?? string.Empty)) throw new InvalidDataException("Profile key contains unsupported characters.");
         if (string.IsNullOrWhiteSpace(profile.DisplayName) || profile.DisplayName.Length > 100) throw new InvalidDataException("Profile display name is invalid.");
         if (profile.Kind == ProjectKind.Unknown) throw new InvalidDataException("Profile must select a supported project kind.");
         if (profile.DatabaseEngine is not ("mysql" or "mariadb" or "postgresql" or "none")) throw new InvalidDataException("Profile database engine is invalid.");
-        if (profile.Addons.Any(addon => !SafeKeyRegex().IsMatch(addon))) throw new InvalidDataException("Profile contains an invalid addon key.");
-        if (profile.Services.Any(service => !SafeKeyRegex().IsMatch(service))) throw new InvalidDataException("Profile contains an invalid managed-service key.");
+        if (profile.Addons is null || profile.Services is null) throw new InvalidDataException("Profile addon and service collections cannot be null.");
+        if (profile.Addons.Any(addon => !SafeKeyRegex().IsMatch(addon ?? string.Empty))) throw new InvalidDataException("Profile contains an invalid addon key.");
+        if (profile.Services.Any(service => !SafeKeyRegex().IsMatch(service ?? string.Empty))) throw new InvalidDataException("Profile contains an invalid managed-service key.");
         if (!string.IsNullOrWhiteSpace(profile.NodeVersion) && !SafeRuntimeVersionRegex().IsMatch(profile.NodeVersion))
             throw new InvalidDataException("Profile Node.js version contains unsupported characters.");
         if (!string.IsNullOrWhiteSpace(profile.PhpVersion) && !SafeRuntimeVersionRegex().IsMatch(profile.PhpVersion))
