@@ -166,12 +166,44 @@ begin
     Result := Candidate;
 end;
 
+function HasExactDirective(const Lines: TArrayOfString; const Directive: String): Boolean;
+var
+  I: Integer;
+  CommentPos: Integer;
+  Line: String;
+begin
+  Result := False;
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    Line := Trim(Lines[I]);
+    if Line <> '' then
+    begin
+      if Line[1] <> '#' then
+      begin
+        CommentPos := Pos('#', Line);
+        if CommentPos > 0 then
+        begin
+          Delete(Line, CommentPos, Length(Line) - CommentPos + 1);
+          Line := Trim(Line);
+        end;
+
+        if Lowercase(Line) = Lowercase(Directive) then
+        begin
+          Result := True;
+          Exit;
+        end;
+      end;
+    end;
+  end;
+end;
+
 function IsManagedPhpMyAdmin(const RootPrefix: String): Boolean;
 var
   PhpMyAdminPath: String;
   PhpMyAdminVhost: String;
   PhpMyAdminMarker: String;
-  VhostContent: AnsiString;
+  MarkerLines: TArrayOfString;
+  VhostLines: TArrayOfString;
 begin
   Result := False;
   PhpMyAdminPath := RootPrefix + 'www\phpmyadmin';
@@ -180,19 +212,24 @@ begin
 
   if FileExists(PhpMyAdminMarker) then
   begin
-    Result := True;
+    if LoadStringsFromFile(PhpMyAdminMarker, MarkerLines) and
+       (GetArrayLength(MarkerLines) > 0) and
+       (Lowercase(Trim(MarkerLines[0])) = 'phpmyadmin') then
+      Result := True
+    else
+      Log('Preserving www\phpmyadmin because its ownership marker is invalid.');
     Exit;
   end;
 
   if not FileExists(PhpMyAdminVhost) then
     Exit;
 
-  if not LoadStringFromFile(PhpMyAdminVhost, VhostContent) then
+  if not LoadStringsFromFile(PhpMyAdminVhost, VhostLines) then
     Exit;
 
   Result :=
-    (Pos('server_name phpmyadmin.test', VhostContent) > 0) and
-    (Pos('root www/phpmyadmin;', VhostContent) > 0);
+    HasExactDirective(VhostLines, 'server_name phpmyadmin.test;') and
+    HasExactDirective(VhostLines, 'root www/phpmyadmin;');
 end;
 
 function RemoveGeneratedModules(const BaseDir: String): Boolean;
@@ -228,7 +265,7 @@ begin
   else
   begin
     if DirExists(PhpMyAdminPath) then
-      Log('Preserving www\phpmyadmin because no DevBox ownership marker or matching legacy DevBox vhost was found.');
+      Log('Preserving www\phpmyadmin because no valid DevBox ownership marker or exact legacy DevBox vhost was found.');
     if FileExists(PhpMyAdminVhost) then
       Log('Preserving phpmyadmin.test.conf because it is not recognized as a DevBox-managed vhost.');
   end;
