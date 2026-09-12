@@ -156,9 +156,9 @@ try {
 
             $configDirectory = Join-Path $publishDirectory 'config'
             New-Item -ItemType Directory -Path $configDirectory -Force | Out-Null
-            $catalogPath = Join-Path $configDirectory 'runtime-catalog.json'
+            $catalogPath = Join-Path $configDirectory 'runtime-catalog.release.json'
             $onlineCatalog | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $catalogPath -Encoding utf8
-            Write-Host "Verified online runtime catalog: $catalogPath"
+            Write-Host "Verified release runtime catalog: $catalogPath"
         }
         else {
             $runtimeDirectory = Join-Path $publishDirectory 'runtime'
