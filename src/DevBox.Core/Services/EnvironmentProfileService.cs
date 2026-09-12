@@ -74,11 +74,14 @@ public sealed partial class EnvironmentProfileService
 
         try
         {
-            var profiles = JsonSerializer.Deserialize<List<EnvironmentProfile>>(File.ReadAllText(_profilesPath), JsonOptions)
-                ?? new List<EnvironmentProfile>();
-            foreach (var profile in profiles)
+            var profiles = JsonSerializer.Deserialize<List<EnvironmentProfile?>>(File.ReadAllText(_profilesPath), JsonOptions)
+                ?? new List<EnvironmentProfile?>();
+            if (profiles.Any(profile => profile is null))
+                throw new InvalidDataException("config/environment-profiles.json contains a null profile entry.");
+            var materialized = profiles.Select(profile => profile!).ToArray();
+            foreach (var profile in materialized)
                 Validate(profile);
-            return profiles.Select(Normalize).ToArray();
+            return materialized.Select(Normalize).ToArray();
         }
         catch (JsonException ex)
         {
@@ -129,10 +132,12 @@ public sealed partial class EnvironmentProfileService
             throw new InvalidDataException("Environment profile display name is invalid.");
         if (profile.Kind == ProjectKind.Unknown)
             throw new InvalidDataException("Environment profile must use a supported project kind.");
+        if (profile.Runtimes is null || profile.Database is null || profile.Addons is null || profile.Services is null || profile.Actions is null)
+            throw new InvalidDataException("Environment profile contains a null collection or database definition.");
 
         foreach (var pair in profile.Runtimes)
         {
-            if (!SafeKeyRegex().IsMatch(pair.Key) || !SafeVersionRegex().IsMatch(pair.Value))
+            if (!SafeKeyRegex().IsMatch(pair.Key ?? string.Empty) || !SafeVersionRegex().IsMatch(pair.Value ?? string.Empty))
                 throw new InvalidDataException($"Environment profile contains an invalid runtime pin: {pair.Key}={pair.Value}.");
         }
 
@@ -143,13 +148,16 @@ public sealed partial class EnvironmentProfileService
             throw new InvalidDataException("Environment profile database version is invalid.");
         if (profile.Database.Port is < 1 or > 65535)
             throw new InvalidDataException("Environment profile database port is outside the valid TCP range.");
-        if (profile.Addons.Any(value => !SafeKeyRegex().IsMatch(value)) || profile.Services.Any(value => !SafeKeyRegex().IsMatch(value)))
+        if (profile.Addons.Any(value => !SafeKeyRegex().IsMatch(value ?? string.Empty)) || profile.Services.Any(value => !SafeKeyRegex().IsMatch(value ?? string.Empty)))
             throw new InvalidDataException("Environment profile contains an invalid addon or service key.");
 
         foreach (var action in profile.Actions)
         {
-            if (!SafeKeyRegex().IsMatch(action.Key) || string.IsNullOrWhiteSpace(action.DisplayName))
+            if (action is null || !SafeKeyRegex().IsMatch(action.Key ?? string.Empty) || string.IsNullOrWhiteSpace(action.DisplayName))
                 throw new InvalidDataException("Environment profile contains an invalid project action.");
+            if (string.IsNullOrWhiteSpace(action.Executable) || action.Arguments is null ||
+                action.Arguments.Any(value => value is null || value.Length > 2048 || value.Contains('\0')))
+                throw new InvalidDataException($"Action '{action.Key}' contains an invalid executable or arguments.");
             if (action.TimeoutSeconds is < 1 or > 3600)
                 throw new InvalidDataException($"Action '{action.Key}' timeout must be between 1 and 3600 seconds.");
         }

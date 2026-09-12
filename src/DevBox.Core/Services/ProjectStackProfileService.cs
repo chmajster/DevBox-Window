@@ -83,10 +83,13 @@ public sealed partial class ProjectStackProfileService
 
         try
         {
-            var profiles = JsonSerializer.Deserialize<List<ProjectStackProfile>>(File.ReadAllText(_profilesPath), JsonOptions)
-                ?? new List<ProjectStackProfile>();
-            foreach (var profile in profiles) Validate(profile);
-            return profiles;
+            var profiles = JsonSerializer.Deserialize<List<ProjectStackProfile?>>(File.ReadAllText(_profilesPath), JsonOptions)
+                ?? new List<ProjectStackProfile?>();
+            if (profiles.Any(profile => profile is null))
+                throw new InvalidDataException("config/project-profiles.json contains a null profile entry.");
+            var materialized = profiles.Select(profile => profile!).ToArray();
+            foreach (var profile in materialized) Validate(profile);
+            return materialized;
         }
         catch (JsonException ex)
         {

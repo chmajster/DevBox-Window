@@ -51,7 +51,7 @@ public sealed class ProjectTransferService
         }
         Directory.CreateDirectory(_exportRoot);
         var destination = string.IsNullOrWhiteSpace(destinationPath)
-            ? Path.Combine(_exportRoot, $"{SafeFileName(projectName)}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.devbox-project.zip")
+            ? Path.Combine(_exportRoot, $"{SafeFileName(projectName)}-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.devbox-project.zip")
             : Path.GetFullPath(destinationPath);
         var destinationDirectory = Path.GetDirectoryName(destination)!;
         Directory.CreateDirectory(destinationDirectory);
