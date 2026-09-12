@@ -74,7 +74,7 @@ public sealed class EnvironmentLockService : IDisposable
             Actions = profile?.Actions.Count > 0 ? profile.Actions : _actions.GetActions(root),
             SourceProfile = profile?.Key
         };
-        ValidateLock(result);
+        ValidateLockData(result);
         AtomicWrite(Path.Combine(root, LockFileName), JsonSerializer.Serialize(result, JsonOptions));
         return result;
     }
@@ -90,7 +90,7 @@ public sealed class EnvironmentLockService : IDisposable
         {
             var value = JsonSerializer.Deserialize<EnvironmentLockFile>(File.ReadAllText(path), JsonOptions)
                 ?? throw new InvalidDataException("devbox.lock.json is empty.");
-            ValidateLock(value);
+            ValidateLockData(value);
             return value;
         }
         catch (JsonException ex)
@@ -124,7 +124,7 @@ public sealed class EnvironmentLockService : IDisposable
             Actions = profile.Actions.ToArray(),
             SourceProfile = profile.Key
         };
-        ValidateLock(desired);
+        ValidateLockData(desired);
         var result = await ApplyDesiredStateAsync(root, desired, cancellationToken).ConfigureAwait(false);
         if (result.Warnings.Count == 0)
             AtomicWrite(Path.Combine(root, LockFileName), JsonSerializer.Serialize(desired, JsonOptions));
@@ -619,7 +619,7 @@ public sealed class EnvironmentLockService : IDisposable
         return string.IsNullOrWhiteSpace(result) ? "devbox" : result;
     }
 
-    private static void ValidateLock(EnvironmentLockFile value)
+    internal static void ValidateLockData(EnvironmentLockFile value)
     {
         if (value.SchemaVersion != EnvironmentLockFile.CurrentSchemaVersion)
             throw new InvalidDataException($"Unsupported devbox.lock.json schema version: {value.SchemaVersion}.");
@@ -637,11 +637,25 @@ public sealed class EnvironmentLockService : IDisposable
         }
         if (value.Runtimes.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || string.IsNullOrWhiteSpace(pair.Value)))
             throw new InvalidDataException("Environment lock contains an invalid runtime pin.");
-        if (value.Database.Engine is not ("mysql" or "mariadb" or "postgresql" or "none"))
+        var databaseEngine = value.Database.Engine?.Trim().ToLowerInvariant();
+        if (databaseEngine is not ("mysql" or "mariadb" or "postgresql" or "none"))
             throw new InvalidDataException("Environment lock database engine is invalid.");
+        if (databaseEngine != "none" && string.IsNullOrWhiteSpace(value.Database.Version))
+            throw new InvalidDataException("Environment lock database version is required when a database engine is pinned.");
         if (value.Database.Port is < 1 or > 65535)
             throw new InvalidDataException("Environment lock database port is invalid.");
+        if (value.Addons.Any(IsInvalidEnvironmentKey) || value.Services.Any(IsInvalidEnvironmentKey))
+            throw new InvalidDataException("Environment lock contains an invalid addon or service key.");
         ProjectActionService.ValidateDefinitions(value.Actions.Cast<ProjectActionDefinition?>());
+    }
+
+    private static bool IsInvalidEnvironmentKey(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return true;
+        var normalized = value.Trim();
+        return normalized.Length > 64 || !char.IsLetterOrDigit(normalized[0]) ||
+               normalized.Any(character => !char.IsLetterOrDigit(character) && character is not '.' and not '_' and not '-');
     }
 
     private static void AtomicWrite(string path, string content)

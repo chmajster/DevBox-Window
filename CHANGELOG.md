@@ -43,6 +43,12 @@ All notable changes to DevBox Windows are documented here.
 
 ### Fixed
 
+- Task Center `WaitAsync` now waits on a completion handle created before the initial queued notification, closing a race where subscribers could observe completion before execution had even been assigned.
+- Task Center history persistence failures are isolated from task execution, so an unwritable history path can no longer make enqueueing fail or convert a successful operation into a failed task.
+- Environment locks reject null/unsafe ADDON and managed-service keys and require a database version whenever a database engine is pinned.
+- Project snapshot restores and project archive imports reuse canonical environment-lock validation before carrying `devbox.lock.json` into the restored project.
+- Project archive imports reject a JSON `null` environment lock instead of silently preserving the invalid file.
+- Self-update partial-download cleanup is best-effort so a locked temporary file cannot mask the original download or checksum failure.
 - Windows autostart updates now roll back both the in-memory setting and the HKCU Run value when settings persistence fails, avoiding split registry/file state.
 - Elevated hosts-file helper processes now have a 30-second lifetime bound and are terminated on timeout instead of leaving UI operations waiting indefinitely.
 - Database runtime registration now rejects port changes while the existing server process is still running, preventing persisted port state from diverging from the active listener.

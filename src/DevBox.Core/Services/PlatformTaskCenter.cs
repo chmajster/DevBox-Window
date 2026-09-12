@@ -90,8 +90,7 @@ public sealed class PlatformTaskCenter : IDisposable
         ThrowIfDisposed();
         if (!_entries.TryGetValue(id, out var entry))
             throw new KeyNotFoundException($"Task '{id}' was not found.");
-        if (entry.Execution is not null)
-            await entry.Execution.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await entry.Completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         return ReadSnapshot(entry);
     }
 
@@ -105,7 +104,7 @@ public sealed class PlatformTaskCenter : IDisposable
             if (_entries.TryRemove(pair.Key, out var removed))
                 removed.Cancellation?.Dispose();
         }
-        PersistHistory();
+        PersistHistorySafely();
     }
 
     public void Dispose()
@@ -142,45 +141,52 @@ public sealed class PlatformTaskCenter : IDisposable
         TaskEntry entry,
         Func<IProgress<(double Progress, string? Message)>, CancellationToken, Task> operation)
     {
-        var token = entry.Cancellation!.Token;
-        var acquired = false;
         try
         {
-            await _parallelism.WaitAsync(token).ConfigureAwait(false);
-            acquired = true;
-        }
-        catch (OperationCanceledException)
-        {
-            Update(entry, PlatformTaskState.Cancelled, ReadSnapshot(entry).Progress, "Cancelled before execution.", null, finished: true);
-            return;
-        }
-
-        try
-        {
-            Update(entry, PlatformTaskState.Running, Math.Max(0, ReadSnapshot(entry).Progress), "Running", null, started: true);
-            var progress = new InlineProgress<(double Progress, string? Message)>(value =>
+            var token = entry.Cancellation!.Token;
+            var acquired = false;
+            try
             {
-                var current = ReadSnapshot(entry);
-                if (IsTerminal(current.State))
-                    return;
-                var normalized = double.IsFinite(value.Progress) ? Math.Clamp(value.Progress, 0, 100) : current.Progress;
-                Update(entry, PlatformTaskState.Running, normalized, value.Message, null);
-            });
-            await operation(progress, token).ConfigureAwait(false);
-            Update(entry, PlatformTaskState.Completed, 100, "Completed", null, finished: true);
-        }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
-        {
-            Update(entry, PlatformTaskState.Cancelled, ReadSnapshot(entry).Progress, "Cancelled", null, finished: true);
-        }
-        catch (Exception ex)
-        {
-            Update(entry, PlatformTaskState.Failed, ReadSnapshot(entry).Progress, "Failed", SanitizeError(ex), finished: true);
+                await _parallelism.WaitAsync(token).ConfigureAwait(false);
+                acquired = true;
+            }
+            catch (OperationCanceledException)
+            {
+                Update(entry, PlatformTaskState.Cancelled, ReadSnapshot(entry).Progress, "Cancelled before execution.", null, finished: true);
+                return;
+            }
+
+            try
+            {
+                Update(entry, PlatformTaskState.Running, Math.Max(0, ReadSnapshot(entry).Progress), "Running", null, started: true);
+                var progress = new InlineProgress<(double Progress, string? Message)>(value =>
+                {
+                    var current = ReadSnapshot(entry);
+                    if (IsTerminal(current.State))
+                        return;
+                    var normalized = double.IsFinite(value.Progress) ? Math.Clamp(value.Progress, 0, 100) : current.Progress;
+                    Update(entry, PlatformTaskState.Running, normalized, value.Message, null);
+                });
+                await operation(progress, token).ConfigureAwait(false);
+                Update(entry, PlatformTaskState.Completed, 100, "Completed", null, finished: true);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                Update(entry, PlatformTaskState.Cancelled, ReadSnapshot(entry).Progress, "Cancelled", null, finished: true);
+            }
+            catch (Exception ex)
+            {
+                Update(entry, PlatformTaskState.Failed, ReadSnapshot(entry).Progress, "Failed", SanitizeError(ex), finished: true);
+            }
+            finally
+            {
+                if (acquired)
+                    _parallelism.Release();
+            }
         }
         finally
         {
-            if (acquired)
-                _parallelism.Release();
+            entry.Completion.TrySetResult();
         }
     }
 
@@ -235,7 +241,7 @@ public sealed class PlatformTaskCenter : IDisposable
             }
         }
         if (persist)
-            PersistHistory();
+            PersistHistorySafely();
     }
 
     private IReadOnlyList<PlatformTaskSnapshot> LoadHistory()
@@ -302,6 +308,18 @@ public sealed class PlatformTaskCenter : IDisposable
         }
     }
 
+    private void PersistHistorySafely()
+    {
+        try
+        {
+            PersistHistory();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Trace.TraceError($"PlatformTaskCenter history persistence failed: {ex}");
+        }
+    }
+
     private void PersistHistory()
     {
         lock (_historySync)
@@ -358,12 +376,15 @@ public sealed class PlatformTaskCenter : IDisposable
         {
             Snapshot = snapshot;
             Cancellation = cancellation;
+            if (cancellation is null || IsTerminal(snapshot.State))
+                Completion.TrySetResult();
         }
 
         public object Sync { get; } = new();
         public PlatformTaskSnapshot Snapshot { get; set; }
         public CancellationTokenSource? Cancellation { get; }
         public Task? Execution { get; set; }
+        public TaskCompletionSource Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };

@@ -311,9 +311,11 @@ public sealed class ProjectTransferService
         {
             try
             {
-                var lockFile = JsonSerializer.Deserialize<EnvironmentLockFile>(ReadMetadataText(lockPath, EnvironmentLockService.LockFileName), JsonOptions);
-                if (lockFile is not null)
-                    AtomicWrite(lockPath, JsonSerializer.Serialize(lockFile with { ProjectName = name, Domain = domain, GeneratedAtUtc = DateTimeOffset.UtcNow }, JsonOptions));
+                var lockFile = JsonSerializer.Deserialize<EnvironmentLockFile>(ReadMetadataText(lockPath, EnvironmentLockService.LockFileName), JsonOptions)
+                    ?? throw new InvalidDataException("Imported devbox.lock.json is empty.");
+                var rewrittenLock = lockFile with { ProjectName = name, Domain = domain, GeneratedAtUtc = DateTimeOffset.UtcNow };
+                EnvironmentLockService.ValidateLockData(rewrittenLock);
+                AtomicWrite(lockPath, JsonSerializer.Serialize(rewrittenLock, JsonOptions));
             }
             catch (JsonException ex)
             {
