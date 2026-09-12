@@ -182,6 +182,9 @@ public sealed class ProjectActionService
         var path = Path.GetFullPath(Path.Combine(projectRoot, relative));
         if (!Directory.Exists(path))
             throw new DirectoryNotFoundException($"Project action working directory does not exist: {path}");
+        if (path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Equals(projectRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+            return projectRoot;
         return PathSafety.EnsureUnderRootWithoutReparsePoints(
             projectRoot,
             path,
