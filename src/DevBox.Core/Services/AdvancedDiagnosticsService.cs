@@ -38,9 +38,29 @@ public sealed class AdvancedDiagnosticsService
         foreach (var relative in new[] { "runtime", "config", "www", "logs", "tmp", "backups" })
         {
             var path = Path.Combine(_rootPath, relative);
-            findings.Add(Directory.Exists(path)
-                ? Info($"directory-{relative}", "Filesystem", $"{relative} directory is available.", path)
-                : Error($"directory-{relative}", "Filesystem", $"{relative} directory is missing.", path, "Run DevBox setup/repair."));
+            if (!Directory.Exists(path))
+            {
+                findings.Add(Error($"directory-{relative}", "Filesystem", $"{relative} directory is missing.", path, "Run DevBox setup/repair."));
+                continue;
+            }
+
+            try
+            {
+                _ = PathSafety.EnsureUnderRootWithoutReparsePoints(
+                    _rootPath,
+                    path,
+                    $"{relative} directory cannot be a reparse point or escape the DevBox root.");
+                findings.Add(Info($"directory-{relative}", "Filesystem", $"{relative} directory is available.", path));
+            }
+            catch (InvalidOperationException ex)
+            {
+                findings.Add(Error(
+                    $"directory-{relative}-unsafe",
+                    "Filesystem",
+                    $"{relative} directory is unsafe.",
+                    ex.Message,
+                    "Replace the junction/symbolic link with a real DevBox-managed directory."));
+            }
         }
     }
 
@@ -92,9 +112,9 @@ public sealed class AdvancedDiagnosticsService
                     findings.Add(Info($"runtime-{status.Package.Key}-{status.Package.Version}", "Runtimes", "Runtime installation is valid.", $"{status.Package.DisplayName} {status.Package.Version}{(status.Active ? " (active)" : string.Empty)}."));
             }
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or PlatformNotSupportedException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException or PlatformNotSupportedException)
         {
-            findings.Add(Error("runtime-catalog", "Runtimes", "Runtime catalog could not be inspected.", ex.Message, "Repair config/runtime-catalog.json or remove the invalid custom entry."));
+            findings.Add(Error("runtime-catalog", "Runtimes", "Runtime catalog could not be inspected.", ex.Message, "Repair the runtime/catalog path or remove the unsafe entry."));
         }
     }
 
@@ -105,7 +125,7 @@ public sealed class AdvancedDiagnosticsService
         {
             services = new ServiceCatalog(_rootPath).GetServices();
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
         {
             findings.Add(Error("service-catalog", "Services", "Service catalog is invalid.", ex.Message, "Repair config/services.json."));
             return;
@@ -141,7 +161,7 @@ public sealed class AdvancedDiagnosticsService
         {
             sites = new SiteManager(_rootPath).GetSites();
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
         {
             findings.Add(Error("sites-metadata", "Sites", "Sites metadata could not be loaded.", ex.Message, "Use the Sites repair workflow and inspect quarantined metadata."));
             return;
@@ -179,8 +199,26 @@ public sealed class AdvancedDiagnosticsService
         var www = Path.Combine(_rootPath, "www");
         if (!Directory.Exists(www))
             return;
+        try
+        {
+            _ = PathSafety.EnsureUnderRootWithoutReparsePoints(
+                _rootPath,
+                www,
+                "Project diagnostics cannot traverse a reparse-point www directory.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            findings.Add(Error("projects-root-unsafe", "Projects", "Project root is unsafe.", ex.Message, "Replace the www junction/symbolic link with a real DevBox-managed directory."));
+            return;
+        }
+
         foreach (var directory in Directory.GetDirectories(www))
         {
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+            {
+                findings.Add(Error($"project-root-{Path.GetFileName(directory)}-unsafe", "Projects", "Project directory is a reparse point.", directory, "Move the project into a real directory inside DevBox www."));
+                continue;
+            }
             var manifest = Path.Combine(directory, ProjectWorkspaceService.ManifestFileName);
             var lockPath = Path.Combine(directory, EnvironmentLockService.LockFileName);
             if (!File.Exists(manifest))
@@ -199,7 +237,7 @@ public sealed class AdvancedDiagnosticsService
                 else
                     findings.Add(Warning($"project-drift-{Path.GetFileName(directory)}", "Projects", "Project environment drift detected.", string.Join(" | ", drift.Take(10)), "Apply devbox.lock.json to restore the pinned environment."));
             }
-            catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or KeyNotFoundException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException or KeyNotFoundException)
             {
                 findings.Add(Error($"project-lock-invalid-{Path.GetFileName(directory)}", "Projects", "Project environment lock could not be checked.", ex.Message, "Repair or regenerate devbox.lock.json."));
             }
@@ -211,13 +249,20 @@ public sealed class AdvancedDiagnosticsService
         var service = new ConfigurationFileService(_rootPath);
         foreach (var key in service.GetKnownConfigurations())
         {
-            var path = service.GetPath(key);
-            if (!File.Exists(path))
-                findings.Add(Error($"config-{key}", "Configuration", $"{key} configuration is missing.", path, "Run DevBox setup/repair."));
-            else if (new FileInfo(path).Length == 0)
-                findings.Add(Error($"config-{key}-empty", "Configuration", $"{key} configuration is empty.", path, "Restore a configuration backup or regenerate defaults."));
-            else
-                findings.Add(Info($"config-{key}", "Configuration", $"{key} configuration is present.", path));
+            try
+            {
+                var path = service.GetPath(key);
+                if (!File.Exists(path))
+                    findings.Add(Error($"config-{key}", "Configuration", $"{key} configuration is missing.", path, "Run DevBox setup/repair."));
+                else if (new FileInfo(path).Length == 0)
+                    findings.Add(Error($"config-{key}-empty", "Configuration", $"{key} configuration is empty.", path, "Restore a configuration backup or regenerate defaults."));
+                else
+                    findings.Add(Info($"config-{key}", "Configuration", $"{key} configuration is present.", path));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                findings.Add(Error($"config-{key}-unsafe", "Configuration", $"{key} configuration path is unsafe or unavailable.", ex.Message, "Replace reparse points and repair the DevBox configuration directory."));
+            }
         }
     }
 
@@ -230,6 +275,10 @@ public sealed class AdvancedDiagnosticsService
                 continue;
             try
             {
+                _ = PathSafety.EnsureUnderRootWithoutReparsePoints(
+                    _rootPath,
+                    root,
+                    "Temporary-artifact scan cannot traverse a reparse-point root.");
                 foreach (var path in EnumerateDirectoriesWithoutReparsePoints(root))
                 {
                     var name = Path.GetFileName(path);
@@ -242,9 +291,9 @@ public sealed class AdvancedDiagnosticsService
                         break;
                 }
             }
-            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or InvalidOperationException)
             {
-                findings.Add(Warning("temp-scan-access", "Filesystem", "Some temporary directories could not be scanned.", ex.Message));
+                findings.Add(Warning("temp-scan-access", "Filesystem", "Some temporary directories could not be scanned safely.", ex.Message));
             }
             if (stale.Count >= 50)
                 break;
