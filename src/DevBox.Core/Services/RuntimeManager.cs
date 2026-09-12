@@ -291,6 +291,9 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
 
     private static void ValidateRuntimeExecutable(string root, string executableRelativePath)
     {
+        if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("Runtime package root cannot be a reparse point.");
+
         var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         var executablePath = Path.GetFullPath(Path.Combine(root, executableRelativePath));
         if (!executablePath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase) || !File.Exists(executablePath))
@@ -324,21 +327,24 @@ public sealed class RuntimeManager : IRuntimeManager, IDisposable
     private static void CopyDirectory(string sourcePath, string destinationPath, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if ((File.GetAttributes(sourcePath) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("Runtime package contains a reparse point.");
+
         Directory.CreateDirectory(destinationPath);
-        foreach (var directory in Directory.GetDirectories(sourcePath, "*", SearchOption.AllDirectories))
+        foreach (var file in Directory.GetFiles(sourcePath))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var relative = Path.GetRelativePath(sourcePath, directory);
-            Directory.CreateDirectory(Path.Combine(destinationPath, relative));
+            if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException("Runtime package contains a reparse point.");
+            File.Copy(file, Path.Combine(destinationPath, Path.GetFileName(file)), overwrite: true);
         }
 
-        foreach (var file in Directory.GetFiles(sourcePath, "*", SearchOption.AllDirectories))
+        foreach (var directory in Directory.GetDirectories(sourcePath))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var relative = Path.GetRelativePath(sourcePath, file);
-            var target = Path.Combine(destinationPath, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.Copy(file, target, overwrite: true);
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException("Runtime package contains a reparse point.");
+            CopyDirectory(directory, Path.Combine(destinationPath, Path.GetFileName(directory)), cancellationToken);
         }
     }
 
