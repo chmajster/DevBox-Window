@@ -22,7 +22,7 @@ jobs:
 
       - name: Apply fixes and tests
         shell: pwsh
-        run: python .github/scripts/apply-final-bug-sweep-round7.py
+        run: python .github/scripts/fix-final-bug-sweep-round7-build.py
 
       - name: Commit fixes
         shell: pwsh
@@ -31,7 +31,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src tests
           if (-not (git diff --cached --quiet)) {
-            git commit -m "fix: complete final bug sweep hardening"
+            git commit -m "fix: reserve runtime ports and complete sweep"
             git push origin HEAD:fix/final-bug-sweep-round7
           }
 
