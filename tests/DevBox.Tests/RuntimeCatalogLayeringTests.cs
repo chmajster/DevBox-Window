@@ -67,6 +67,30 @@ public sealed class RuntimeCatalogLayeringTests
         }
     }
 
+    [Fact]
+    public void GetStatuses_IncludesInstalledKnownVersionMissingFromCatalog()
+    {
+        var root = NewRoot();
+        try
+        {
+            var installed = Path.Combine(root, "runtime", "php", "7.4.99");
+            Directory.CreateDirectory(installed);
+            File.WriteAllText(Path.Combine(installed, "php-cgi.exe"), "legacy runtime");
+
+            using var service = new RuntimePlatformService(root);
+            var status = Assert.Single(service.GetStatuses("php").Where(item => item.Package.Version == "7.4.99"));
+
+            Assert.True(status.Installed);
+            Assert.True(status.Valid);
+            Assert.False(status.Active);
+            Assert.Equal(RuntimeSupportState.Unknown, status.SupportState);
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
     private static void WriteCatalog(string path, string url, char hashCharacter)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
