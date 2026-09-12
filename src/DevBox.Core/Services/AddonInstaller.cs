@@ -28,11 +28,18 @@ public sealed class AddonInstaller : IDisposable
         EnsureInstallPathIsSafe(addon);
         using var addonLock = await CrossProcessFileLock.AcquireAsync(AddonLockPath(addon), cancellationToken, TimeSpan.FromSeconds(30)).ConfigureAwait(false);
 
+        if (Directory.Exists(addon.InstallPath) &&
+            Directory.EnumerateFileSystemEntries(addon.InstallPath).Any() &&
+            !AddonOwnership.IsOwned(_rootPath, addon))
+        {
+            throw new InvalidOperationException(
+                $"Refusing to install {addon.DisplayName} over '{addon.InstallPath}' because that directory is not owned by DevBox.");
+        }
+
         var tempRoot = Path.Combine(_rootPath, "tmp", "addons", addon.Key, Guid.NewGuid().ToString("N"));
         var archivePath = Path.Combine(tempRoot, "package.zip");
         var extractPath = Path.Combine(tempRoot, "extract");
         var stagingPath = Path.Combine(tempRoot, "staging");
-
         Directory.CreateDirectory(tempRoot);
 
         try
@@ -43,29 +50,23 @@ public sealed class AddonInstaller : IDisposable
 
             var sourcePath = Path.Combine(extractPath, addon.ArchiveRootDirectory);
             if (!Directory.Exists(sourcePath))
-            {
                 throw new InvalidDataException($"Archive root '{addon.ArchiveRootDirectory}' was not found.");
-            }
 
             CopyDirectory(sourcePath, stagingPath);
-
             if (!File.Exists(Path.Combine(stagingPath, "index.php")))
-            {
                 throw new InvalidDataException("Downloaded addon does not contain index.php.");
-            }
 
             var backupPath = SwapInStagingDirectory(stagingPath, addon.InstallPath);
             try
             {
                 ConfigureAddon(addon);
+                AddonOwnership.WriteMarker(addon);
             }
             catch
             {
                 RollbackInstallation(addon.InstallPath, backupPath);
                 if (backupPath is null)
-                {
                     DeleteAddonNginxConfig(addon);
-                }
                 throw;
             }
 
@@ -86,11 +87,15 @@ public sealed class AddonInstaller : IDisposable
         using var addonLock = CrossProcessFileLock.Acquire(AddonLockPath(addon), TimeSpan.FromSeconds(30));
 
         if (!File.Exists(addon.EntryPointPath))
-        {
             throw new InvalidOperationException($"{addon.DisplayName} is not installed.");
+        if (!AddonOwnership.IsOwned(_rootPath, addon))
+        {
+            throw new InvalidOperationException(
+                $"{addon.InstallPath} exists but is not recognized as a DevBox-managed {addon.DisplayName} installation.");
         }
 
         ConfigureAddon(addon);
+        AddonOwnership.WriteMarker(addon);
         return Task.CompletedTask;
     }
 
@@ -102,9 +107,16 @@ public sealed class AddonInstaller : IDisposable
         EnsureInstallPathIsSafe(addon);
         using var addonLock = CrossProcessFileLock.Acquire(AddonLockPath(addon), TimeSpan.FromSeconds(30));
 
+        var owned = AddonOwnership.IsOwned(_rootPath, addon);
         string? trashPath = null;
         if (Directory.Exists(addon.InstallPath))
         {
+            if (!owned)
+            {
+                throw new InvalidOperationException(
+                    $"Refusing to remove '{addon.InstallPath}' because it is not recognized as a DevBox-managed addon directory.");
+            }
+
             var trashRoot = Path.Combine(_rootPath, "tmp", "addons", "trash");
             Directory.CreateDirectory(trashRoot);
             trashPath = Path.Combine(trashRoot, $"{addon.Key}-{Guid.NewGuid():N}");
@@ -113,7 +125,8 @@ public sealed class AddonInstaller : IDisposable
 
         try
         {
-            DeleteAddonNginxConfig(addon);
+            if (owned)
+                DeleteAddonNginxConfig(addon);
         }
         catch
         {
@@ -129,23 +142,16 @@ public sealed class AddonInstaller : IDisposable
     public void Dispose()
     {
         if (_disposed)
-        {
             return;
-        }
-
         _disposed = true;
         if (_ownsHttpClient)
-        {
             _httpClient.Dispose();
-        }
     }
 
     private async Task DownloadAsync(string url, string destination, CancellationToken cancellationToken)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
-        {
             throw new InvalidDataException("Addon download URL must use HTTPS.");
-        }
 
         await ArchiveSafety.DownloadToFileAsync(
             _httpClient,
@@ -160,9 +166,7 @@ public sealed class AddonInstaller : IDisposable
     {
         var normalizedExpectedSha256 = expectedSha256?.Trim();
         if (string.IsNullOrWhiteSpace(normalizedExpectedSha256) || normalizedExpectedSha256.Length != 64)
-        {
             throw new InvalidDataException("Invalid expected SHA-256 value.");
-        }
 
         byte[] expected;
         try
@@ -193,9 +197,7 @@ public sealed class AddonInstaller : IDisposable
     internal static bool IsPhpMyAdminConfigUsable(string content, int? expectedPort = null)
     {
         if (string.IsNullOrWhiteSpace(content) || !content.Contains("<?php", StringComparison.OrdinalIgnoreCase))
-        {
             return false;
-        }
 
         var requiredFragments = new[]
         {
@@ -217,9 +219,7 @@ public sealed class AddonInstaller : IDisposable
         WriteAddonNginxConfig(addon);
 
         if (!addon.Key.Equals("phpmyadmin", StringComparison.OrdinalIgnoreCase))
-        {
             return;
-        }
 
         var tempDirectory = Path.Combine(addon.InstallPath, "tmp");
         Directory.CreateDirectory(tempDirectory);
@@ -275,9 +275,7 @@ $cfg['TempDir'] = 'tmp';
 
         var relativeRoot = Path.GetRelativePath(_rootPath, addon.InstallPath).Replace('\\', '/');
         if (relativeRoot.StartsWith("../", StringComparison.Ordinal) || relativeRoot == "..")
-        {
             throw new InvalidOperationException("Addon install path escapes the DevBox root.");
-        }
 
         var configPath = GetAddonNginxConfigPath(addon);
         var config = $$"""
@@ -305,9 +303,7 @@ server {
     {
         var configPath = GetAddonNginxConfigPath(addon);
         if (File.Exists(configPath))
-        {
             File.Delete(configPath);
-        }
     }
 
     private string GetAddonNginxConfigPath(AddonDefinition addon)
@@ -331,20 +327,14 @@ server {
         {
             File.WriteAllText(tempPath, content);
             if (File.Exists(path))
-            {
                 File.Replace(tempPath, path, null);
-            }
             else
-            {
                 File.Move(tempPath, path);
-            }
         }
         finally
         {
             if (File.Exists(tempPath))
-            {
                 File.Delete(tempPath);
-            }
         }
     }
 
@@ -353,9 +343,7 @@ server {
         var wwwRoot = Path.GetFullPath(Path.Combine(_rootPath, "www")).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         var installPath = Path.GetFullPath(addon.InstallPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         if (!installPath.StartsWith(wwwRoot, StringComparison.OrdinalIgnoreCase) || installPath.Equals(wwwRoot, StringComparison.OrdinalIgnoreCase))
-        {
             throw new InvalidOperationException("Addon install path must be a child of the DevBox www directory.");
-        }
     }
 
     private static void CopyDirectory(string sourcePath, string destinationPath)
@@ -380,9 +368,7 @@ server {
     {
         var installParent = Path.GetDirectoryName(Path.GetFullPath(installPath));
         if (string.IsNullOrWhiteSpace(installParent))
-        {
             throw new InvalidOperationException("Addon install path has no parent directory.");
-        }
 
         Directory.CreateDirectory(installParent);
         string? backupPath = null;
@@ -400,9 +386,7 @@ server {
         catch
         {
             if (backupPath is not null && Directory.Exists(backupPath) && !Directory.Exists(installPath))
-            {
                 Directory.Move(backupPath, installPath);
-            }
             throw;
         }
     }
@@ -411,17 +395,13 @@ server {
     {
         DeleteDirectoryIfExists(installPath);
         if (backupPath is not null && Directory.Exists(backupPath))
-        {
             Directory.Move(backupPath, installPath);
-        }
     }
 
     private static void DeleteDirectoryIfExists(string? path)
     {
         if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
-        {
             return;
-        }
         Directory.Delete(path, recursive: true);
     }
 
@@ -431,11 +411,7 @@ server {
         {
             DeleteDirectoryIfExists(path);
         }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 }
