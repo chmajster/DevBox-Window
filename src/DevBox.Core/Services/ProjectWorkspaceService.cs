@@ -75,9 +75,7 @@ public sealed partial class ProjectWorkspaceService
         }
 
         if (requiredExtensions.Count > 0)
-        {
             evidence.Add($"Composer requires {requiredExtensions.Count} PHP extension(s).");
-        }
 
         return new ProjectDetectionResult(kind, root, evidence, requiredExtensions);
     }
@@ -221,17 +219,13 @@ public sealed partial class ProjectWorkspaceService
         var root = Path.GetFullPath(projectPath);
         var path = Path.Combine(root, ManifestFileName);
         if (!File.Exists(path))
-        {
             return null;
-        }
 
         try
         {
             var manifest = JsonSerializer.Deserialize<DevBoxProjectManifest>(File.ReadAllText(path), JsonOptions);
             if (manifest is null)
-            {
                 return null;
-            }
             ValidateManifest(manifest);
             return manifest;
         }
@@ -367,9 +361,7 @@ public sealed partial class ProjectWorkspaceService
         {
             var available = detection.RequiredPhpExtensions.Where(IsExtensionBinaryAvailable).ToArray();
             if (available.Length > 0 && _phpExtensionInspector.EnsureConfigured(available))
-            {
                 repaired.Add($"Enabled Composer-required PHP extensions available in the active runtime: {string.Join(", ", available)}.");
-            }
         }
 
         var report = await CheckHealthAsync(site, cancellationToken).ConfigureAwait(false);
@@ -431,9 +423,7 @@ public sealed partial class ProjectWorkspaceService
     private static string ResolveDocumentRoot(string projectRoot, ProjectKind kind)
     {
         if (!UsesPublicDocumentRoot(kind))
-        {
             return projectRoot;
-        }
 
         var publicRoot = Path.Combine(projectRoot, "public");
         return Directory.Exists(publicRoot) ? publicRoot : projectRoot;
@@ -445,26 +435,20 @@ public sealed partial class ProjectWorkspaceService
         {
             var marker = Path.Combine(projectRoot, ".devbox-scaffold-pending");
             if (!File.Exists(marker))
-            {
                 File.WriteAllText(marker, $"{kind} project registered by DevBox. Run the scaffold action to install framework files.{Environment.NewLine}");
-            }
             return;
         }
 
         var index = Path.Combine(documentRoot, "index.php");
         if (!File.Exists(index))
-        {
             File.WriteAllText(index, "<?php\nphpinfo();\n");
-        }
     }
 
     private static JsonDocument? TryReadComposer(string projectRoot)
     {
         var path = Path.Combine(projectRoot, "composer.json");
         if (!File.Exists(path))
-        {
             return null;
-        }
 
         try
         {
@@ -479,9 +463,7 @@ public sealed partial class ProjectWorkspaceService
     private static bool ComposerRequires(JsonDocument? composer, string package)
     {
         if (composer is null)
-        {
             return false;
-        }
 
         return HasProperty(composer.RootElement, "require", package) ||
                HasProperty(composer.RootElement, "require-dev", package);
@@ -490,37 +472,27 @@ public sealed partial class ProjectWorkspaceService
     private static bool HasProperty(JsonElement root, string section, string name)
     {
         if (!root.TryGetProperty(section, out var objectValue) || objectValue.ValueKind != JsonValueKind.Object)
-        {
             return false;
-        }
         return objectValue.EnumerateObject().Any(property => property.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
     }
 
     private static IReadOnlyList<string> ReadRequiredExtensions(JsonDocument? composer)
     {
         if (composer is null)
-        {
             return Array.Empty<string>();
-        }
 
         var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var section in new[] { "require", "require-dev" })
         {
             if (!composer.RootElement.TryGetProperty(section, out var requirements) || requirements.ValueKind != JsonValueKind.Object)
-            {
                 continue;
-            }
             foreach (var property in requirements.EnumerateObject())
             {
                 if (!property.Name.StartsWith("ext-", StringComparison.OrdinalIgnoreCase))
-                {
                     continue;
-                }
                 var extension = property.Name[4..].Trim();
                 if (SafeExtensionNameRegex().IsMatch(extension))
-                {
                     extensions.Add(extension);
-                }
             }
         }
         return extensions.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray();
@@ -532,9 +504,7 @@ public sealed partial class ProjectWorkspaceService
     private bool IsExtensionBinaryAvailable(string extension)
     {
         if (extension.Equals("json", StringComparison.OrdinalIgnoreCase))
-        {
             return true;
-        }
         return File.Exists(Path.Combine(_rootPath, "runtime", "php", "current", "ext", $"php_{extension}.dll"));
     }
 
@@ -551,9 +521,7 @@ public sealed partial class ProjectWorkspaceService
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var full = Path.GetFullPath(path);
         if (!Directory.Exists(full))
-        {
             throw new DirectoryNotFoundException($"Project directory was not found: {full}");
-        }
         return full;
     }
 
@@ -562,9 +530,7 @@ public sealed partial class ProjectWorkspaceService
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         var value = name.Trim().ToLowerInvariant();
         if (!SafeProjectNameRegex().IsMatch(value))
-        {
             throw new ArgumentException("Project name may contain only letters, digits, dots, hyphens and underscores.", nameof(name));
-        }
         return value;
     }
 
@@ -581,19 +547,19 @@ public sealed partial class ProjectWorkspaceService
     private static void ValidateManifest(DevBoxProjectManifest manifest)
     {
         if (manifest.SchemaVersion != DevBoxProjectManifest.CurrentSchemaVersion)
-        {
             throw new InvalidDataException($"Unsupported devbox.json schema version: {manifest.SchemaVersion}.");
-        }
         _ = NormalizeProjectDirectoryName(manifest.Name);
-        if (!manifest.Domain.EndsWith(".test", StringComparison.OrdinalIgnoreCase))
+        try
         {
-            throw new InvalidDataException("Manifest domain must end with .test.");
+            _ = LocalCertificateManager.NormalizeDomain(manifest.Domain);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new InvalidDataException("Manifest domain is not a valid .test domain.", ex);
         }
         _ = NormalizeDatabaseEngine(manifest.DatabaseEngine);
         if (manifest.Addons.Any(addon => string.IsNullOrWhiteSpace(addon) || !SafeAddonKeyRegex().IsMatch(addon)))
-        {
             throw new InvalidDataException("Manifest contains an invalid addon key.");
-        }
     }
 
     private static void CopyDirectorySafely(string source, string destination)
@@ -648,20 +614,14 @@ public sealed partial class ProjectWorkspaceService
         {
             File.WriteAllText(temp, content);
             if (File.Exists(path))
-            {
                 File.Replace(temp, path, null);
-            }
             else
-            {
                 File.Move(temp, path);
-            }
         }
         finally
         {
             if (File.Exists(temp))
-            {
                 File.Delete(temp);
-            }
         }
     }
 
