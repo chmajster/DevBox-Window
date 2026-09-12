@@ -249,13 +249,13 @@ public sealed class AddonMarketplaceService : IDisposable
             throw new InvalidDataException("Marketplace source requires an RSA public key in PEM format.");
     }
 
-    private static object ToManifestEntry(AddonDefinition addon) => new
+    private object ToManifestEntry(AddonDefinition addon) => new
     {
         key = addon.Key,
         displayName = addon.DisplayName,
         description = addon.Description,
-        installRelativePath = addon.InstallPath.Replace('\\', '/'),
-        entryPointRelativePath = addon.EntryPointPath.Replace('\\', '/'),
+        installRelativePath = Path.GetRelativePath(_rootPath, Path.GetFullPath(addon.InstallPath)).Replace('\\', '/'),
+        entryPointRelativePath = Path.GetRelativePath(_rootPath, Path.GetFullPath(addon.EntryPointPath)).Replace('\\', '/'),
         localUrl = addon.LocalUrl,
         requiredPhpExtensions = addon.RequiredPhpExtensions,
         version = addon.Version,

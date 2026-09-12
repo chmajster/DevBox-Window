@@ -144,9 +144,16 @@ public sealed class RuntimePlatformService : IDisposable
             if (Directory.Exists(installPath))
                 throw new InvalidOperationException($"Runtime {package.Key} {package.Version} is already installed.");
             Directory.Move(staging, installPath);
-
-            if (activate)
-                await _runtimeManager.ActivateUnderLockAsync(package.Key, package.Version, package.ExecutableRelativePath, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                if (activate)
+                    await _runtimeManager.ActivateUnderLockAsync(package.Key, package.Version, package.ExecutableRelativePath, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                TryDeleteDirectory(installPath);
+                throw;
+            }
         }
         finally
         {

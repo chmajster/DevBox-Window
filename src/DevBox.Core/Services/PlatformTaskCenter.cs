@@ -230,9 +230,23 @@ public sealed class PlatformTaskCenter : IDisposable
             return Array.Empty<PlatformTaskSnapshot>();
         try
         {
-            var items = JsonSerializer.Deserialize<List<PlatformTaskSnapshot>>(File.ReadAllText(_historyPath), JsonOptions)
-                ?? new List<PlatformTaskSnapshot>();
-            return items.Select(item => item.State is PlatformTaskState.Queued or PlatformTaskState.Running
+            var items = JsonSerializer.Deserialize<List<PlatformTaskSnapshot?>>(File.ReadAllText(_historyPath), JsonOptions)
+                ?? new List<PlatformTaskSnapshot?>();
+            if (items.Any(item => item is null))
+                throw new InvalidDataException("Task Center history contains a null entry.");
+
+            var materialized = items.Select(item => item!).ToArray();
+            foreach (var item in materialized)
+            {
+                if (item.Id == Guid.Empty || string.IsNullOrWhiteSpace(item.Name) || item.Name.Length > 160 ||
+                    !Enum.IsDefined(typeof(PlatformTaskState), item.State) || !double.IsFinite(item.Progress) ||
+                    item.Progress is < 0 or > 100)
+                {
+                    throw new InvalidDataException("Task Center history contains an invalid entry.");
+                }
+            }
+
+            return materialized.Select(item => item.State is PlatformTaskState.Queued or PlatformTaskState.Running
                     ? item with
                     {
                         State = PlatformTaskState.Failed,
@@ -245,9 +259,29 @@ public sealed class PlatformTaskCenter : IDisposable
                 .Take(500)
                 .ToArray();
         }
-        catch (JsonException ex)
+        catch (JsonException)
         {
-            throw new InvalidDataException("Task Center history contains invalid JSON.", ex);
+            QuarantineInvalidHistory();
+            return Array.Empty<PlatformTaskSnapshot>();
+        }
+        catch (InvalidDataException)
+        {
+            QuarantineInvalidHistory();
+            return Array.Empty<PlatformTaskSnapshot>();
+        }
+    }
+
+    private void QuarantineInvalidHistory()
+    {
+        if (!File.Exists(_historyPath))
+            return;
+        var quarantine = $"{_historyPath}.invalid-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{Guid.NewGuid():N}.bak";
+        try
+        {
+            File.Move(_historyPath, quarantine);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
         }
     }
 
