@@ -26,6 +26,8 @@ public sealed class AddonInstallerTests
 
             Assert.True(File.Exists(addon.EntryPointPath));
             Assert.Equal("<?php echo 'ok';", File.ReadAllText(addon.EntryPointPath));
+            Assert.True(File.Exists(AddonOwnership.MarkerPath(addon)));
+            Assert.True(AddonOwnership.IsOwned(root, addon, allowLegacyVhost: false));
             var config = Path.Combine(addon.InstallPath, "config.inc.php");
             Assert.True(File.Exists(config));
             var configContent = File.ReadAllText(config);
@@ -57,6 +59,53 @@ public sealed class AddonInstallerTests
 
             await Assert.ThrowsAsync<InvalidDataException>(() => installer.InstallAsync(addon));
             Assert.False(File.Exists(addon.EntryPointPath));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task InstallAsync_UnownedNonEmptyDirectory_IsRefusedAndPreserved()
+    {
+        var root = TempRoot();
+        try
+        {
+            var archive = CreateArchive(("package/index.php", "managed"));
+            var hash = Convert.ToHexString(SHA256.HashData(archive)).ToLowerInvariant();
+            var addon = Definition(root, hash);
+            Directory.CreateDirectory(addon.InstallPath);
+            File.WriteAllText(addon.EntryPointPath, "user-owned");
+            using var installer = new AddonInstaller(root, new HttpClient(new StaticResponseHandler(archive)));
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => installer.InstallAsync(addon));
+
+            Assert.Equal("user-owned", File.ReadAllText(addon.EntryPointPath));
+            Assert.False(File.Exists(AddonOwnership.MarkerPath(addon)));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task InstallAsync_EmptyPlaceholderDirectory_DoesNotBlockInstallation()
+    {
+        var root = TempRoot();
+        try
+        {
+            var archive = CreateArchive(("package/index.php", "managed"));
+            var hash = Convert.ToHexString(SHA256.HashData(archive)).ToLowerInvariant();
+            var addon = Definition(root, hash);
+            Directory.CreateDirectory(addon.InstallPath);
+            using var installer = new AddonInstaller(root, new HttpClient(new StaticResponseHandler(archive)));
+
+            await installer.InstallAsync(addon);
+
+            Assert.Equal("managed", File.ReadAllText(addon.EntryPointPath));
+            Assert.True(AddonOwnership.IsOwned(root, addon, allowLegacyVhost: false));
         }
         finally
         {
@@ -114,6 +163,7 @@ public sealed class AddonInstallerTests
             var addon = Definition(root, new string('0', 64));
             Directory.CreateDirectory(addon.InstallPath);
             File.WriteAllText(addon.EntryPointPath, "<?php echo 'ok';");
+            AddonOwnership.WriteMarker(addon);
             var configPath = Path.Combine(addon.InstallPath, "config.inc.php");
             File.WriteAllText(configPath, """
 <?php
@@ -148,6 +198,7 @@ $cfg['TempDir'] = 'tmp';
             var addon = Definition(root, new string('0', 64));
             Directory.CreateDirectory(addon.InstallPath);
             File.WriteAllText(addon.EntryPointPath, "ok");
+            AddonOwnership.WriteMarker(addon);
             var sibling = Path.Combine(root, "www", "keep.txt");
             File.WriteAllText(sibling, "keep");
             using var installer = new AddonInstaller(root, new HttpClient(new StaticResponseHandler(Array.Empty<byte>())));
@@ -178,6 +229,7 @@ $cfg['TempDir'] = 'tmp';
             var addon = Definition(root, new string('0', 64));
             Directory.CreateDirectory(addon.InstallPath);
             File.WriteAllText(addon.EntryPointPath, "keep");
+            AddonOwnership.WriteMarker(addon);
             using var installer = new AddonInstaller(root, new HttpClient(new StaticResponseHandler(Array.Empty<byte>())));
             await installer.RepairAsync(addon);
             vhost = Path.Combine(root, "config", "nginx", "sites-enabled", "phpmyadmin.test.conf");
@@ -193,6 +245,28 @@ $cfg['TempDir'] = 'tmp';
         {
             if (vhost is not null && File.Exists(vhost))
                 File.SetAttributes(vhost, FileAttributes.Normal);
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task UninstallAsync_UnownedDirectory_IsRefusedAndPreserved()
+    {
+        var root = TempRoot();
+        try
+        {
+            var addon = Definition(root, new string('0', 64));
+            Directory.CreateDirectory(addon.InstallPath);
+            File.WriteAllText(addon.EntryPointPath, "user-owned");
+            using var installer = new AddonInstaller(root, new HttpClient(new StaticResponseHandler(Array.Empty<byte>())));
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => installer.UninstallAsync(addon));
+
+            Assert.True(Directory.Exists(addon.InstallPath));
+            Assert.Equal("user-owned", File.ReadAllText(addon.EntryPointPath));
+        }
+        finally
+        {
             DeleteRoot(root);
         }
     }
@@ -244,7 +318,6 @@ $cfg['TempDir'] = 'tmp';
                 writer.Write(file.Content);
             }
         }
-
         return stream.ToArray();
     }
 
@@ -254,9 +327,7 @@ $cfg['TempDir'] = 'tmp';
     private static void DeleteRoot(string root)
     {
         if (Directory.Exists(root))
-        {
             Directory.Delete(root, recursive: true);
-        }
     }
 
     private sealed class StaticResponseHandler(byte[] payload) : HttpMessageHandler
