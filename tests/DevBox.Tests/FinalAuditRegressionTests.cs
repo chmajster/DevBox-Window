@@ -90,6 +90,36 @@ public sealed class FinalAuditRegressionTests
         }
     }
 
+    [Fact]
+    public void AddonCatalog_DoesNotReportOwnedAddonThroughReparsePoint()
+    {
+        var root = TemporaryRoot();
+        var outside = Path.Combine(Path.GetTempPath(), "devbox-addon-outside-tests", Guid.NewGuid().ToString("N"));
+        string? link = null;
+        try
+        {
+            RuntimeLayout.EnsureInitialized(root);
+            var catalog = new AddonCatalog(root);
+            var addon = Assert.Single(catalog.GetAddons());
+            link = addon.InstallPath;
+
+            Directory.CreateDirectory(outside);
+            File.WriteAllText(Path.Combine(outside, "index.php"), "<?php echo 'outside';");
+            File.WriteAllText(Path.Combine(outside, AddonOwnership.MarkerFileName), $"{addon.Key}{Environment.NewLine}{addon.Version}{Environment.NewLine}");
+
+            if (!TryCreateDirectoryLink(link, outside))
+                return;
+
+            Assert.False(catalog.IsInstalled(addon));
+        }
+        finally
+        {
+            TryDeleteLink(link);
+            Cleanup(root);
+            Cleanup(outside);
+        }
+    }
+
     private static EnvironmentProfile BaseProfile() => new()
     {
         Key = "final-audit",
@@ -103,6 +133,33 @@ public sealed class FinalAuditRegressionTests
         var root = Path.Combine(Path.GetTempPath(), "devbox-final-audit-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         return root;
+    }
+
+    private static bool TryCreateDirectoryLink(string linkPath, string targetPath)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(linkPath)!);
+            Directory.CreateSymbolicLink(linkPath, targetPath);
+            return true;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or PlatformNotSupportedException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static void TryDeleteLink(string? path)
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(path) && Directory.Exists(path) &&
+                (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                Directory.Delete(path);
+        }
+        catch
+        {
+        }
     }
 
     private static void Cleanup(string root)
