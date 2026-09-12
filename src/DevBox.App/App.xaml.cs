@@ -144,10 +144,14 @@ public partial class App : System.Windows.Application
 
         var readinessService = _serviceProvider.GetRequiredService<EnvironmentReadinessService>();
         var readiness = readinessService.Check();
-        if (readiness.Items.Any(item => !item.Ready))
-            _serviceProvider.GetRequiredService<FirstRunWindow>().ShowDialog();
+        var environmentIncomplete = readiness.Items.Any(item => !item.Ready);
+        var environmentReady = !environmentIncomplete;
+        if (environmentIncomplete)
+        {
+            TryWriteStartupLog("Environment is incomplete. DevBox will open the Modules tab so missing components can be installed without blocking startup.");
+            _serviceProvider.GetRequiredService<MainWindowViewModel>().NavigateCommand.Execute("Runtimes");
+        }
 
-        var environmentReady = readinessService.Check().Items.All(item => item.Ready);
         var window = _serviceProvider.GetRequiredService<MainWindow>();
         MainWindow = window;
         window.Show();
