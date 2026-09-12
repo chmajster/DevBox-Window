@@ -168,12 +168,10 @@ public sealed class ProjectCommandService
             throw new DirectoryNotFoundException($"Project directory was not found: {root}");
         }
 
-        var www = _wwwRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!root.StartsWith(www, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("Project commands are restricted to projects inside the DevBox www directory.");
-        }
-        return root;
+        return PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _wwwRoot,
+            root,
+            "Project commands are restricted to projects inside the DevBox www directory and cannot traverse a reparse point.");
     }
 
     private static string RequireFile(string path, string message) =>
