@@ -159,8 +159,11 @@ public sealed class ProjectActionService
             throw new InvalidDataException($"Project action '{action.Key}' contains invalid arguments.");
         if (action.TimeoutSeconds is < 1 or > 3600)
             throw new InvalidDataException($"Project action '{action.Key}' timeout must be between 1 and 3600 seconds.");
-        if (!string.IsNullOrWhiteSpace(action.WorkingDirectory) && Path.IsPathRooted(action.WorkingDirectory))
-            throw new InvalidDataException($"Project action '{action.Key}' working directory must be relative to the project root.");
+        if (!string.IsNullOrWhiteSpace(action.WorkingDirectory) &&
+            (Path.IsPathRooted(action.WorkingDirectory) || ContainsParentTraversal(action.WorkingDirectory)))
+        {
+            throw new InvalidDataException($"Project action '{action.Key}' working directory must stay relative to the project root without parent traversal.");
+        }
     }
 
     private string EnsureProjectRoot(string projectPath)
@@ -190,6 +193,10 @@ public sealed class ProjectActionService
             path,
             "Project action working directory escapes the project root or traverses a reparse point.");
     }
+
+    private static bool ContainsParentTraversal(string value) =>
+        value.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries)
+            .Any(segment => segment == "..");
 
     private static JsonNode? FindProperty(JsonObject value, string name)
     {
