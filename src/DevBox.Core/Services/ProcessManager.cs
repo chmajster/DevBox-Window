@@ -130,28 +130,28 @@ public sealed class ProcessManager : IProcessManager
                 return Stopped(definition);
 
             var timeout = definition.ShutdownTimeout ?? TimeSpan.FromSeconds(5);
-                var gracefulRequested = false;
-                if (!string.IsNullOrWhiteSpace(definition.StopExecutablePath) && File.Exists(definition.StopExecutablePath))
-                {
-                    gracefulRequested = await ExecuteStopCommandAsync(definition, timeout, cancellationToken).ConfigureAwait(false);
-                    if (!gracefulRequested)
-                        AppendLog(managed, "APP", "Graceful stop command failed; falling back to managed process termination.");
-                }
-                else
-                {
-                    gracefulRequested = managed.Process.CloseMainWindow();
-                }
+            var gracefulRequested = false;
+            if (!string.IsNullOrWhiteSpace(definition.StopExecutablePath) && File.Exists(definition.StopExecutablePath))
+            {
+                gracefulRequested = await ExecuteStopCommandAsync(definition, timeout, cancellationToken).ConfigureAwait(false);
+                if (!gracefulRequested)
+                    AppendLog(managed, "APP", "Graceful stop command failed; falling back to managed process termination.");
+            }
+            else
+            {
+                gracefulRequested = managed.Process.CloseMainWindow();
+            }
 
-                if (gracefulRequested && !managed.Process.HasExited)
-                    await WaitForExitAsync(managed.Process, timeout, cancellationToken).ConfigureAwait(false);
+            if (gracefulRequested && !managed.Process.HasExited)
+                await WaitForExitAsync(managed.Process, timeout, cancellationToken).ConfigureAwait(false);
 
-                if (!managed.Process.HasExited)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    AppendLog(managed, "APP", "Graceful shutdown was unavailable or timed out; killing managed process tree.");
-                    managed.Process.Kill(entireProcessTree: true);
-                    await managed.Process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-                }
+            if (!managed.Process.HasExited)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                AppendLog(managed, "APP", "Graceful shutdown was unavailable or timed out; killing managed process tree.");
+                managed.Process.Kill(entireProcessTree: true);
+                await managed.Process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+            }
             AppendLog(managed, "APP", "Stopped.");
             CleanupStoppedProcess(definition, managed);
             return Stopped(definition);
@@ -602,8 +602,8 @@ public sealed class ProcessManager : IProcessManager
             throw new InvalidOperationException($"Unable to start MySQL initialization: {ex.Message}", ex);
         }
 
-        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        var outputTask = ProcessOutputCapture.ReadBoundedAsync(process.StandardOutput, cancellationToken: cancellationToken);
+        var errorTask = ProcessOutputCapture.ReadBoundedAsync(process.StandardError, cancellationToken: cancellationToken);
         try
         {
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
