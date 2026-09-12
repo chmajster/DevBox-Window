@@ -143,6 +143,9 @@ public sealed partial class EnvironmentProfileService
             if (!SafeKeyRegex().IsMatch(pair.Key ?? string.Empty) || !SafeVersionRegex().IsMatch(pair.Value ?? string.Empty))
                 throw new InvalidDataException($"Environment profile contains an invalid runtime pin: {pair.Key}={pair.Value}.");
         }
+        var duplicateRuntime = profile.Runtimes.Keys.GroupBy(key => key, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);
+        if (duplicateRuntime is not null)
+            throw new InvalidDataException($"Environment profile contains duplicate runtime key '{duplicateRuntime.Key}'.");
 
         var engine = profile.Database.Engine?.Trim().ToLowerInvariant();
         if (engine is not ("mysql" or "mariadb" or "postgresql" or "none"))

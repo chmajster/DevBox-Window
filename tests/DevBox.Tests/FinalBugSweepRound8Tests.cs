@@ -66,6 +66,20 @@ public sealed class FinalBugSweepRound8Tests
     }
 
     [Fact]
+    public void EnvironmentProfile_RejectsCaseInsensitiveDuplicateRuntimePins()
+    {
+        var root = NewRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "config", "environment-profiles.json"), """
+            [{"Key":"fixture","DisplayName":"Fixture","Kind":"EmptyPhp","Runtimes":{"php":"8.5.10","PHP":"8.4.0"},"Database":{"Engine":"none","Port":3306},"Https":false,"Addons":[],"Services":[],"Actions":[]}]
+            """);
+            Assert.Throws<InvalidDataException>(() => new EnvironmentProfileService(root).GetProfiles());
+        }
+        finally { TryDelete(root); }
+    }
+
+    [Fact]
     public void EnvironmentProfile_RejectsDuplicateActionKeys()
     {
         var root = NewRoot();
@@ -127,6 +141,21 @@ public sealed class FinalBugSweepRound8Tests
             Assert.Empty(center.GetTasks());
             Assert.False(File.Exists(path));
             Assert.NotEmpty(Directory.GetFiles(Path.GetDirectoryName(path)!, "task-center-history.json.invalid-*.bak"));
+        }
+        finally { TryDelete(root); }
+    }
+
+    [Fact]
+    public void SecureSecretStore_RejectsCaseInsensitiveDuplicateKeys()
+    {
+        var root = NewRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "config", "secrets.dpapi.json"), "{\"Token\":\"AA==\",\"token\":\"AA==\"}");
+            var store = new SecureSecretStore(root);
+            var method = typeof(SecureSecretStore).GetMethod("Load", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var error = Assert.Throws<TargetInvocationException>(() => method.Invoke(store, null));
+            Assert.IsType<InvalidDataException>(error.InnerException);
         }
         finally { TryDelete(root); }
     }
