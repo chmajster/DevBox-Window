@@ -76,8 +76,11 @@ internal static class AddonOwnership
             if (commentIndex >= 0)
                 line = line[..commentIndex].TrimEnd();
 
-            if (string.Equals(line, directive, StringComparison.OrdinalIgnoreCase))
-                return true;
+            foreach (var segment in line.Split(['{', '}', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (string.Equals(segment + ";", directive, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
         }
 
         return false;
