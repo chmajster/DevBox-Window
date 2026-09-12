@@ -72,17 +72,15 @@ public sealed class ProjectCommandService
         try
         {
             if (!process.Start())
-            {
                 throw new InvalidOperationException($"Unable to start {Path.GetFileName(executable)}.");
-            }
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
         {
             throw new InvalidOperationException($"Unable to start project command '{preset.DisplayName}': {ex.Message}", ex);
         }
 
-        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        var outputTask = ReadBoundedAsync(process.StandardOutput, 1_048_576, cancellationToken);
+        var errorTask = ReadBoundedAsync(process.StandardError, 1_048_576, cancellationToken);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(15));
 
@@ -154,9 +152,7 @@ public sealed class ProjectCommandService
     private static void ValidateRuntimeVersion(string version)
     {
         if (version.Length > 64 || version is "." or ".." || version.Any(character => !char.IsLetterOrDigit(character) && character is not '.' and not '-' and not '_'))
-        {
             throw new InvalidDataException("Project runtime version contains unsupported path characters.");
-        }
     }
 
     private string EnsureProjectRoot(string projectPath)
@@ -164,14 +160,33 @@ public sealed class ProjectCommandService
         ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
         var root = Path.GetFullPath(projectPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         if (!Directory.Exists(root))
-        {
             throw new DirectoryNotFoundException($"Project directory was not found: {root}");
-        }
 
         return PathSafety.EnsureUnderRootWithoutReparsePoints(
             _wwwRoot,
             root,
             "Project commands are restricted to projects inside the DevBox www directory and cannot traverse a reparse point.");
+    }
+
+    private static async Task<string> ReadBoundedAsync(StreamReader reader, int maximumCharacters, CancellationToken cancellationToken)
+    {
+        var buffer = new char[8192];
+        var builder = new System.Text.StringBuilder(Math.Min(maximumCharacters, 64 * 1024));
+        var truncated = false;
+        while (true)
+        {
+            var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+                break;
+            var remaining = maximumCharacters - builder.Length;
+            if (remaining > 0)
+                builder.Append(buffer, 0, Math.Min(remaining, read));
+            if (read > remaining)
+                truncated = true;
+        }
+        if (truncated)
+            builder.Append(Environment.NewLine).Append("[output truncated by DevBox]");
+        return builder.ToString();
     }
 
     private static string RequireFile(string path, string message) =>
@@ -182,15 +197,9 @@ public sealed class ProjectCommandService
         try
         {
             if (!process.HasExited)
-            {
                 process.Kill(entireProcessTree: true);
-            }
         }
-        catch (InvalidOperationException)
-        {
-        }
-        catch (Win32Exception)
-        {
-        }
+        catch (InvalidOperationException) { }
+        catch (Win32Exception) { }
     }
 }
