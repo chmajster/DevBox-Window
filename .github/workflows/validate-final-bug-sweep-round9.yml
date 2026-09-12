@@ -1,0 +1,23 @@
+name: Validate final bug sweep round 9
+
+on:
+  push:
+    branches:
+      - fix/final-bug-sweep-round9-changelog
+    paths:
+      - .github/final-bug-sweep-round9-validate
+
+jobs:
+  validate:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/final-bug-sweep-round9-changelog
+      - name: Validate
+        shell: pwsh
+        run: |
+          git diff --check
+          dotnet build DevBox.sln --configuration Release
+          dotnet test DevBox.sln --configuration Release --no-build
