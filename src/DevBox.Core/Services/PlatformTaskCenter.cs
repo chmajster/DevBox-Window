@@ -18,7 +18,11 @@ public sealed class PlatformTaskCenter : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         if (maxParallelism is < 1 or > 8)
             throw new ArgumentOutOfRangeException(nameof(maxParallelism), "Task Center parallelism must be between 1 and 8.");
-        _historyPath = Path.Combine(Path.GetFullPath(rootPath), "logs", "task-center-history.json");
+        var root = Path.GetFullPath(rootPath);
+        _historyPath = PathSafety.EnsureUnderRootWithoutReparsePoints(
+            root,
+            Path.Combine(root, "logs", "task-center-history.json"),
+            "Task Center history path cannot escape the DevBox root or traverse a reparse point.");
         _parallelism = new SemaphoreSlim(maxParallelism, maxParallelism);
         foreach (var snapshot in LoadHistory())
             _entries[snapshot.Id] = new TaskEntry(snapshot, null);
