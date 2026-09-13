@@ -36,10 +36,18 @@ public sealed class AddonInstaller : IDisposable
                 $"Refusing to install {addon.DisplayName} over '{addon.InstallPath}' because that directory is not owned by DevBox.");
         }
 
-        var tempRoot = Path.Combine(_rootPath, "tmp", "addons", addon.Key, Guid.NewGuid().ToString("N"));
-        var archivePath = Path.Combine(tempRoot, "package.zip");
-        var extractPath = Path.Combine(tempRoot, "extract");
-        var stagingPath = Path.Combine(tempRoot, "staging");
+        var tempRoot = SafeManagedPath(
+            Path.Combine(_rootPath, "tmp", "addons", addon.Key, Guid.NewGuid().ToString("N")),
+            "Addon temporary directory cannot escape the DevBox root or traverse a reparse point.");
+        var archivePath = SafeManagedPath(
+            Path.Combine(tempRoot, "package.zip"),
+            "Addon download path cannot escape the DevBox root or traverse a reparse point.");
+        var extractPath = SafeManagedPath(
+            Path.Combine(tempRoot, "extract"),
+            "Addon extraction path cannot escape the DevBox root or traverse a reparse point.");
+        var stagingPath = SafeManagedPath(
+            Path.Combine(tempRoot, "staging"),
+            "Addon staging path cannot escape the DevBox root or traverse a reparse point.");
         Directory.CreateDirectory(tempRoot);
 
         try
@@ -48,7 +56,10 @@ public sealed class AddonInstaller : IDisposable
             VerifySha256(archivePath, addon.Sha256);
             ExtractZipSafely(archivePath, extractPath);
 
-            var sourcePath = Path.Combine(extractPath, addon.ArchiveRootDirectory);
+            var sourcePath = PathSafety.EnsureUnderRootWithoutReparsePoints(
+                extractPath,
+                Path.Combine(extractPath, addon.ArchiveRootDirectory),
+                "Addon archive root cannot escape the extraction directory or traverse a reparse point.");
             if (!Directory.Exists(sourcePath))
                 throw new InvalidDataException($"Archive root '{addon.ArchiveRootDirectory}' was not found.");
 
@@ -123,9 +134,13 @@ public sealed class AddonInstaller : IDisposable
                     $"Refusing to remove '{addon.InstallPath}' because it is not recognized as a DevBox-managed addon directory.");
             }
 
-            var trashRoot = Path.Combine(_rootPath, "tmp", "addons", "trash");
+            var trashRoot = SafeManagedPath(
+                Path.Combine(_rootPath, "tmp", "addons", "trash"),
+                "Addon trash directory cannot escape the DevBox root or traverse a reparse point.");
             Directory.CreateDirectory(trashRoot);
-            trashPath = Path.Combine(trashRoot, $"{addon.Key}-{Guid.NewGuid():N}");
+            trashPath = SafeManagedPath(
+                Path.Combine(trashRoot, $"{addon.Key}-{Guid.NewGuid():N}"),
+                "Addon trash path cannot escape the DevBox root or traverse a reparse point.");
             Directory.Move(addon.InstallPath, trashPath);
         }
 
@@ -227,9 +242,15 @@ public sealed class AddonInstaller : IDisposable
         if (!addon.Key.Equals("phpmyadmin", StringComparison.OrdinalIgnoreCase))
             return;
 
-        var tempDirectory = Path.Combine(addon.InstallPath, "tmp");
+        var tempDirectory = PathSafety.EnsureUnderRootWithoutReparsePoints(
+            addon.InstallPath,
+            Path.Combine(addon.InstallPath, "tmp"),
+            "Addon temporary application directory cannot traverse a reparse point.");
         Directory.CreateDirectory(tempDirectory);
-        var configPath = Path.Combine(addon.InstallPath, "config.inc.php");
+        var configPath = PathSafety.EnsureUnderRootWithoutReparsePoints(
+            addon.InstallPath,
+            Path.Combine(addon.InstallPath, "config.inc.php"),
+            "Addon configuration path cannot traverse a reparse point.");
         var databasePort = ResolvePhpMyAdminPort();
         if (File.Exists(configPath))
         {
@@ -273,13 +294,7 @@ $cfg['TempDir'] = 'tmp';
 
     private void WriteAddonNginxConfig(AddonDefinition addon)
     {
-        if (!Uri.TryCreate(addon.LocalUrl, UriKind.Absolute, out var uri) ||
-            uri.Scheme != Uri.UriSchemeHttp ||
-            !uri.Host.EndsWith(".test", StringComparison.OrdinalIgnoreCase) ||
-            !uri.IsDefaultPort)
-        {
-            throw new InvalidDataException("Addon local URL must use http:// on a valid .test host and the default HTTP port.");
-        }
+        var uri = AddonCatalog.ValidateLocalUrl(addon.LocalUrl, addon.Key);
 
         var relativeRoot = Path.GetRelativePath(_rootPath, addon.InstallPath).Replace('\\', '/');
         if (relativeRoot.StartsWith("../", StringComparison.Ordinal) || relativeRoot == "..")
@@ -316,14 +331,18 @@ server {
 
     private string GetAddonNginxConfigPath(AddonDefinition addon)
     {
-        var host = new Uri(addon.LocalUrl).Host;
-        return Path.Combine(_rootPath, "config", "nginx", "sites-enabled", $"{host}.conf");
+        var host = AddonCatalog.ValidateLocalUrl(addon.LocalUrl, addon.Key).Host;
+        return SafeManagedPath(
+            Path.Combine(_rootPath, "config", "nginx", "sites-enabled", $"{host}.conf"),
+            "Addon Nginx configuration cannot escape the DevBox root or traverse a reparse point.");
     }
 
     private string AddonLockPath(AddonDefinition addon)
     {
         var safeKey = new string(addon.Key.Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '-').ToArray());
-        return Path.Combine(_rootPath, "tmp", "locks", $"addon-{safeKey}.lock");
+        return SafeManagedPath(
+            Path.Combine(_rootPath, "tmp", "locks", $"addon-{safeKey}.lock"),
+            "Addon lock path cannot escape the DevBox root or traverse a reparse point.");
     }
 
     private static void AtomicWrite(string path, string content)
@@ -361,14 +380,11 @@ server {
             addon.EntryPointPath,
             "Addon entry point must remain inside the addon install directory and cannot traverse a reparse point.");
 
-        if (!Uri.TryCreate(addon.LocalUrl, UriKind.Absolute, out var uri) ||
-            uri.Scheme != Uri.UriSchemeHttp ||
-            !uri.Host.EndsWith(".test", StringComparison.OrdinalIgnoreCase) ||
-            !uri.IsDefaultPort)
-        {
-            throw new InvalidDataException("Addon local URL must use http:// on a valid .test host and the default HTTP port.");
-        }
+        _ = AddonCatalog.ValidateLocalUrl(addon.LocalUrl, addon.Key);
     }
+
+    private string SafeManagedPath(string path, string message) =>
+        PathSafety.EnsureUnderRootWithoutReparsePoints(_rootPath, path, message);
 
     private static void CopyDirectory(string sourcePath, string destinationPath, CancellationToken cancellationToken)
     {
