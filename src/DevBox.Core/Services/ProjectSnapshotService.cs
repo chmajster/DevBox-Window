@@ -249,12 +249,14 @@ public sealed class ProjectSnapshotService
         {
             var lockFile = JsonSerializer.Deserialize<EnvironmentLockFile>(ReadMetadataText(lockPath, EnvironmentLockService.LockFileName), JsonOptions)
                 ?? throw new InvalidDataException("Snapshot devbox.lock.json is empty.");
-            AtomicWrite(lockPath, JsonSerializer.Serialize(lockFile with
+            var rewrittenLock = lockFile with
             {
                 ProjectName = projectName,
                 Domain = domain,
                 GeneratedAtUtc = DateTimeOffset.UtcNow
-            }, JsonOptions));
+            };
+            EnvironmentLockService.ValidateLockData(rewrittenLock);
+            AtomicWrite(lockPath, JsonSerializer.Serialize(rewrittenLock, JsonOptions));
         }
         catch (JsonException ex)
         {
