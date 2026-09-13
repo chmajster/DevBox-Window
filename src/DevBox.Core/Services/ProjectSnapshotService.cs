@@ -249,12 +249,14 @@ public sealed class ProjectSnapshotService
         {
             var lockFile = JsonSerializer.Deserialize<EnvironmentLockFile>(ReadMetadataText(lockPath, EnvironmentLockService.LockFileName), JsonOptions)
                 ?? throw new InvalidDataException("Snapshot devbox.lock.json is empty.");
-            AtomicWrite(lockPath, JsonSerializer.Serialize(lockFile with
+            var rewrittenLock = lockFile with
             {
                 ProjectName = projectName,
                 Domain = domain,
                 GeneratedAtUtc = DateTimeOffset.UtcNow
-            }, JsonOptions));
+            };
+            EnvironmentLockService.ValidateLockData(rewrittenLock);
+            AtomicWrite(lockPath, JsonSerializer.Serialize(rewrittenLock, JsonOptions));
         }
         catch (JsonException ex)
         {
@@ -495,9 +497,7 @@ public sealed class ProjectSnapshotService
         if (!Directory.Exists(root))
             throw new DirectoryNotFoundException($"Project directory was not found: {root}");
         return PathSafety.EnsureUnderRootWithoutReparsePoints(
-            _wwwRoot,
-            root,
-            "Project snapshots are restricted to the DevBox www directory and cannot traverse a reparse point.");
+            _wwwRoot, root, "Project snapshots are restricted to the DevBox www directory and cannot traverse a reparse point.");
     }
 
     private static string? GetString(JsonObject value, string name)
