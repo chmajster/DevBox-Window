@@ -8,6 +8,8 @@ namespace DevBox.Core.Services;
 public sealed partial class ProjectWorkspaceService
 {
     public const string ManifestFileName = "devbox.json";
+    private const long MaximumManifestBytes = 2L * 1024 * 1024;
+    private const long MaximumComposerBytes = 2L * 1024 * 1024;
 
     private readonly string _rootPath;
     private readonly string _wwwRoot;
@@ -160,8 +162,10 @@ public sealed partial class ProjectWorkspaceService
         if (request.CopyIntoDevBox && projectRootExisted && Directory.EnumerateFileSystemEntries(projectRoot).Any())
             throw new InvalidOperationException($"Import destination is not empty: {projectRoot}");
 
-        var manifestPath = Path.Combine(projectRoot, ManifestFileName);
-        var previousManifest = !request.CopyIntoDevBox && File.Exists(manifestPath) ? File.ReadAllBytes(manifestPath) : null;
+        var manifestPath = ManagedProjectFile(projectRoot, ManifestFileName);
+        var previousManifest = !request.CopyIntoDevBox && File.Exists(manifestPath)
+            ? ReadAllBytesWithLimit(manifestPath, MaximumManifestBytes, "Existing devbox.json")
+            : null;
         var rollbackDomain = request.Domain ?? LocalDomainName.FromName(NormalizeProjectDirectoryName(request.Name));
         var tlsRollback = new TlsRollbackStateService(_rootPath);
         var tlsState = tlsRollback.Capture(rollbackDomain);
@@ -216,14 +220,15 @@ public sealed partial class ProjectWorkspaceService
 
     public DevBoxProjectManifest? LoadManifest(string projectPath)
     {
-        var root = Path.GetFullPath(projectPath);
-        var path = Path.Combine(root, ManifestFileName);
+        var root = EnsureManagedProjectRoot(projectPath);
+        var path = ManagedProjectFile(root, ManifestFileName);
         if (!File.Exists(path))
             return null;
 
         try
         {
-            var manifest = JsonSerializer.Deserialize<DevBoxProjectManifest>(File.ReadAllText(path), JsonOptions);
+            var manifest = JsonSerializer.Deserialize<DevBoxProjectManifest>(
+                ReadTextWithLimit(path, MaximumManifestBytes, "devbox.json"), JsonOptions);
             if (manifest is null)
                 return null;
             ValidateManifest(manifest);
@@ -239,8 +244,8 @@ public sealed partial class ProjectWorkspaceService
     {
         ArgumentNullException.ThrowIfNull(manifest);
         ValidateManifest(manifest);
-        var root = RequireExistingDirectory(projectPath);
-        var path = Path.Combine(root, ManifestFileName);
+        var root = EnsureManagedProjectRoot(RequireExistingDirectory(projectPath));
+        var path = ManagedProjectFile(root, ManifestFileName);
         AtomicWrite(path, JsonSerializer.Serialize(manifest, JsonOptions));
     }
 
@@ -393,6 +398,8 @@ public sealed partial class ProjectWorkspaceService
     {
         if (!Directory.Exists(projectRoot))
             return;
+        if ((File.GetAttributes(projectRoot) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidOperationException("Project rollback refuses a reparse-point project root.");
         if (!existedBefore)
         {
             Directory.Delete(projectRoot, recursive: true);
@@ -400,9 +407,17 @@ public sealed partial class ProjectWorkspaceService
         }
 
         foreach (var file in Directory.EnumerateFiles(projectRoot))
+        {
+            if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException("Project rollback refuses reparse-point content.");
             File.Delete(file);
+        }
         foreach (var directory in Directory.EnumerateDirectories(projectRoot))
+        {
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException("Project rollback refuses reparse-point content.");
             Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static void RestoreManifest(string path, byte[]? previous)
@@ -449,10 +464,12 @@ public sealed partial class ProjectWorkspaceService
         var path = Path.Combine(projectRoot, "composer.json");
         if (!File.Exists(path))
             return null;
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("composer.json cannot be a reparse point.");
 
         try
         {
-            return JsonDocument.Parse(File.ReadAllText(path));
+            return JsonDocument.Parse(ReadTextWithLimit(path, MaximumComposerBytes, "composer.json"));
         }
         catch (JsonException)
         {
@@ -514,6 +531,24 @@ public sealed partial class ProjectWorkspaceService
             _wwwRoot,
             path,
             "Existing projects can only be registered in-place when they are already inside DevBox www and the path does not traverse a reparse point. Enable CopyIntoDevBox for external projects.");
+    }
+
+    private string EnsureManagedProjectRoot(string path)
+    {
+        var full = Path.GetFullPath(path);
+        return PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _wwwRoot,
+            full,
+            "Project metadata can only be read or written for projects inside DevBox www and cannot traverse a reparse point.");
+    }
+
+    private string ManagedProjectFile(string projectRoot, string fileName)
+    {
+        var root = EnsureManagedProjectRoot(projectRoot);
+        return PathSafety.EnsureUnderRootWithoutReparsePoints(
+            root,
+            Path.Combine(root, fileName),
+            "Project metadata file cannot escape its project directory or traverse a reparse point.");
     }
 
     private static string RequireExistingDirectory(string path)
@@ -598,6 +633,22 @@ public sealed partial class ProjectWorkspaceService
                 pending.Push(directory);
             }
         }
+    }
+
+    private static byte[] ReadAllBytesWithLimit(string path, long maximumBytes, string label)
+    {
+        var info = new FileInfo(path);
+        if (info.Length > maximumBytes)
+            throw new InvalidDataException($"{label} exceeds the 2 MiB safety limit.");
+        return File.ReadAllBytes(path);
+    }
+
+    private static string ReadTextWithLimit(string path, long maximumBytes, string label)
+    {
+        var info = new FileInfo(path);
+        if (info.Length > maximumBytes)
+            throw new InvalidDataException($"{label} exceeds the 2 MiB safety limit.");
+        return File.ReadAllText(path);
     }
 
     private static ProjectHealthCheck Healthy(string key, string name, string details) =>
