@@ -205,6 +205,28 @@ public sealed class FinalBugSweepRound13Tests
         }
     }
 
+    [Fact]
+    public async Task DatabaseManager_PreCanceledCommand_DoesNotStartNativeClient()
+    {
+        var root = NewRoot();
+        try
+        {
+            var bin = Path.Combine(root, "runtime", "mysql", "current", "bin");
+            Directory.CreateDirectory(bin);
+            File.WriteAllBytes(Path.Combine(bin, "mysql.exe"), []);
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+
+            var manager = new DatabaseManager(root);
+            await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                manager.ListDatabasesAsync(new DatabaseConnectionOptions(), cancellation.Token));
+        }
+        finally
+        {
+            Delete(root);
+        }
+    }
+
     private static string NewRoot()
     {
         var root = Path.Combine(Path.GetTempPath(), "devbox-round13-" + Guid.NewGuid().ToString("N"));
