@@ -31,6 +31,7 @@ public sealed class ProjectProvisioningService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
         var actions = new List<string>();
         var warnings = new List<string>();
         var databaseCreated = false;
@@ -48,6 +49,7 @@ public sealed class ProjectProvisioningService
         var projectRoot = _workspace.ResolveProjectRoot(site.DocumentRoot);
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var manifest = _workspace.LoadManifest(projectRoot)
                 ?? throw new InvalidDataException("Project manifest was not created.");
             manifest = manifest with
@@ -55,6 +57,7 @@ public sealed class ProjectProvisioningService
                 Addons = NormalizeKeys(request.Addons),
                 Services = NormalizeKeys(request.Services)
             };
+            cancellationToken.ThrowIfCancellationRequested();
             _workspace.SaveManifest(projectRoot, manifest);
             actions.Add("Saved devbox.json project manifest.");
 
@@ -71,6 +74,7 @@ public sealed class ProjectProvisioningService
             if (!manifest.DatabaseEngine.Equals("none", StringComparison.OrdinalIgnoreCase) &&
                 !string.IsNullOrWhiteSpace(manifest.DatabaseName))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (_projectDatabases.IsAvailable(manifest.DatabaseEngine))
                 {
                     var existedBefore = await _projectDatabases.DatabaseExistsAsync(
@@ -99,6 +103,7 @@ public sealed class ProjectProvisioningService
 
             foreach (var serviceKey in manifest.Services)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var template = ResolveManagedServiceTemplate(serviceKey);
                 if (template is null)
                 {
@@ -115,6 +120,7 @@ public sealed class ProjectProvisioningService
                     warnings.Add($"{template.DisplayName} is required by the profile but its runtime is not installed. The service definition was registered disabled.");
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             return new ProjectProvisioningResult(site, manifest, actions, warnings, databaseCreated);
         }
         catch (Exception original)
@@ -144,17 +150,9 @@ public sealed class ProjectProvisioningService
 
     private static void RollbackProjectDirectory(string projectRoot, bool existedBefore)
     {
-        if (!Directory.Exists(projectRoot))
+        if (!Directory.Exists(projectRoot) || existedBefore)
             return;
-        if (!existedBefore)
-        {
-            Directory.Delete(projectRoot, recursive: true);
-            return;
-        }
-        foreach (var file in Directory.EnumerateFiles(projectRoot))
-            File.Delete(file);
-        foreach (var directory in Directory.EnumerateDirectories(projectRoot))
-            Directory.Delete(directory, recursive: true);
+        Directory.Delete(projectRoot, recursive: true);
     }
 
     private static string DisplayEngine(string engine) => engine.ToLowerInvariant() switch
