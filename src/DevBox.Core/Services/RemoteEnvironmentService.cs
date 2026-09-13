@@ -116,7 +116,10 @@ public sealed class RemoteEnvironmentService
             throw new InvalidDataException($"Unsupported environment share schema version: {bundle.SchemaVersion}.");
         if (string.IsNullOrWhiteSpace(bundle.Name) || bundle.Name.Length > 160)
             throw new InvalidDataException("Environment share name is invalid.");
-        ArgumentNullException.ThrowIfNull(bundle.Profile);
+        if (bundle.Profile is null)
+            throw new InvalidDataException("Environment share profile is missing.");
+        if (bundle.Profile.Actions is null)
+            throw new InvalidDataException("Environment share profile contains a null actions collection.");
         if (bundle.Profile.Actions.Count > 0)
             throw new InvalidDataException("Portable environment shares must not contain project actions because action arguments may contain sensitive values.");
     }
