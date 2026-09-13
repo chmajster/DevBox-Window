@@ -121,17 +121,38 @@ public sealed class MainSyncRegressionTests
 
             var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true };
             info.ArgumentList.Add("/c");
-            info.ArgumentList.Add("ping 127.0.0.1 -n 30 >nul");
+            info.ArgumentList.Add("ping -t 127.0.0.1 >nul");
             process = Process.Start(info)!;
             Assert.NotNull(process);
+
+            var adoptedProcess = process;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return !adoptedProcess.HasExited &&
+                                   string.Equals(
+                                       Path.GetFullPath(adoptedProcess.MainModule?.FileName ?? string.Empty),
+                                       Path.GetFullPath(executable),
+                                       StringComparison.OrdinalIgnoreCase);
+                        }
+                        catch
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(5)),
+                "Synthetic database process did not become stable enough for PID-marker adoption.");
 
             var markerDirectory = Path.Combine(root, "tmp", "services");
             Directory.CreateDirectory(markerDirectory);
             File.WriteAllLines(Path.Combine(markerDirectory, "db-mysql-8-4-11.pid"),
             [
-                process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                adoptedProcess.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 Path.GetFullPath(executable),
-                process.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                adoptedProcess.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture)
             ]);
 
             var error = Assert.Throws<InvalidOperationException>(() => service.Register("mysql", "8.4.11", 3407));
