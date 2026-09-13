@@ -3,8 +3,19 @@ Set-StrictMode -Version Latest
 
 $path = 'src/DevBox.Core/Services/EnvironmentLockService.cs'
 $text = (Get-Content -LiteralPath $path -Raw).Replace("`r`n", "`n")
-$old = "        cancellationToken.ThrowIfCancellationRequested();`n        if (!desired.Database.Engine.Equals(\"none\", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(desired.Database.Version))`n        {`n            var database = _databaseRuntimes.GetInstances(desired.Database.Engine)"
-$new = "        if (!desired.Database.Engine.Equals(\"none\", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(desired.Database.Version))`n        {`n            var database = _databaseRuntimes.GetInstances(desired.Database.Engine)"
+$old = @'
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!desired.Database.Engine.Equals("none", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(desired.Database.Version))
+        {
+            var database = _databaseRuntimes.GetInstances(desired.Database.Engine)
+'@
+$new = @'
+        if (!desired.Database.Engine.Equals("none", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(desired.Database.Version))
+        {
+            var database = _databaseRuntimes.GetInstances(desired.Database.Engine)
+'@
+$old = $old.Replace("`r`n", "`n")
+$new = $new.Replace("`r`n", "`n")
 if (-not $text.Contains($old)) {
     throw 'GetDrift cancellation correction anchor was not found.'
 }
