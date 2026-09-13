@@ -84,6 +84,14 @@ public sealed class DatabaseRuntimeService : IDisposable
         if (port.HasValue && (existing is null || existing.Port != selectedPort) && IsTcpPortInUse(selectedPort))
             throw new InvalidOperationException($"Port {selectedPort} is already in use by another process.");
 
+        if (existing is not null && existing.Port != selectedPort)
+        {
+            var current = _processes.GetStatus(BuildServiceDefinition(kind, version, existing.Port));
+            if (current.State == ServiceState.Running)
+                throw new InvalidOperationException(
+                    $"Stop {DisplayEngine(kind)} {version} before changing its registered port from {existing.Port} to {selectedPort}.");
+        }
+
         var registration = new DatabaseRuntimeRegistration(normalizedEngine, version, selectedPort);
         if (index >= 0)
             registrations[index] = registration;
