@@ -54,7 +54,8 @@ public sealed class ApplicationSelfUpdateService : IDisposable
         }
         using var releaseDocument = document;
         var root = releaseDocument.RootElement;
-        if (!root.TryGetProperty("tag_name", out var tagElement) || tagElement.ValueKind != JsonValueKind.String ||
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("tag_name", out var tagElement) || tagElement.ValueKind != JsonValueKind.String ||
             !root.TryGetProperty("html_url", out var releaseUrlElement) || releaseUrlElement.ValueKind != JsonValueKind.String)
             throw new InvalidDataException("GitHub release response is missing tag_name or html_url.");
 
@@ -72,10 +73,12 @@ public sealed class ApplicationSelfUpdateService : IDisposable
         string? checksumsUrl = null;
         foreach (var asset in assets.EnumerateArray())
         {
-            var name = asset.TryGetProperty("name", out var nameElement) ? nameElement.GetString() : null;
-            var url = asset.TryGetProperty("browser_download_url", out var urlElement) ? urlElement.GetString() : null;
-            if (name is null || url is null)
-                continue;
+            if (asset.ValueKind != JsonValueKind.Object ||
+                !asset.TryGetProperty("name", out var nameElement) || nameElement.ValueKind != JsonValueKind.String ||
+                !asset.TryGetProperty("browser_download_url", out var urlElement) || urlElement.ValueKind != JsonValueKind.String)
+                throw new InvalidDataException("GitHub release contains an invalid asset entry.");
+            var name = nameElement.GetString()!;
+            var url = urlElement.GetString()!;
 
             if (name.Equals(expectedInstallerName, StringComparison.OrdinalIgnoreCase))
                 installerUrl = ValidateGitHubUrl(url, "installer download URL");

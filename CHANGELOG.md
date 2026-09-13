@@ -43,6 +43,17 @@ All notable changes to DevBox Windows are documented here.
 
 ### Fixed
 
+- Managed-service upserts validate the complete resulting catalog before an atomic write, preventing duplicate enabled ports from corrupting `services.json`; null entries and non-numeric database reservation ports produce controlled validation errors.
+- PHP extension status no longer treats a later commented example as disabling an earlier active extension.
+- Xdebug detection understands inline comments, quoted Windows paths and the `xdebug` module name, matches exact module basenames, and reads the last active scalar INI directive; disabling Xdebug removes all active matching declarations without touching unrelated modules.
+- Log listing, reading and clearing reject reparse-point paths; path validation also checks dangling links instead of assuming a failed `Exists()` call makes them safe. Empty log names are rejected consistently.
+- ZIP extraction rejects Windows trailing-dot/space aliases, reserved device names and unsafe path components before writing, and refuses pre-existing reparse-point destinations.
+- ZIP extraction enforces actual decompressed-byte limits before every write, rejects mismatched sizes, and verifies CRC32 to detect corrupted or silently truncated entries even when the framework caps reads at the declared length.
+- Update checks and installer downloads validate JSON object/string kinds before reading release and asset properties, returning controlled errors for malformed metadata.
+- Update UI handles network cancellation/timeouts and clears stale update actions when a new check starts instead of leaving a failed check stuck or retaining an outdated installer action.
+- CLI help no longer initializes or writes to the runtime root; timeout/cancellation failures return the normal CLI error response rather than an unhandled exception.
+- Added round-13 regression coverage for these catalog, INI, ZIP, path and updater boundaries; Windows baseline/reproduction/full-suite results are recorded in the pull request.
+
 - Task Center creates and assigns its execution/completion handles before the initial queued notification, closing races where subscribers could observe premature completion or dispose synchronization before execution was registered.
 - Task Center history persistence failures are isolated from task execution, so an unwritable history path can no longer make enqueueing fail or convert a successful operation into a failed task.
 - Environment locks reject null/unsafe ADDON and managed-service keys and require a database version whenever a database engine is pinned.

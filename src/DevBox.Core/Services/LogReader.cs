@@ -12,17 +12,31 @@ public sealed class LogReader
 
     public IReadOnlyList<string> GetAvailableLogs()
     {
+        _ = PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _logsRoot, _logsRoot, "The logs directory cannot be a reparse point.", allowRoot: true);
         if (!Directory.Exists(_logsRoot))
         {
             return Array.Empty<string>();
         }
 
         return Directory.GetFiles(_logsRoot, "*.log", SearchOption.TopDirectoryOnly)
+            .Where(IsRegularLogFile)
             .Select(Path.GetFileName)
             .Where(name => name is not null)
             .Select(name => name!)
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    internal static bool IsRegularLogFile(string path)
+    {
+        try
+        {
+            return (File.GetAttributes(path) & (FileAttributes.ReparsePoint | FileAttributes.Directory)) == 0;
+        }
+        // A process may rotate a log between enumeration and attribute lookup.
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException) { return false; }
     }
 
     public IReadOnlyList<string> ReadTail(string fileName, int maxLines = 500)
@@ -62,6 +76,7 @@ public sealed class LogReader
 
     private string ResolveSafePath(string fileName)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
         if (!fileName.Equals(Path.GetFileName(fileName), StringComparison.Ordinal) || !fileName.EndsWith(".log", StringComparison.OrdinalIgnoreCase))
         {
             throw new ArgumentException("Only .log files directly inside the DevBox logs directory are allowed.", nameof(fileName));
@@ -73,6 +88,7 @@ public sealed class LogReader
         {
             throw new InvalidOperationException("Log path escaped the DevBox logs directory.");
         }
-        return path;
+        return PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _logsRoot, path, "Log paths cannot traverse a reparse point.");
     }
 }
