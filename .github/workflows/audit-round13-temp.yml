@@ -14,7 +14,12 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - name: Apply exact audited patch
-        run: python .audit-round13.py
+        shell: pwsh
+        run: |
+          python .audit-round13.py
+          if ($LASTEXITCODE -ne 0) { throw 'Main patch failed' }
+          python .audit-round13-finalize.py
+          if ($LASTEXITCODE -ne 0) { throw 'Integrity patch failed' }
       - name: Whitespace validation
         run: git diff --check
       - name: Build Release
