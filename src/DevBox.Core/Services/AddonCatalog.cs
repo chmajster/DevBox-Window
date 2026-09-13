@@ -12,7 +12,9 @@ public sealed class AddonCatalog
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         _rootPath = Path.GetFullPath(rootPath);
-        _catalogPath = Path.Combine(_rootPath, "config", "addons.json");
+        _catalogPath = SafeManagedPath(
+            Path.Combine(_rootPath, "config", "addons.json"),
+            "Addon catalog cannot escape the DevBox root or traverse a reparse point.");
     }
 
     public string CatalogPath => _catalogPath;
@@ -24,7 +26,10 @@ public sealed class AddonCatalog
         EnsureDefaultCatalog();
         try
         {
-            var json = File.ReadAllText(_catalogPath);
+            var catalogPath = SafeManagedPath(
+                _catalogPath,
+                "Addon catalog cannot escape the DevBox root or traverse a reparse point.");
+            var json = File.ReadAllText(catalogPath);
             var entries = JsonSerializer.Deserialize<List<AddonManifestEntry>>(json, JsonOptions)
                 ?? throw new InvalidDataException("Addon manifest is empty.");
             if (entries.Count == 0)
@@ -48,7 +53,7 @@ public sealed class AddonCatalog
                 throw new InvalidDataException("Addon manifest assigns the same install directory to multiple addons.");
 
             var duplicateDomain = entries
-                .GroupBy(entry => new Uri(entry.LocalUrl).Host, StringComparer.OrdinalIgnoreCase)
+                .GroupBy(entry => ValidateLocalUrl(entry.LocalUrl, entry.Key).Host, StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault(group => group.Count() > 1);
             if (duplicateDomain is not null)
                 throw new InvalidDataException($"Addon manifest assigns local domain '{duplicateDomain.Key}' to multiple addons.");
@@ -134,22 +139,27 @@ public sealed class AddonCatalog
 
     private void EnsureDefaultCatalog()
     {
-        if (File.Exists(_catalogPath))
+        var catalogPath = SafeManagedPath(
+            _catalogPath,
+            "Addon catalog cannot escape the DevBox root or traverse a reparse point.");
+        if (File.Exists(catalogPath))
             return;
 
-        Directory.CreateDirectory(Path.GetDirectoryName(_catalogPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(catalogPath)!);
         var json = JsonSerializer.Serialize(DefaultManifest, JsonOptions);
-        var tempPath = _catalogPath + $".{Guid.NewGuid():N}.tmp";
+        var tempPath = SafeManagedPath(
+            catalogPath + $".{Guid.NewGuid():N}.tmp",
+            "Addon catalog temporary file cannot escape the DevBox root or traverse a reparse point.");
         try
         {
             File.WriteAllText(tempPath, json);
-            if (!File.Exists(_catalogPath))
+            if (!File.Exists(catalogPath))
             {
                 try
                 {
-                    File.Move(tempPath, _catalogPath);
+                    File.Move(tempPath, catalogPath);
                 }
-                catch (IOException) when (File.Exists(_catalogPath))
+                catch (IOException) when (File.Exists(catalogPath))
                 {
                     // Another process initialized the default catalog first.
                 }
@@ -185,13 +195,9 @@ public sealed class AddonCatalog
             throw new InvalidDataException($"Addon '{entry.Key}' must define displayName and version.");
         if (string.IsNullOrWhiteSpace(entry.InstallRelativePath) || string.IsNullOrWhiteSpace(entry.EntryPointRelativePath))
             throw new InvalidDataException($"Addon '{entry.Key}' must define install and entry-point paths.");
-        if (!Uri.TryCreate(entry.LocalUrl, UriKind.Absolute, out var localUri) ||
-            localUri.Scheme != Uri.UriSchemeHttp ||
-            !localUri.Host.EndsWith(".test", StringComparison.OrdinalIgnoreCase) ||
-            !localUri.IsDefaultPort)
-        {
-            throw new InvalidDataException($"Addon '{entry.Key}' localUrl must be an absolute http://*.test URL on the default HTTP port.");
-        }
+
+        _ = ValidateLocalUrl(entry.LocalUrl, entry.Key);
+
         if (!Uri.TryCreate(entry.DownloadUrl, UriKind.Absolute, out var downloadUri) || downloadUri.Scheme != Uri.UriSchemeHttps)
             throw new InvalidDataException($"Addon '{entry.Key}' downloadUrl must use HTTPS.");
 
@@ -217,6 +223,31 @@ public sealed class AddonCatalog
             _ = NormalizeRequiredPhpExtension(extension);
     }
 
+    internal static Uri ValidateLocalUrl(string? value, string? addonKey = null)
+    {
+        var label = string.IsNullOrWhiteSpace(addonKey) ? "Addon" : $"Addon '{addonKey}'";
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttp ||
+            !uri.IsDefaultPort ||
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            !string.IsNullOrEmpty(uri.Query) ||
+            !string.IsNullOrEmpty(uri.Fragment))
+        {
+            throw new InvalidDataException($"{label} localUrl must be an absolute http:// URL on a valid .test host and the default HTTP port.");
+        }
+
+        try
+        {
+            _ = LocalCertificateManager.NormalizeDomain(uri.Host);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new InvalidDataException($"{label} localUrl must use a valid .test host.", ex);
+        }
+
+        return uri;
+    }
+
     private static string NormalizeRequiredPhpExtension(string extension)
     {
         if (string.IsNullOrWhiteSpace(extension))
@@ -234,6 +265,9 @@ public sealed class AddonCatalog
 
         return normalized;
     }
+
+    private string SafeManagedPath(string path, string message) =>
+        PathSafety.EnsureUnderRootWithoutReparsePoints(_rootPath, path, message);
 
     private static readonly IReadOnlyList<AddonManifestEntry> DefaultManifest =
     [
