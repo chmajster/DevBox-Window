@@ -72,6 +72,7 @@ var
   InstalledVersion: String;
   InstalledUninstallString: String;
   MaintenanceExit: Boolean;
+  ApprovedReinstallDirectory: String;
 
 function TryReadExistingInstallation(const RootKey: Integer): Boolean;
 begin
@@ -170,6 +171,28 @@ begin
     Result := ExtractFileDir(Uninstaller);
 end;
 
+function SameNormalizedPath(const LeftPath: String; const RightPath: String): Boolean;
+var
+  LeftValue: String;
+  RightValue: String;
+begin
+  LeftValue := RemoveBackslashUnlessRoot(LeftPath);
+  RightValue := RemoveBackslashUnlessRoot(RightPath);
+  Result := (LeftValue <> '') and (RightValue <> '') and
+    (Lowercase(LeftValue) = Lowercase(RightValue));
+end;
+
+function IsUnsafeSharedRoot(const ModuleRoot: String): Boolean;
+begin
+  Result :=
+    SameNormalizedPath(ModuleRoot, GetEnv('USERPROFILE')) or
+    SameNormalizedPath(ModuleRoot, GetEnv('LOCALAPPDATA')) or
+    SameNormalizedPath(ModuleRoot, GetEnv('APPDATA')) or
+    SameNormalizedPath(ModuleRoot, GetEnv('PROGRAMDATA')) or
+    SameNormalizedPath(ModuleRoot, GetEnv('ProgramFiles')) or
+    SameNormalizedPath(ModuleRoot, GetEnv('ProgramFiles(x86)'));
+end;
+
 function IsSafeManagedRoot(const BaseDir: String): Boolean;
 var
   ModuleRoot: String;
@@ -201,6 +224,12 @@ begin
     Exit;
   end;
 
+  if IsUnsafeSharedRoot(ModuleRoot) then
+  begin
+    Log('Refusing managed cleanup for shared user/system directory: ' + ModuleRoot);
+    Exit;
+  end;
+
   Result := True;
 end;
 
@@ -214,7 +243,7 @@ begin
 
   RootPrefix := AddBackslash(RemoveBackslashUnlessRoot(BaseDir));
   Result :=
-    FileExists(RootPrefix + '{#MyAppExeName}') or
+    FileExists(RootPrefix + '{#MyAppExeName}') and
     FileExists(RootPrefix + 'unins000.exe');
 end;
 
@@ -265,11 +294,12 @@ begin
   if FileExists(PhpMyAdminMarker) then
   begin
     if LoadStringsFromFile(PhpMyAdminMarker, MarkerLines) and
-       (GetArrayLength(MarkerLines) > 0) and
-       (Lowercase(Trim(MarkerLines[0])) = 'phpmyadmin') then
+       (GetArrayLength(MarkerLines) = 2) and
+       (Lowercase(Trim(MarkerLines[0])) = 'phpmyadmin') and
+       (Trim(MarkerLines[1]) <> '') then
       Result := True
     else
-      Log('Preserving www\phpmyadmin because its ownership marker is invalid.');
+      Log('Preserving www\phpmyadmin because its ownership marker is invalid or incomplete.');
     Exit;
   end;
 
@@ -397,6 +427,7 @@ var
 begin
   ExistingInstallation := DetectExistingInstallation;
   MaintenanceExit := False;
+  ApprovedReinstallDirectory := '';
 
   if InstalledVersion <> '' then
     InstalledText := 'Installed version: ' + InstalledVersion + '. Setup version: {#MyAppVersion}.'
@@ -443,7 +474,18 @@ begin
     if not IsSafeManagedRoot(WizardDirValue) then
     begin
       MsgBox(
-        'Choose a dedicated DevBox installation directory. Installing directly into a filesystem root or protected Windows directory is not allowed.',
+        'Choose a dedicated DevBox installation directory. Filesystem roots, shared profile/data directories and protected Windows directories are not allowed.',
+        mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+
+    if DirExists(WizardDirValue) and
+       not HasDevBoxInstallEvidence(WizardDirValue) and
+       not SameNormalizedPath(WizardDirValue, ApprovedReinstallDirectory) then
+    begin
+      MsgBox(
+        'Choose a new dedicated DevBox installation directory. Setup will not install into an existing directory that is not a verified DevBox installation because reinstall cleanup manages runtime and temporary subdirectories.',
         mbError, MB_OK);
       Result := False;
       Exit;
@@ -488,6 +530,7 @@ begin
           Exit;
         end;
 
+        ApprovedReinstallDirectory := PreviousInstallLocation;
         ExistingInstallation := False;
         Log('Existing installation and generated modules removed successfully; continuing with reinstall.');
       end;
