@@ -118,8 +118,7 @@ public sealed class ApplicationSelfUpdateService : IDisposable
         }
         finally
         {
-            if (File.Exists(temporaryPath))
-                File.Delete(temporaryPath);
+            TryDeleteFile(temporaryPath);
         }
 
         return new SelfUpdatePackage(version, installerPath, expectedInstallerName, expectedSha256, releaseUrl);
@@ -183,6 +182,18 @@ public sealed class ApplicationSelfUpdateService : IDisposable
             !uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException($"GitHub release contains an invalid {description}.");
         return uri.AbsoluteUri;
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 
     public void Dispose()
