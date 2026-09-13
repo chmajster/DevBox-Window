@@ -45,6 +45,13 @@ All notable changes to DevBox Windows are documented here.
 
 ### Fixed
 
+- Audit round 16 hardens the remaining ADDONS/Marketplace/installer boundary cases: strict local-domain parsing, complete ownership markers, direct-service `config`/`tmp` reparse protection, bounded catalog/source reads and dedicated installation-root enforcement.
+- ADDON local URLs now use the same canonical `.test` domain policy as Sites/TLS and reject empty labels, leading/trailing hyphens, user-info, query strings and fragments instead of accepting any host that merely ends with `.test`.
+- ADDON ownership markers must contain both the expected addon key and a syntactically valid version line within a bounded marker file; incomplete one-line markers no longer authorize overwrite, Repair or uninstall while valid older-version markers still support upgrades.
+- `AddonCatalog`, `AddonInstaller`, `AddonOwnership` and `AddonMarketplaceService` validate their own catalog, lock, staging, trash, Nginx-config and marketplace-validation paths against reparse/junction traversal instead of depending on `RuntimeLayout` having run first.
+- ADDON/Marketplace JSON reads are bounded to 2 MiB, marketplace source configuration to 256 KiB and marketplace public-key PEM input to 64 KiB so malformed local configuration cannot trigger unbounded memory reads.
+- The Windows installer refuses filesystem/shared profile-data roots and refuses a fresh install into an existing unverified directory; reinstall can reuse only the previously verified DevBox directory, preventing cleanup from deleting unrelated `runtime`/`tmp` data in a shared folder.
+- Installer phpMyAdmin cleanup now requires the complete two-line DevBox ownership marker instead of trusting a key-only marker.
 - Final audit rounds 10–15 add regression coverage for archive aliasing, strict environment/action/domain validation, process-output bounds, runtime/database reparse boundaries, diagnostics, Task Center lifecycle races, environment-share safety and self-update managed paths.
 - ZIP extraction rejects duplicate and case-insensitive alias output paths so later archive entries cannot overwrite previously validated runtime/ADDON files.
 - Protected-path validation rejects a managed root that is itself a junction or symbolic link; RuntimeManager, RuntimePlatformService, DatabaseManager and DatabaseRuntimeService now enforce reparse-aware boundaries even when called directly without startup initialization.
@@ -155,6 +162,7 @@ All notable changes to DevBox Windows are documented here.
 
 ### Security
 
+- ADDON ownership, Marketplace catalogs and installer cleanup now fail closed on incomplete ownership evidence, malformed local domains, reparse/junction redirection and unverified/shared installation roots, reducing unintended overwrite/delete paths.
 - Direct service entry points for runtime install/import, database runtime state, self-update, Task Center history and managed environment-share output now enforce reparse-aware DevBox-root boundaries instead of assuming startup initialization already validated the filesystem.
 - Reparse-point/junction boundaries are enforced across project execution/archive operations, ADDONS, configuration, managed services, logs and runtime-layout initialization so DevBox cannot be redirected to read, truncate, execute, archive or delete content outside its managed roots.
 - Mutable database operations protect MySQL/MariaDB system schemas and PostgreSQL maintenance/template databases from project-level create/drop/restore paths.
