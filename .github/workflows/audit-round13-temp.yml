@@ -4,40 +4,47 @@ on:
     branches: [fix/audit-round13-changelog]
     paths: [.github/workflows/audit-round13-temp.yml, .audit-round13-trigger]
 permissions:
-  contents: read
+  contents: write
 jobs:
-  reproduce:
+  verify:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 8.0.x
-      - name: Build baseline with new regression tests
+      - name: Apply exact audited patch
+        run: python .audit-round13.py
+      - name: Whitespace validation
+        run: git diff --check
+      - name: Build Release
         run: dotnet build DevBox.sln -c Release
-      - name: Reproduce regression failures
-        shell: pwsh
-        run: |
-          dotnet test tests/DevBox.Tests/DevBox.Tests.csproj -c Release --no-build --filter FullyQualifiedName~AuditRound13RegressionTests --logger "trx;LogFileName=round13-red.trx" --results-directory audit-results
-          $result = $LASTEXITCODE
-          if (-not (Test-Path audit-results/round13-red.trx)) { throw 'Missing regression results' }
-          [xml]$trx = Get-Content audit-results/round13-red.trx
-          $failed = [int]$trx.TestRun.ResultSummary.Counters.failed
-          if ($result -eq 0 -or $failed -eq 0) { throw 'Expected tests to reproduce defects before fixes' }
-          Write-Host "Confirmed $failed failing regression cases against unchanged production code."
-          exit 0
-      - name: Reproduce CLI help failure on unwritable runtime root
+      - name: All regression and existing tests
+        run: dotnet test DevBox.sln -c Release --no-build --logger "trx;LogFileName=round13-green.trx" --results-directory audit-results
+      - name: CLI help does not touch the runtime root
         shell: pwsh
         run: |
           $env:DEVBOX_ROOT = Join-Path $env:RUNNER_TEMP 'round13-blocked-root'
           Set-Content -Path $env:DEVBOX_ROOT -Value 'file, not a directory'
           dotnet src/DevBox.Cli/bin/Release/net8.0-windows/devbox.dll --help
-          if ($LASTEXITCODE -eq 0) { throw 'Expected baseline CLI help to fail before fix' }
-          Write-Host 'Confirmed baseline CLI help attempts to write to runtime root.'
-          exit 0
+          if ($LASTEXITCODE -ne 0) { throw 'CLI help failed on blocked runtime root' }
+          if ((Get-Content $env:DEVBOX_ROOT) -ne 'file, not a directory') { throw 'CLI changed runtime root' }
+      - name: Commit verified production fixes and changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src CHANGELOG.md
+          git diff --cached --check
+          git commit -m 'fix: validate catalogs, PHP configuration, archives and updater boundaries'
+          git push origin HEAD:fix/audit-round13-changelog
+          git archive --format=zip HEAD -o audited-source.zip
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: audit-round13-red-results
-          path: audit-results
+          name: audit-round13-green-results
+          path: |
+            audit-results
+            audited-source.zip
           retention-days: 7
