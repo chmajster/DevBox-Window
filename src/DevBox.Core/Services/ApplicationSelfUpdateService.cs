@@ -98,10 +98,19 @@ public sealed class ApplicationSelfUpdateService : IDisposable
         var checksums = Encoding.UTF8.GetString(checksumsPayload);
         var expectedSha256 = ParseChecksum(checksums, expectedInstallerName);
 
-        var updateDirectory = Path.Combine(_rootPath, "tmp", "updates", version.ToString(3));
+        var updateDirectory = PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _rootPath,
+            Path.Combine(_rootPath, "tmp", "updates", version.ToString(3)),
+            "Self-update temporary directory cannot escape the DevBox root or traverse a reparse point.");
         Directory.CreateDirectory(updateDirectory);
-        var installerPath = Path.Combine(updateDirectory, expectedInstallerName);
-        var temporaryPath = installerPath + $".{Guid.NewGuid():N}.download";
+        var installerPath = PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _rootPath,
+            Path.Combine(updateDirectory, expectedInstallerName),
+            "Self-update installer path cannot escape the DevBox root or traverse a reparse point.");
+        var temporaryPath = PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _rootPath,
+            installerPath + $".{Guid.NewGuid():N}.download",
+            "Self-update temporary installer path cannot escape the DevBox root or traverse a reparse point.");
 
         try
         {

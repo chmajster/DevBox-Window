@@ -34,7 +34,7 @@ public sealed class AddonCatalogTests
     }
 
     [Fact]
-    public void PhpMyAdmin_IsInstalledOnlyWhenRealEntryPointExists()
+    public void PhpMyAdmin_UserDirectoryWithoutOwnership_IsNotReportedAsInstalled()
     {
         var root = TempRoot();
         try
@@ -45,7 +45,32 @@ public sealed class AddonCatalogTests
 
             Assert.False(catalog.IsInstalled(addon));
             Directory.CreateDirectory(addon.InstallPath);
-            File.WriteAllText(addon.EntryPointPath, "<?php echo 'phpMyAdmin';");
+            File.WriteAllText(addon.EntryPointPath, "<?php echo 'user project';");
+            Assert.False(catalog.IsInstalled(addon));
+
+            AddonOwnership.WriteMarker(addon);
+            Assert.True(catalog.IsInstalled(addon));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void PhpMyAdmin_LegacyDevBoxVhost_IsRecognizedForMigration()
+    {
+        var root = TempRoot();
+        try
+        {
+            RuntimeLayout.EnsureInitialized(root);
+            var catalog = new AddonCatalog(root);
+            var addon = Assert.Single(catalog.GetAddons());
+            Directory.CreateDirectory(addon.InstallPath);
+            File.WriteAllText(addon.EntryPointPath, "<?php echo 'legacy';");
+            var vhost = Path.Combine(root, "config", "nginx", "sites-enabled", "phpmyadmin.test.conf");
+            File.WriteAllText(vhost, "server { server_name phpmyadmin.test; root www/phpmyadmin; }");
+
             Assert.True(catalog.IsInstalled(addon));
         }
         finally

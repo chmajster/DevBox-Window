@@ -97,8 +97,8 @@ public sealed class ProjectActionService
             throw new InvalidOperationException($"Unable to start project action '{action.DisplayName}': {ex.Message}", ex);
         }
 
-        var stdoutTask = ReadBoundedAsync(process.StandardOutput, 1_048_576, cancellationToken);
-        var stderrTask = ReadBoundedAsync(process.StandardError, 1_048_576, cancellationToken);
+        var stdoutTask = ProcessOutputCapture.ReadBoundedAsync(process.StandardOutput, cancellationToken: cancellationToken);
+        var stderrTask = ProcessOutputCapture.ReadBoundedAsync(process.StandardError, cancellationToken: cancellationToken);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(action.TimeoutSeconds));
         try
@@ -161,8 +161,11 @@ public sealed class ProjectActionService
             throw new InvalidDataException($"Project action '{action.Key}' contains invalid arguments.");
         if (action.TimeoutSeconds is < 1 or > 3600)
             throw new InvalidDataException($"Project action '{action.Key}' timeout must be between 1 and 3600 seconds.");
-        if (!string.IsNullOrWhiteSpace(action.WorkingDirectory) && Path.IsPathRooted(action.WorkingDirectory))
-            throw new InvalidDataException($"Project action '{action.Key}' working directory must be relative to the project root.");
+        if (!string.IsNullOrWhiteSpace(action.WorkingDirectory) &&
+            (Path.IsPathRooted(action.WorkingDirectory) || ContainsParentTraversal(action.WorkingDirectory)))
+        {
+            throw new InvalidDataException($"Project action '{action.Key}' working directory must stay relative to the project root without parent traversal.");
+        }
     }
 
     private string EnsureProjectRoot(string projectPath)
@@ -172,7 +175,9 @@ public sealed class ProjectActionService
         if (!Directory.Exists(root))
             throw new DirectoryNotFoundException($"Project directory was not found: {root}");
         return PathSafety.EnsureUnderRootWithoutReparsePoints(
-            _wwwRoot, root, "Project actions are restricted to the DevBox www directory and cannot traverse a reparse point.");
+            _wwwRoot,
+            root,
+            "Project actions are restricted to the DevBox www directory and cannot traverse a reparse point.");
     }
 
     private static string ResolveWorkingDirectory(string projectRoot, string? relative)
@@ -182,12 +187,18 @@ public sealed class ProjectActionService
         var path = Path.GetFullPath(Path.Combine(projectRoot, relative));
         if (!Directory.Exists(path))
             throw new DirectoryNotFoundException($"Project action working directory does not exist: {path}");
-        if (path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Equals(
-                projectRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+        if (path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Equals(projectRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
             return projectRoot;
         return PathSafety.EnsureUnderRootWithoutReparsePoints(
-            projectRoot, path, "Project action working directory escapes the project root or traverses a reparse point.");
+            projectRoot,
+            path,
+            "Project action working directory escapes the project root or traverses a reparse point.");
     }
+
+    private static bool ContainsParentTraversal(string value) =>
+        value.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries)
+            .Any(segment => segment == "..");
 
     private static JsonNode? FindProperty(JsonObject value, string name)
     {
@@ -197,37 +208,6 @@ public sealed class ProjectActionService
                 return pair.Value;
         }
         return null;
-    }
-
-    private static void EnsureUnder(string candidate, string root, string message)
-    {
-        var normalizedRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var normalizedCandidate = Path.GetFullPath(candidate).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (!normalizedCandidate.Equals(normalizedRoot, StringComparison.OrdinalIgnoreCase) &&
-            !normalizedCandidate.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException(message);
-    }
-
-
-    private static async Task<string> ReadBoundedAsync(StreamReader reader, int maximumCharacters, CancellationToken cancellationToken)
-    {
-        var buffer = new char[8192];
-        var builder = new System.Text.StringBuilder(Math.Min(maximumCharacters, 64 * 1024));
-        var truncated = false;
-        while (true)
-        {
-            var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
-            if (read == 0)
-                break;
-            var remaining = maximumCharacters - builder.Length;
-            if (remaining > 0)
-                builder.Append(buffer, 0, Math.Min(remaining, read));
-            if (read > remaining)
-                truncated = true;
-        }
-        if (truncated)
-            builder.Append(Environment.NewLine).Append("[output truncated by DevBox]");
-        return builder.ToString();
     }
 
     private static void AtomicWrite(string path, string content)

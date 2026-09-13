@@ -8,6 +8,8 @@ namespace DevBox.Core.Services;
 public sealed partial class ProjectWorkspaceService
 {
     public const string ManifestFileName = "devbox.json";
+    private const long MaximumManifestBytes = 2L * 1024 * 1024;
+    private const long MaximumComposerBytes = 2L * 1024 * 1024;
 
     private readonly string _rootPath;
     private readonly string _wwwRoot;
@@ -75,9 +77,7 @@ public sealed partial class ProjectWorkspaceService
         }
 
         if (requiredExtensions.Count > 0)
-        {
             evidence.Add($"Composer requires {requiredExtensions.Count} PHP extension(s).");
-        }
 
         return new ProjectDetectionResult(kind, root, evidence, requiredExtensions);
     }
@@ -149,6 +149,8 @@ public sealed partial class ProjectWorkspaceService
     {
         ArgumentNullException.ThrowIfNull(request);
         var source = RequireExistingDirectory(request.SourcePath);
+        if (request.CopyIntoDevBox && (File.GetAttributes(source) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException($"Project import source cannot be a reparse point: {source}");
         var detection = Detect(source);
 
         var projectRoot = request.CopyIntoDevBox
@@ -160,8 +162,10 @@ public sealed partial class ProjectWorkspaceService
         if (request.CopyIntoDevBox && projectRootExisted && Directory.EnumerateFileSystemEntries(projectRoot).Any())
             throw new InvalidOperationException($"Import destination is not empty: {projectRoot}");
 
-        var manifestPath = Path.Combine(projectRoot, ManifestFileName);
-        var previousManifest = !request.CopyIntoDevBox && File.Exists(manifestPath) ? File.ReadAllBytes(manifestPath) : null;
+        var manifestPath = ManagedProjectFile(projectRoot, ManifestFileName);
+        var previousManifest = !request.CopyIntoDevBox && File.Exists(manifestPath)
+            ? ReadAllBytesWithLimit(manifestPath, MaximumManifestBytes, "Existing devbox.json")
+            : null;
         var rollbackDomain = request.Domain ?? LocalDomainName.FromName(NormalizeProjectDirectoryName(request.Name));
         var tlsRollback = new TlsRollbackStateService(_rootPath);
         var tlsState = tlsRollback.Capture(rollbackDomain);
@@ -216,20 +220,17 @@ public sealed partial class ProjectWorkspaceService
 
     public DevBoxProjectManifest? LoadManifest(string projectPath)
     {
-        var root = Path.GetFullPath(projectPath);
-        var path = Path.Combine(root, ManifestFileName);
+        var root = EnsureManagedProjectRoot(projectPath);
+        var path = ManagedProjectFile(root, ManifestFileName);
         if (!File.Exists(path))
-        {
             return null;
-        }
 
         try
         {
-            var manifest = JsonSerializer.Deserialize<DevBoxProjectManifest>(File.ReadAllText(path), JsonOptions);
+            var manifest = JsonSerializer.Deserialize<DevBoxProjectManifest>(
+                ReadTextWithLimit(path, MaximumManifestBytes, "devbox.json"), JsonOptions);
             if (manifest is null)
-            {
                 return null;
-            }
             ValidateManifest(manifest);
             return manifest;
         }
@@ -243,8 +244,8 @@ public sealed partial class ProjectWorkspaceService
     {
         ArgumentNullException.ThrowIfNull(manifest);
         ValidateManifest(manifest);
-        var root = RequireExistingDirectory(projectPath);
-        var path = Path.Combine(root, ManifestFileName);
+        var root = EnsureManagedProjectRoot(RequireExistingDirectory(projectPath));
+        var path = ManagedProjectFile(root, ManifestFileName);
         AtomicWrite(path, JsonSerializer.Serialize(manifest, JsonOptions));
     }
 
@@ -365,9 +366,7 @@ public sealed partial class ProjectWorkspaceService
         {
             var available = detection.RequiredPhpExtensions.Where(IsExtensionBinaryAvailable).ToArray();
             if (available.Length > 0 && _phpExtensionInspector.EnsureConfigured(available))
-            {
                 repaired.Add($"Enabled Composer-required PHP extensions available in the active runtime: {string.Join(", ", available)}.");
-            }
         }
 
         var report = await CheckHealthAsync(site, cancellationToken).ConfigureAwait(false);
@@ -399,6 +398,8 @@ public sealed partial class ProjectWorkspaceService
     {
         if (!Directory.Exists(projectRoot))
             return;
+        if ((File.GetAttributes(projectRoot) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidOperationException("Project rollback refuses a reparse-point project root.");
         if (!existedBefore)
         {
             Directory.Delete(projectRoot, recursive: true);
@@ -406,9 +407,17 @@ public sealed partial class ProjectWorkspaceService
         }
 
         foreach (var file in Directory.EnumerateFiles(projectRoot))
+        {
+            if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException("Project rollback refuses reparse-point content.");
             File.Delete(file);
+        }
         foreach (var directory in Directory.EnumerateDirectories(projectRoot))
+        {
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException("Project rollback refuses reparse-point content.");
             Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static void RestoreManifest(string path, byte[]? previous)
@@ -429,9 +438,7 @@ public sealed partial class ProjectWorkspaceService
     private static string ResolveDocumentRoot(string projectRoot, ProjectKind kind)
     {
         if (!UsesPublicDocumentRoot(kind))
-        {
             return projectRoot;
-        }
 
         var publicRoot = Path.Combine(projectRoot, "public");
         return Directory.Exists(publicRoot) ? publicRoot : projectRoot;
@@ -443,30 +450,26 @@ public sealed partial class ProjectWorkspaceService
         {
             var marker = Path.Combine(projectRoot, ".devbox-scaffold-pending");
             if (!File.Exists(marker))
-            {
                 File.WriteAllText(marker, $"{kind} project registered by DevBox. Run the scaffold action to install framework files.{Environment.NewLine}");
-            }
             return;
         }
 
         var index = Path.Combine(documentRoot, "index.php");
         if (!File.Exists(index))
-        {
             File.WriteAllText(index, "<?php\nphpinfo();\n");
-        }
     }
 
     private static JsonDocument? TryReadComposer(string projectRoot)
     {
         var path = Path.Combine(projectRoot, "composer.json");
         if (!File.Exists(path))
-        {
             return null;
-        }
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("composer.json cannot be a reparse point.");
 
         try
         {
-            return JsonDocument.Parse(File.ReadAllText(path));
+            return JsonDocument.Parse(ReadTextWithLimit(path, MaximumComposerBytes, "composer.json"));
         }
         catch (JsonException)
         {
@@ -477,9 +480,7 @@ public sealed partial class ProjectWorkspaceService
     private static bool ComposerRequires(JsonDocument? composer, string package)
     {
         if (composer is null)
-        {
             return false;
-        }
 
         return HasProperty(composer.RootElement, "require", package) ||
                HasProperty(composer.RootElement, "require-dev", package);
@@ -488,37 +489,27 @@ public sealed partial class ProjectWorkspaceService
     private static bool HasProperty(JsonElement root, string section, string name)
     {
         if (!root.TryGetProperty(section, out var objectValue) || objectValue.ValueKind != JsonValueKind.Object)
-        {
             return false;
-        }
         return objectValue.EnumerateObject().Any(property => property.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
     }
 
     private static IReadOnlyList<string> ReadRequiredExtensions(JsonDocument? composer)
     {
         if (composer is null)
-        {
             return Array.Empty<string>();
-        }
 
         var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var section in new[] { "require", "require-dev" })
         {
             if (!composer.RootElement.TryGetProperty(section, out var requirements) || requirements.ValueKind != JsonValueKind.Object)
-            {
                 continue;
-            }
             foreach (var property in requirements.EnumerateObject())
             {
                 if (!property.Name.StartsWith("ext-", StringComparison.OrdinalIgnoreCase))
-                {
                     continue;
-                }
                 var extension = property.Name[4..].Trim();
                 if (SafeExtensionNameRegex().IsMatch(extension))
-                {
                     extensions.Add(extension);
-                }
             }
         }
         return extensions.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray();
@@ -530,9 +521,7 @@ public sealed partial class ProjectWorkspaceService
     private bool IsExtensionBinaryAvailable(string extension)
     {
         if (extension.Equals("json", StringComparison.OrdinalIgnoreCase))
-        {
             return true;
-        }
         return File.Exists(Path.Combine(_rootPath, "runtime", "php", "current", "ext", $"php_{extension}.dll"));
     }
 
@@ -544,14 +533,30 @@ public sealed partial class ProjectWorkspaceService
             "Existing projects can only be registered in-place when they are already inside DevBox www and the path does not traverse a reparse point. Enable CopyIntoDevBox for external projects.");
     }
 
+    private string EnsureManagedProjectRoot(string path)
+    {
+        var full = Path.GetFullPath(path);
+        return PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _wwwRoot,
+            full,
+            "Project metadata can only be read or written for projects inside DevBox www and cannot traverse a reparse point.");
+    }
+
+    private string ManagedProjectFile(string projectRoot, string fileName)
+    {
+        var root = EnsureManagedProjectRoot(projectRoot);
+        return PathSafety.EnsureUnderRootWithoutReparsePoints(
+            root,
+            Path.Combine(root, fileName),
+            "Project metadata file cannot escape its project directory or traverse a reparse point.");
+    }
+
     private static string RequireExistingDirectory(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var full = Path.GetFullPath(path);
         if (!Directory.Exists(full))
-        {
             throw new DirectoryNotFoundException($"Project directory was not found: {full}");
-        }
         return full;
     }
 
@@ -560,9 +565,7 @@ public sealed partial class ProjectWorkspaceService
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         var value = name.Trim().ToLowerInvariant();
         if (!SafeProjectNameRegex().IsMatch(value))
-        {
             throw new ArgumentException("Project name may contain only letters, digits, dots, hyphens and underscores.", nameof(name));
-        }
         return value;
     }
 
@@ -579,9 +582,7 @@ public sealed partial class ProjectWorkspaceService
     private static void ValidateManifest(DevBoxProjectManifest manifest)
     {
         if (manifest.SchemaVersion != DevBoxProjectManifest.CurrentSchemaVersion)
-        {
             throw new InvalidDataException($"Unsupported devbox.json schema version: {manifest.SchemaVersion}.");
-        }
         _ = NormalizeProjectDirectoryName(manifest.Name);
         try
         {
@@ -593,43 +594,61 @@ public sealed partial class ProjectWorkspaceService
         }
         _ = NormalizeDatabaseEngine(manifest.DatabaseEngine);
         if (manifest.Addons.Any(addon => string.IsNullOrWhiteSpace(addon) || !SafeAddonKeyRegex().IsMatch(addon)))
-        {
             throw new InvalidDataException("Manifest contains an invalid addon key.");
-        }
     }
 
     private static void CopyDirectorySafely(string source, string destination)
     {
-        var sourceRoot = Path.GetFullPath(source).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        var destinationRoot = Path.GetFullPath(destination).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (destinationRoot.StartsWith(sourceRoot, StringComparison.OrdinalIgnoreCase))
-        {
+        var sourcePath = Path.GetFullPath(source).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var destinationPath = Path.GetFullPath(destination).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var sourcePrefix = sourcePath + Path.DirectorySeparatorChar;
+        var destinationPrefix = destinationPath + Path.DirectorySeparatorChar;
+        if (destinationPrefix.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Import destination cannot be inside the source project directory.");
-        }
+        if ((File.GetAttributes(sourcePath) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException($"Project import source cannot be a reparse point: {sourcePath}");
 
-        foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+        Directory.CreateDirectory(destinationPath);
+        var pending = new Stack<string>();
+        pending.Push(sourcePath);
+        while (pending.Count > 0)
         {
-            var info = new DirectoryInfo(directory);
-            if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+            var current = pending.Pop();
+            foreach (var file in Directory.EnumerateFiles(current, "*", SearchOption.TopDirectoryOnly))
             {
-                throw new InvalidDataException($"Project import does not follow reparse points: {directory}");
+                if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException($"Project import does not follow reparse points: {file}");
+                var relative = Path.GetRelativePath(sourcePath, file);
+                var target = Path.Combine(destinationPath, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(file, target, overwrite: false);
             }
-            var relative = Path.GetRelativePath(source, directory);
-            Directory.CreateDirectory(Path.Combine(destination, relative));
-        }
 
-        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
-        {
-            var info = new FileInfo(file);
-            if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+            foreach (var directory in Directory.EnumerateDirectories(current, "*", SearchOption.TopDirectoryOnly))
             {
-                throw new InvalidDataException($"Project import does not follow reparse points: {file}");
+                if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException($"Project import does not follow reparse points: {directory}");
+                var relative = Path.GetRelativePath(sourcePath, directory);
+                Directory.CreateDirectory(Path.Combine(destinationPath, relative));
+                pending.Push(directory);
             }
-            var relative = Path.GetRelativePath(source, file);
-            var target = Path.Combine(destination, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.Copy(file, target, overwrite: false);
         }
+    }
+
+    private static byte[] ReadAllBytesWithLimit(string path, long maximumBytes, string label)
+    {
+        var info = new FileInfo(path);
+        if (info.Length > maximumBytes)
+            throw new InvalidDataException($"{label} exceeds the 2 MiB safety limit.");
+        return File.ReadAllBytes(path);
+    }
+
+    private static string ReadTextWithLimit(string path, long maximumBytes, string label)
+    {
+        var info = new FileInfo(path);
+        if (info.Length > maximumBytes)
+            throw new InvalidDataException($"{label} exceeds the 2 MiB safety limit.");
+        return File.ReadAllText(path);
     }
 
     private static ProjectHealthCheck Healthy(string key, string name, string details) =>
@@ -646,20 +665,14 @@ public sealed partial class ProjectWorkspaceService
         {
             File.WriteAllText(temp, content);
             if (File.Exists(path))
-            {
                 File.Replace(temp, path, null);
-            }
             else
-            {
                 File.Move(temp, path);
-            }
         }
         finally
         {
             if (File.Exists(temp))
-            {
                 File.Delete(temp);
-            }
         }
     }
 

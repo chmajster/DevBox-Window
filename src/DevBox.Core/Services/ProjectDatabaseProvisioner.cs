@@ -7,6 +7,11 @@ namespace DevBox.Core.Services;
 
 public sealed class ProjectDatabaseProvisioner
 {
+    private static readonly HashSet<string> PostgreSqlSystemDatabases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "postgres", "template0", "template1"
+    };
+
     private readonly string _rootPath;
     private readonly DatabaseManager _mysql;
 
@@ -17,7 +22,7 @@ public sealed class ProjectDatabaseProvisioner
         _mysql = mysql ?? throw new ArgumentNullException(nameof(mysql));
     }
 
-    public bool IsAvailable(string engine) => engine.ToLowerInvariant() switch
+    public bool IsAvailable(string engine) => NormalizeEngine(engine) switch
     {
         "mysql" => File.Exists(Path.Combine(_rootPath, "runtime", "mysql", "current", "bin", "mysql.exe")),
         "mariadb" => ResolveMariaDbClient() is not null,
@@ -32,8 +37,9 @@ public sealed class ProjectDatabaseProvisioner
         DatabaseConnectionOptions? options = null,
         CancellationToken cancellationToken = default)
     {
+        var normalizedEngine = NormalizeEngine(engine);
         var safeName = DatabaseManager.ValidateDatabaseName(databaseName);
-        switch (engine.ToLowerInvariant())
+        switch (normalizedEngine)
         {
             case "mysql":
             {
@@ -76,8 +82,9 @@ public sealed class ProjectDatabaseProvisioner
         DatabaseConnectionOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        var safeName = DatabaseManager.ValidateDatabaseName(databaseName);
-        switch (engine.ToLowerInvariant())
+        var normalizedEngine = NormalizeEngine(engine);
+        var safeName = ValidateMutableDatabaseName(normalizedEngine, databaseName);
+        switch (normalizedEngine)
         {
             case "mysql":
                 await _mysql.DropDatabaseAsync(safeName, options ?? new DatabaseConnectionOptions(), cancellationToken).ConfigureAwait(false);
@@ -112,8 +119,9 @@ public sealed class ProjectDatabaseProvisioner
         DatabaseConnectionOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        var safeName = DatabaseManager.ValidateDatabaseName(databaseName);
-        switch (engine.ToLowerInvariant())
+        var normalizedEngine = NormalizeEngine(engine);
+        var safeName = ValidateMutableDatabaseName(normalizedEngine, databaseName);
+        switch (normalizedEngine)
         {
             case "mysql":
                 await _mysql.CreateDatabaseAsync(safeName, options ?? new DatabaseConnectionOptions(), cancellationToken).ConfigureAwait(false);
@@ -155,20 +163,20 @@ public sealed class ProjectDatabaseProvisioner
         EnsureFile(createdb, "PostgreSQL createdb client is not installed under runtime/postgresql/current/bin.");
 
         var environment = PgPasswordEnvironment(options);
-            var check = await RunAsync(
-                psql,
-                ["--host", options.Host, "--port", options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), "--username", options.User, "--dbname", "postgres", "--tuples-only", "--no-align", "--command", $"SELECT 1 FROM pg_database WHERE datname = '{databaseName}';"],
-                environment,
-                cancellationToken).ConfigureAwait(false);
+        var check = await RunAsync(
+            psql,
+            ["--host", options.Host, "--port", options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), "--username", options.User, "--dbname", "postgres", "--tuples-only", "--no-align", "--command", $"SELECT 1 FROM pg_database WHERE datname = '{databaseName}';"],
+            environment,
+            cancellationToken).ConfigureAwait(false);
 
-            if (check.Trim().Equals("1", StringComparison.Ordinal))
-                return;
+        if (check.Trim().Equals("1", StringComparison.Ordinal))
+            return;
 
-            await RunAsync(
-                createdb,
-                ["--host", options.Host, "--port", options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), "--username", options.User, databaseName],
-                environment,
-                cancellationToken).ConfigureAwait(false);
+        await RunAsync(
+            createdb,
+            ["--host", options.Host, "--port", options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), "--username", options.User, databaseName],
+            environment,
+            cancellationToken).ConfigureAwait(false);
     }
 
     private string? ResolveMariaDbClient()
@@ -180,6 +188,23 @@ public sealed class ProjectDatabaseProvisioner
     }
 
     private string PostgresTool(string name) => Path.Combine(_rootPath, "runtime", "postgresql", "current", "bin", name);
+
+    private static string NormalizeEngine(string engine)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(engine);
+        return engine.Trim().ToLowerInvariant();
+    }
+
+    private static string ValidateMutableDatabaseName(string engine, string databaseName)
+    {
+        if (engine is "mysql" or "mariadb")
+            return DatabaseManager.ValidateMutableDatabaseName(databaseName);
+
+        var safeName = DatabaseManager.ValidateDatabaseName(databaseName);
+        if (engine == "postgresql" && PostgreSqlSystemDatabases.Contains(safeName))
+            throw new InvalidOperationException($"System database '{safeName}' cannot be modified by DevBox.");
+        return safeName;
+    }
 
     private static IReadOnlyList<string> MariaDbArguments(DatabaseConnectionOptions options, params string[] commandArguments)
     {
@@ -212,14 +237,17 @@ public sealed class ProjectDatabaseProvisioner
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        foreach (var argument in arguments)
+            startInfo.ArgumentList.Add(argument);
         if (environment is not null)
         {
-            foreach (var item in environment) startInfo.Environment[item.Key] = item.Value;
+            foreach (var item in environment)
+                startInfo.Environment[item.Key] = item.Value;
         }
 
         using var process = new Process { StartInfo = startInfo };
-        if (!process.Start()) throw new InvalidOperationException($"Unable to start {Path.GetFileName(executable)}.");
+        if (!process.Start())
+            throw new InvalidOperationException($"Unable to start {Path.GetFileName(executable)}.");
         var stdout = ProcessOutputCapture.ReadBoundedAsync(process.StandardOutput, cancellationToken: cancellationToken);
         var stderr = ProcessOutputCapture.ReadBoundedAsync(process.StandardError, cancellationToken: cancellationToken);
         try
@@ -236,16 +264,6 @@ public sealed class ProjectDatabaseProvisioner
         if (process.ExitCode != 0)
             throw new InvalidOperationException(string.IsNullOrWhiteSpace(error) ? $"{Path.GetFileName(executable)} exited with code {process.ExitCode}." : error.Trim());
         return output;
-    }
-
-    private static string QuoteOptionValue(string value)
-    {
-        var escaped = value.Replace("\\", "\\\\", StringComparison.Ordinal)
-            .Replace("\"", "\\\"", StringComparison.Ordinal)
-            .Replace("\r", "\\r", StringComparison.Ordinal)
-            .Replace("\n", "\\n", StringComparison.Ordinal)
-            .Replace("\t", "\\t", StringComparison.Ordinal);
-        return $"\"{escaped}\"";
     }
 
     internal static string EscapePgPass(string value)
@@ -268,21 +286,5 @@ public sealed class ProjectDatabaseProvisioner
     private static void EnsureFile(string path, string message)
     {
         if (!File.Exists(path)) throw new FileNotFoundException(message, path);
-    }
-
-    private static void DeleteSensitiveFile(string path)
-    {
-        try
-        {
-            if (!File.Exists(path)) return;
-            File.SetAttributes(path, FileAttributes.Normal);
-            File.Delete(path);
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
     }
 }

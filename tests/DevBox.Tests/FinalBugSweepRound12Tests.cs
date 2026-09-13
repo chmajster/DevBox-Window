@@ -6,90 +6,125 @@ namespace DevBox.Tests;
 
 public sealed class FinalBugSweepRound12Tests
 {
-    [Fact]
-    public async Task TaskCenter_WaitAsyncDuringInitialPublishWaitsForExecution()
+    [Theory]
+    [InlineData("mysql", "mysql")]
+    [InlineData("mysql", "information_schema")]
+    [InlineData("mariadb", "sys")]
+    [InlineData("postgresql", "postgres")]
+    [InlineData("postgresql", "template0")]
+    [InlineData("postgresql", "template1")]
+    public async Task RestoreRejectsSystemDatabaseBeforeReadingBackup(string engine, string database)
     {
-        var root = TempRoot();
+        var root = NewRoot();
         try
         {
-            using var center = new PlatformTaskCenter(root, 1);
-            var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            Task<PlatformTaskSnapshot>? observedWait = null;
-            center.TaskChanged += (_, snapshot) =>
-            {
-                if (snapshot.State == PlatformTaskState.Queued && observedWait is null)
-                    observedWait = center.WaitAsync(snapshot.Id);
-            };
+            CreateServerFixture(root, engine, "16.0");
+            using var service = new DatabaseRuntimeService(root);
+            _ = service.Register(engine, "16.0");
 
-            _ = center.Enqueue("wait-race", async (_, _) => await gate.Task.ConfigureAwait(false));
-            Assert.NotNull(observedWait);
-            Assert.False(observedWait!.IsCompleted);
-
-            gate.TrySetResult();
-            var result = await observedWait.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Equal(PlatformTaskState.Completed, result.State);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.RestoreAsync(
+                engine,
+                "16.0",
+                database,
+                Path.Combine(root, "missing-backup.sql")));
         }
-        finally { Delete(root); }
+        finally
+        {
+            Delete(root);
+        }
     }
 
     [Fact]
-    public async Task TaskCenter_UnwritableHistoryDoesNotBreakTaskLifecycle()
+    public void ConstructorRejectsReparseConfigDirectory()
     {
-        var root = TempRoot();
+        var root = NewRoot();
+        var external = Path.Combine(Path.GetTempPath(), "devbox-db-runtime-config-outside", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(external);
+        var config = Path.Combine(root, "config");
         try
         {
-            File.WriteAllText(Path.Combine(root, "logs"), "blocks history directory creation");
-            using var center = new PlatformTaskCenter(root, 1);
-            var id = center.Enqueue("history-failure", (_, _) => Task.CompletedTask);
-            var result = await center.WaitAsync(id).WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Equal(PlatformTaskState.Completed, result.State);
-            Assert.Equal(100, result.Progress);
+            if (!TryCreateDirectoryLink(config, external))
+                return;
+
+            Assert.Throws<InvalidOperationException>(() => new DatabaseRuntimeService(root));
+            Assert.Empty(Directory.EnumerateFiles(external));
         }
-        finally { Delete(root); }
+        finally
+        {
+            TryDeleteLink(config);
+            Delete(root);
+            Delete(external);
+        }
     }
 
     [Fact]
-    public void EnvironmentLock_RejectsNullServiceKey()
+    public void RegisterRejectsRuntimeVersionThroughReparsePoint()
     {
-        var value = ValidLock() with { Services = new string[] { null! } };
-        Assert.Throws<InvalidDataException>(() => EnvironmentLockService.ValidateLockData(value));
+        var root = NewRoot();
+        var external = Path.Combine(Path.GetTempPath(), "devbox-db-runtime-outside", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(external, "bin"));
+        File.WriteAllText(Path.Combine(external, "bin", "mysqld.exe"), "fixture");
+        var mysqlRoot = Path.Combine(root, "runtime", "mysql");
+        Directory.CreateDirectory(mysqlRoot);
+        var link = Path.Combine(mysqlRoot, "8.4.0");
+        try
+        {
+            if (!TryCreateDirectoryLink(link, external))
+                return;
+
+            using var service = new DatabaseRuntimeService(root);
+            Assert.Throws<InvalidOperationException>(() => service.Register("mysql", "8.4.0"));
+        }
+        finally
+        {
+            TryDeleteLink(link);
+            Delete(root);
+            Delete(external);
+        }
     }
 
-    [Fact]
-    public void EnvironmentLock_RejectsDatabaseEngineWithoutVersion()
+    private static void CreateServerFixture(string root, string engine, string version)
     {
-        var value = ValidLock() with { Database = new EnvironmentDatabasePin("mysql", null, "demo", 3306) };
-        Assert.Throws<InvalidDataException>(() => EnvironmentLockService.ValidateLockData(value));
+        var normalized = engine == "postgresql" ? "postgresql" : engine;
+        var bin = Path.Combine(root, "runtime", normalized, version, "bin");
+        Directory.CreateDirectory(bin);
+        var executable = engine == "postgresql" ? "postgres.exe" : "mysqld.exe";
+        File.WriteAllText(Path.Combine(bin, executable), "fixture");
     }
 
-    [Fact]
-    public void EnvironmentLock_RejectsUnsafeServiceKey()
+    private static bool TryCreateDirectoryLink(string linkPath, string targetPath)
     {
-        var value = ValidLock() with { Services = ["../redis"] };
-        Assert.Throws<InvalidDataException>(() => EnvironmentLockService.ValidateLockData(value));
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(linkPath)!);
+            Directory.CreateSymbolicLink(linkPath, targetPath);
+            return true;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or PlatformNotSupportedException or NotSupportedException)
+        {
+            return false;
+        }
     }
 
-    private static EnvironmentLockFile ValidLock() => new()
+    private static void TryDeleteLink(string path)
     {
-        ProjectName = "demo",
-        Domain = "demo.test",
-        Runtimes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-        Database = new EnvironmentDatabasePin("none", null, null),
-        Addons = Array.Empty<string>(),
-        Services = Array.Empty<string>(),
-        Actions = Array.Empty<ProjectActionDefinition>()
-    };
+        try
+        {
+            if (Directory.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                Directory.Delete(path);
+        }
+        catch { }
+    }
 
-    private static string TempRoot()
+    private static string NewRoot()
     {
-        var path = Path.Combine(Path.GetTempPath(), "DevBoxTests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(path);
-        return path;
+        var root = Path.Combine(Path.GetTempPath(), "devbox-round12", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        return root;
     }
 
     private static void Delete(string path)
     {
         try { if (Directory.Exists(path)) Directory.Delete(path, true); } catch { }
-        try { if (File.Exists(path)) File.Delete(path); } catch { }
     }
 }

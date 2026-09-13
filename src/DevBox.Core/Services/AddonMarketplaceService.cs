@@ -9,6 +9,7 @@ namespace DevBox.Core.Services;
 public sealed class AddonMarketplaceService : IDisposable
 {
     private const int MaximumCatalogBytes = 2 * 1024 * 1024;
+    private const int MaximumSourceBytes = 256 * 1024;
     private readonly string _rootPath;
     private readonly string _sourcePath;
     private readonly string _addonsPath;
@@ -21,9 +22,15 @@ public sealed class AddonMarketplaceService : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         _rootPath = Path.GetFullPath(rootPath);
-        _sourcePath = Path.Combine(_rootPath, "config", "addon-marketplace-source.json");
-        _addonsPath = Path.Combine(_rootPath, "config", "addons.json");
-        _localAddonsPath = Path.Combine(_rootPath, "config", "addons.local.json");
+        _sourcePath = SafeManagedPath(
+            Path.Combine(_rootPath, "config", "addon-marketplace-source.json"),
+            "Marketplace source configuration cannot escape the DevBox root or traverse a reparse point.");
+        _addonsPath = SafeManagedPath(
+            Path.Combine(_rootPath, "config", "addons.json"),
+            "Marketplace merged catalog cannot escape the DevBox root or traverse a reparse point.");
+        _localAddonsPath = SafeManagedPath(
+            Path.Combine(_rootPath, "config", "addons.local.json"),
+            "Marketplace local catalog cannot escape the DevBox root or traverse a reparse point.");
         _ownsHttpClient = httpClient is null;
         _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
     }
@@ -34,11 +41,19 @@ public sealed class AddonMarketplaceService : IDisposable
         var source = new MarketplaceSource(catalogUrl, signatureUrl, publicKeyPem);
         ValidateSource(source);
         EnsureLocalCatalog();
-        Directory.CreateDirectory(Path.GetDirectoryName(_sourcePath)!);
-        AtomicWrite(_sourcePath, JsonSerializer.Serialize(source, JsonOptions));
+        var sourcePath = EnsureManagedFile(_sourcePath, "Marketplace source configuration cannot traverse a reparse point.");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+        AtomicWrite(sourcePath, JsonSerializer.Serialize(source, JsonOptions));
     }
 
-    public bool IsConfigured => File.Exists(_sourcePath);
+    public bool IsConfigured
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return File.Exists(EnsureManagedFile(_sourcePath, "Marketplace source configuration cannot traverse a reparse point."));
+        }
+    }
 
     public async Task<IReadOnlyList<AddonDefinition>> SyncAsync(CancellationToken cancellationToken = default)
     {
@@ -60,10 +75,12 @@ public sealed class AddonMarketplaceService : IDisposable
             throw new InvalidDataException("Marketplace catalog contains invalid JSON.", ex);
         }
 
-        var merged = MergeCatalogs(LoadCatalogArray(_localAddonsPath, "Local ADDONS catalog"), marketplace);
+        var localPath = EnsureManagedFile(_localAddonsPath, "Marketplace local catalog cannot traverse a reparse point.");
+        var merged = MergeCatalogs(LoadCatalogArray(localPath, "Local ADDONS catalog"), marketplace);
         ValidateCatalogWithAddonCatalog(merged);
-        Directory.CreateDirectory(Path.GetDirectoryName(_addonsPath)!);
-        AtomicWrite(_addonsPath, merged.ToJsonString(JsonOptions));
+        var addonsPath = EnsureManagedFile(_addonsPath, "Marketplace merged catalog cannot traverse a reparse point.");
+        Directory.CreateDirectory(Path.GetDirectoryName(addonsPath)!);
+        AtomicWrite(addonsPath, merged.ToJsonString(JsonOptions));
         return new AddonCatalog(_rootPath).GetAddons();
     }
 
@@ -74,8 +91,9 @@ public sealed class AddonMarketplaceService : IDisposable
         var array = JsonSerializer.SerializeToNode(addons.Select(ToManifestEntry).ToArray(), JsonOptions) as JsonArray
             ?? throw new InvalidDataException("Unable to serialize the local ADDONS catalog.");
         ValidateCatalogWithAddonCatalog(array);
-        Directory.CreateDirectory(Path.GetDirectoryName(_localAddonsPath)!);
-        AtomicWrite(_localAddonsPath, array.ToJsonString(JsonOptions));
+        var localPath = EnsureManagedFile(_localAddonsPath, "Marketplace local catalog cannot traverse a reparse point.");
+        Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
+        AtomicWrite(localPath, array.ToJsonString(JsonOptions));
     }
 
     public async Task InstallOrUpdateAsync(string key, bool syncFirst = true, CancellationToken cancellationToken = default)
@@ -111,11 +129,12 @@ public sealed class AddonMarketplaceService : IDisposable
 
     private MarketplaceSource LoadSource()
     {
-        if (!File.Exists(_sourcePath))
+        var sourcePath = EnsureManagedFile(_sourcePath, "Marketplace source configuration cannot traverse a reparse point.");
+        if (!File.Exists(sourcePath))
             throw new InvalidOperationException("ADDONS marketplace is not configured. Configure a signed catalog source first.");
         try
         {
-            var source = JsonSerializer.Deserialize<MarketplaceSource>(File.ReadAllText(_sourcePath), JsonOptions)
+            var source = JsonSerializer.Deserialize<MarketplaceSource>(ReadTextWithLimit(sourcePath, MaximumSourceBytes, "Marketplace source configuration"), JsonOptions)
                 ?? throw new InvalidDataException("Marketplace source configuration is empty.");
             ValidateSource(source);
             return source;
@@ -128,21 +147,23 @@ public sealed class AddonMarketplaceService : IDisposable
 
     private void EnsureLocalCatalog()
     {
-        if (File.Exists(_localAddonsPath))
+        var localPath = EnsureManagedFile(_localAddonsPath, "Marketplace local catalog cannot traverse a reparse point.");
+        if (File.Exists(localPath))
             return;
 
         _ = new AddonCatalog(_rootPath).GetAddons();
-        var local = LoadCatalogArray(_addonsPath, "ADDONS catalog");
+        var addonsPath = EnsureManagedFile(_addonsPath, "Marketplace merged catalog cannot traverse a reparse point.");
+        var local = LoadCatalogArray(addonsPath, "ADDONS catalog");
         ValidateCatalogWithAddonCatalog(local);
-        Directory.CreateDirectory(Path.GetDirectoryName(_localAddonsPath)!);
-        AtomicWrite(_localAddonsPath, local.ToJsonString(JsonOptions));
+        Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
+        AtomicWrite(localPath, local.ToJsonString(JsonOptions));
     }
 
     private static JsonArray LoadCatalogArray(string path, string label)
     {
         try
         {
-            return JsonNode.Parse(File.ReadAllText(path)) as JsonArray
+            return JsonNode.Parse(ReadTextWithLimit(path, MaximumCatalogBytes, label)) as JsonArray
                 ?? throw new InvalidDataException($"{label} root must be a JSON array.");
         }
         catch (JsonException ex)
@@ -177,12 +198,22 @@ public sealed class AddonMarketplaceService : IDisposable
 
     private void ValidateCatalogWithAddonCatalog(JsonArray merged)
     {
-        var tempRoot = Path.Combine(_rootPath, "tmp", "addon-marketplace-validate", Guid.NewGuid().ToString("N"));
+        var tempRoot = SafeManagedPath(
+            Path.Combine(_rootPath, "tmp", "addon-marketplace-validate", Guid.NewGuid().ToString("N")),
+            "Marketplace validation directory cannot escape the DevBox root or traverse a reparse point.");
         try
         {
-            Directory.CreateDirectory(Path.Combine(tempRoot, "config"));
-            Directory.CreateDirectory(Path.Combine(tempRoot, "www"));
-            File.WriteAllText(Path.Combine(tempRoot, "config", "addons.json"), merged.ToJsonString(JsonOptions));
+            var tempConfig = PathSafety.EnsureUnderRootWithoutReparsePoints(
+                tempRoot,
+                Path.Combine(tempRoot, "config"),
+                "Marketplace validation config path cannot traverse a reparse point.");
+            var tempWww = PathSafety.EnsureUnderRootWithoutReparsePoints(
+                tempRoot,
+                Path.Combine(tempRoot, "www"),
+                "Marketplace validation www path cannot traverse a reparse point.");
+            Directory.CreateDirectory(tempConfig);
+            Directory.CreateDirectory(tempWww);
+            File.WriteAllText(Path.Combine(tempConfig, "addons.json"), merged.ToJsonString(JsonOptions));
             _ = new AddonCatalog(tempRoot).GetAddons();
         }
         finally
@@ -247,24 +278,60 @@ public sealed class AddonMarketplaceService : IDisposable
             if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
                 throw new InvalidDataException("Marketplace catalog and signature URLs must use HTTPS.");
         }
-        if (string.IsNullOrWhiteSpace(source.PublicKeyPem) || !source.PublicKeyPem.Contains("BEGIN PUBLIC KEY", StringComparison.Ordinal))
-            throw new InvalidDataException("Marketplace source requires an RSA public key in PEM format.");
+        if (string.IsNullOrWhiteSpace(source.PublicKeyPem) ||
+            source.PublicKeyPem.Length > 64 * 1024 ||
+            !source.PublicKeyPem.Contains("BEGIN PUBLIC KEY", StringComparison.Ordinal))
+            throw new InvalidDataException("Marketplace source requires a bounded RSA public key in PEM format.");
     }
 
-    private object ToManifestEntry(AddonDefinition addon) => new
+    private object ToManifestEntry(AddonDefinition addon)
     {
-        key = addon.Key,
-        displayName = addon.DisplayName,
-        description = addon.Description,
-        installRelativePath = Path.GetRelativePath(_rootPath, Path.GetFullPath(addon.InstallPath)).Replace('\\', '/'),
-        entryPointRelativePath = Path.GetRelativePath(_rootPath, Path.GetFullPath(addon.EntryPointPath)).Replace('\\', '/'),
-        localUrl = addon.LocalUrl,
-        requiredPhpExtensions = addon.RequiredPhpExtensions,
-        version = addon.Version,
-        downloadUrl = addon.DownloadUrl,
-        sha256 = addon.Sha256,
-        archiveRootDirectory = addon.ArchiveRootDirectory
-    };
+        ArgumentNullException.ThrowIfNull(addon);
+        return new
+        {
+            key = addon.Key,
+            displayName = addon.DisplayName,
+            description = addon.Description,
+            installRelativePath = ToRootRelativePath(addon.InstallPath, "ADDON install path"),
+            entryPointRelativePath = ToRootRelativePath(addon.EntryPointPath, "ADDON entry point"),
+            localUrl = addon.LocalUrl,
+            requiredPhpExtensions = addon.RequiredPhpExtensions,
+            version = addon.Version,
+            downloadUrl = addon.DownloadUrl,
+            sha256 = addon.Sha256,
+            archiveRootDirectory = addon.ArchiveRootDirectory
+        };
+    }
+
+    private string ToRootRelativePath(string path, string label)
+    {
+        try
+        {
+            var full = PathSafety.EnsureUnderRootWithoutReparsePoints(
+                _rootPath,
+                path,
+                $"{label} must be inside the DevBox root and cannot traverse a reparse point.");
+            return Path.GetRelativePath(_rootPath, full).Replace('\\', '/');
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new InvalidDataException(ex.Message, ex);
+        }
+    }
+
+    private string EnsureManagedFile(string path, string message) =>
+        SafeManagedPath(path, message);
+
+    private string SafeManagedPath(string path, string message) =>
+        PathSafety.EnsureUnderRootWithoutReparsePoints(_rootPath, path, message);
+
+    private static string ReadTextWithLimit(string path, int maximumBytes, string label)
+    {
+        var info = new FileInfo(path);
+        if (info.Length > maximumBytes)
+            throw new InvalidDataException($"{label} exceeds the configured size limit.");
+        return File.ReadAllText(path);
+    }
 
     private static void AtomicWrite(string path, string content)
     {

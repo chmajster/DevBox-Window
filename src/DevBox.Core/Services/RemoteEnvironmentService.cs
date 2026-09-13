@@ -13,7 +13,10 @@ public sealed class RemoteEnvironmentService
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         _rootPath = Path.GetFullPath(rootPath);
-        _shareRoot = Path.Combine(_rootPath, "backups", "environment-shares");
+        _shareRoot = PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _rootPath,
+            Path.Combine(_rootPath, "backups", "environment-shares"),
+            "Environment share directory cannot escape the DevBox root or traverse a reparse point.");
         _profiles = new EnvironmentProfileService(_rootPath);
     }
 
@@ -94,9 +97,16 @@ public sealed class RemoteEnvironmentService
         };
         var content = JsonSerializer.Serialize(bundle, JsonOptions);
         EnsureNoSensitiveMaterial(content);
+        _ = PathSafety.EnsureUnderRootWithoutReparsePoints(
+            _rootPath,
+            _shareRoot,
+            "Environment share directory cannot escape the DevBox root or traverse a reparse point.");
         Directory.CreateDirectory(_shareRoot);
         var destination = string.IsNullOrWhiteSpace(destinationPath)
-            ? Path.Combine(_shareRoot, $"{SafeFileName(name)}-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.devbox-env.json")
+            ? PathSafety.EnsureUnderRootWithoutReparsePoints(
+                _shareRoot,
+                Path.Combine(_shareRoot, $"{SafeFileName(name)}-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.devbox-env.json"),
+                "Environment share destination cannot traverse a reparse point.")
             : Path.GetFullPath(destinationPath);
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         AtomicWrite(destination, content);

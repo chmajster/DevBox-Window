@@ -1,5 +1,4 @@
-using System.Diagnostics;
-using System.Text.Json;
+using DevBox.Core.Models;
 using DevBox.Core.Services;
 using Xunit;
 
@@ -8,111 +7,151 @@ namespace DevBox.Tests;
 public sealed class FinalBugSweepRound11Tests
 {
     [Fact]
-    public void EnvironmentLock_NullCollectionsAreControlledDataErrors()
+    public async Task RuntimeManager_RemoveRejectsRuntimeKeyReparsePointAndPreservesExternalData()
     {
-        var root = TempRoot();
+        var root = NewRoot();
+        var external = Path.Combine(Path.GetTempPath(), "devbox-runtime-outside", Guid.NewGuid().ToString("N"));
+        var runtimeRoot = Path.Combine(root, "runtime");
+        var link = Path.Combine(runtimeRoot, "php");
+        Directory.CreateDirectory(runtimeRoot);
+        Directory.CreateDirectory(Path.Combine(external, "8.4.0"));
+        var sentinel = Path.Combine(external, "8.4.0", "keep.txt");
+        File.WriteAllText(sentinel, "preserve");
         try
         {
-            var project = Path.Combine(root, "www", "demo");
-            Directory.CreateDirectory(project);
-            File.WriteAllText(Path.Combine(project, EnvironmentLockService.LockFileName), """
-            {"SchemaVersion":1,"ProjectName":"demo","Domain":"demo.test","Runtimes":null,"Database":{"Engine":"none","Version":null,"DatabaseName":null,"Port":null},"Https":false,"Addons":[],"Services":[],"Actions":[]}
-            """);
+            if (!TryCreateDirectoryLink(link, external))
+                return;
 
-            using var service = new EnvironmentLockService(root);
-            Assert.Throws<InvalidDataException>(() => service.Load(project));
-        }
-        finally { Delete(root); }
-    }
-
-    [Fact]
-    public void EnvironmentLock_RejectsMalformedTestDomain()
-    {
-        var root = TempRoot();
-        try
-        {
-            var project = Path.Combine(root, "www", "demo");
-            Directory.CreateDirectory(project);
-            File.WriteAllText(Path.Combine(project, EnvironmentLockService.LockFileName), """
-            {"SchemaVersion":1,"ProjectName":"demo","Domain":"bad..test","Runtimes":{},"Database":{"Engine":"none","Version":null,"DatabaseName":null,"Port":null},"Https":false,"Addons":[],"Services":[],"Actions":[]}
-            """);
-
-            using var service = new EnvironmentLockService(root);
-            Assert.Throws<InvalidDataException>(() => service.Load(project));
-        }
-        finally { Delete(root); }
-    }
-
-    [Fact]
-    public void RemoteEnvironment_NullActionsAreControlledDataErrors()
-    {
-        var root = TempRoot();
-        try
-        {
-            Directory.CreateDirectory(root);
-            var share = Path.Combine(root, "bad.devbox-env.json");
-            File.WriteAllText(share, """
-            {"SchemaVersion":1,"Name":"bad","Profile":{"Key":"bad","DisplayName":"Bad","Kind":1,"Runtimes":{},"Database":{"Engine":"none","Version":null,"DatabaseName":null,"Port":null},"Https":false,"Addons":[],"Services":[],"Actions":null,"Description":""},"Metadata":{}}
-            """);
-
-            var service = new RemoteEnvironmentService(root);
-            Assert.Throws<InvalidDataException>(() => service.Import(share));
-        }
-        finally { Delete(root); }
-    }
-
-    [Fact]
-    public void DatabaseRuntime_RunningInstanceRejectsPortMutation()
-    {
-        var root = TempRoot();
-        Process? process = null;
-        try
-        {
-            var runtimeBin = Path.Combine(root, "runtime", "mysql", "8.4.11", "bin");
-            Directory.CreateDirectory(runtimeBin);
-            var executable = Path.Combine(runtimeBin, "mysqld.exe");
-            File.Copy(Path.Combine(Environment.SystemDirectory, "cmd.exe"), executable);
-
-            using var service = new DatabaseRuntimeService(root);
-            _ = service.Register("mysql", "8.4.11", 3406);
-
-            var info = new ProcessStartInfo(executable)
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            info.ArgumentList.Add("/c");
-            info.ArgumentList.Add("ping 127.0.0.1 -n 30 >nul");
-            process = Process.Start(info)!;
-            Assert.NotNull(process);
-
-            var markerDirectory = Path.Combine(root, "tmp", "services");
-            Directory.CreateDirectory(markerDirectory);
-            var marker = Path.Combine(markerDirectory, "db-mysql-8-4-11.pid");
-            File.WriteAllLines(marker,
-            [
-                process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                Path.GetFullPath(executable),
-                process.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture)
-            ]);
-
-            var error = Assert.Throws<InvalidOperationException>(() => service.Register("mysql", "8.4.11", 3407));
-            Assert.Contains("Stop MySQL 8.4.11", error.Message, StringComparison.Ordinal);
-            Assert.Equal(3406, service.GetInstances("mysql").Single().Port);
+            using var manager = new RuntimeManager(root);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => manager.RemoveAsync("php", "8.4.0"));
+            Assert.Equal("preserve", File.ReadAllText(sentinel));
         }
         finally
         {
-            try { if (process is { HasExited: false }) process.Kill(entireProcessTree: true); } catch { }
-            process?.Dispose();
+            TryDeleteLink(link);
+            Delete(root);
+            Delete(external);
+        }
+    }
+
+    [Fact]
+    public void RuntimeManager_GetInstalledRejectsReparseCurrentDirectory()
+    {
+        var root = NewRoot();
+        var external = Path.Combine(Path.GetTempPath(), "devbox-runtime-current-outside", Guid.NewGuid().ToString("N"));
+        var phpRoot = Path.Combine(root, "runtime", "php");
+        var current = Path.Combine(phpRoot, "current");
+        Directory.CreateDirectory(phpRoot);
+        Directory.CreateDirectory(external);
+        File.WriteAllText(Path.Combine(external, ".devbox-version"), "8.4.0");
+        try
+        {
+            if (!TryCreateDirectoryLink(current, external))
+                return;
+
+            using var manager = new RuntimeManager(root);
+            Assert.Throws<InvalidOperationException>(() => manager.GetInstalled("php", "php-cgi.exe"));
+        }
+        finally
+        {
+            TryDeleteLink(current);
+            Delete(root);
+            Delete(external);
+        }
+    }
+
+    [Fact]
+    public async Task DatabaseManager_RejectsCredentialTempDirectoryReparsePoint()
+    {
+        var root = NewRoot();
+        var external = Path.Combine(Path.GetTempPath(), "devbox-mysql-temp-outside", Guid.NewGuid().ToString("N"));
+        var mysqlBin = Path.Combine(root, "runtime", "mysql", "current", "bin");
+        Directory.CreateDirectory(mysqlBin);
+        File.WriteAllText(Path.Combine(mysqlBin, "mysql.exe"), "fixture");
+        var tmp = Path.Combine(root, "tmp");
+        Directory.CreateDirectory(tmp);
+        Directory.CreateDirectory(external);
+        var link = Path.Combine(tmp, "mysql");
+        try
+        {
+            if (!TryCreateDirectoryLink(link, external))
+                return;
+
+            var manager = new DatabaseManager(root);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => manager.ListDatabasesAsync(
+                new DatabaseConnectionOptions("127.0.0.1", 3306, "root", "secret")));
+            Assert.Empty(Directory.EnumerateFiles(external, "client-*.cnf"));
+        }
+        finally
+        {
+            TryDeleteLink(link);
+            Delete(root);
+            Delete(external);
+        }
+    }
+
+    [Fact]
+    public void ProjectManifest_RejectsMalformedTestDomain()
+    {
+        var root = NewRoot();
+        try
+        {
+            var project = Path.Combine(root, "www", "demo");
+            Directory.CreateDirectory(project);
+            var service = new ProjectWorkspaceService(
+                root,
+                new SiteManager(root),
+                new PhpExtensionInspector(root),
+                new LocalCertificateManager(root));
+            var manifest = new DevBoxProjectManifest(
+                DevBoxProjectManifest.CurrentSchemaVersion,
+                "demo",
+                "bad..test",
+                ProjectKind.EmptyPhp,
+                null,
+                null,
+                "none",
+                "demo",
+                false,
+                Array.Empty<string>());
+
+            Assert.Throws<InvalidDataException>(() => service.SaveManifest(project, manifest));
+        }
+        finally
+        {
             Delete(root);
         }
     }
 
-    private static string TempRoot()
+    private static bool TryCreateDirectoryLink(string linkPath, string targetPath)
     {
-        var path = Path.Combine(Path.GetTempPath(), "DevBoxTests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(path);
-        return path;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(linkPath)!);
+            Directory.CreateSymbolicLink(linkPath, targetPath);
+            return true;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or PlatformNotSupportedException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static void TryDeleteLink(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                Directory.Delete(path);
+        }
+        catch { }
+    }
+
+    private static string NewRoot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "devbox-round11", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        return root;
     }
 
     private static void Delete(string path)

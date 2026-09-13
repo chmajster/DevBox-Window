@@ -19,13 +19,17 @@ public sealed class ConfigurationFileService
 
     public IReadOnlyList<string> GetKnownConfigurations() => ["nginx", "php", "mysql"];
 
-    public string GetPath(string key) => NormalizeKey(key) switch
+    public string GetPath(string key)
     {
-        "nginx" => Path.Combine(_rootPath, "config", "nginx", "nginx.conf"),
-        "php" => Path.Combine(_rootPath, "config", "php", "php.ini"),
-        "mysql" => Path.Combine(_rootPath, "config", "mysql", "my.ini"),
-        _ => throw new KeyNotFoundException($"Configuration '{key}' is not supported.")
-    };
+        var path = NormalizeKey(key) switch
+        {
+            "nginx" => Path.Combine(_rootPath, "config", "nginx", "nginx.conf"),
+            "php" => Path.Combine(_rootPath, "config", "php", "php.ini"),
+            "mysql" => Path.Combine(_rootPath, "config", "mysql", "my.ini"),
+            _ => throw new KeyNotFoundException($"Configuration '{key}' is not supported.")
+        };
+        return EnsureRootOwnedPath(path, "Configuration paths cannot escape the DevBox root or traverse a reparse point.");
+    }
 
     public string Read(string key)
     {
@@ -47,7 +51,9 @@ public sealed class ConfigurationFileService
         if (content.Contains('\0'))
             return new ConfigurationValidationResult(false, normalized, null, "Configuration contains a NUL character.");
 
-        var tempRoot = Path.Combine(_rootPath, "tmp", "config-validation", Guid.NewGuid().ToString("N"));
+        var tempRoot = EnsureRootOwnedPath(
+            Path.Combine(_rootPath, "tmp", "config-validation", Guid.NewGuid().ToString("N")),
+            "Configuration validation temporary files cannot escape the DevBox root or traverse a reparse point.");
         Directory.CreateDirectory(tempRoot);
         try
         {
@@ -84,8 +90,10 @@ public sealed class ConfigurationFileService
         string? backupPath = null;
         if (File.Exists(path))
         {
-            Directory.CreateDirectory(_backupRoot);
-            backupPath = Path.Combine(_backupRoot, $"{normalized}-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}{Path.GetExtension(path)}.bak");
+            backupPath = EnsureRootOwnedPath(
+                Path.Combine(_backupRoot, $"{normalized}-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}{Path.GetExtension(path)}.bak"),
+                "Configuration backup paths cannot escape the DevBox root or traverse a reparse point.");
+            Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
             File.Copy(path, backupPath, overwrite: false);
         }
 
@@ -115,12 +123,15 @@ public sealed class ConfigurationFileService
     public void RestoreBackup(string key, string backupPath)
     {
         var normalized = NormalizeKey(key);
-        var source = PathSafety.EnsureUnderRootWithoutReparsePoints(
-            _backupRoot,
-            backupPath,
-            "Configuration backups can only be restored from the DevBox backup directory and cannot traverse a reparse point.");
+        var source = Path.GetFullPath(backupPath);
+        var allowedRoot = Path.GetFullPath(_backupRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!source.StartsWith(allowedRoot, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Configuration backups can only be restored from the DevBox backup directory.");
         if (!File.Exists(source))
             throw new FileNotFoundException("Configuration backup does not exist.", source);
+        source = EnsureRootOwnedPath(
+            source,
+            "Configuration backups can only be restored from the DevBox backup directory and cannot traverse a reparse point.");
         var fileName = Path.GetFileName(source);
         if (!fileName.StartsWith(normalized + "-", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"Backup '{fileName}' does not belong to configuration '{normalized}'.");
@@ -282,6 +293,9 @@ public sealed class ConfigurationFileService
             throw new InvalidDataException($"{displayName} exceeds the {MaximumConfigurationBytes} byte safety limit.");
         return File.ReadAllText(path);
     }
+
+    private string EnsureRootOwnedPath(string path, string message) =>
+        PathSafety.EnsureUnderRootWithoutReparsePoints(_rootPath, path, message);
 
     private static string NormalizeKey(string key)
     {

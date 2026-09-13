@@ -28,11 +28,26 @@ public sealed class AddonInstaller : IDisposable
         EnsureInstallPathIsSafe(addon);
         using var addonLock = await CrossProcessFileLock.AcquireAsync(AddonLockPath(addon), cancellationToken, TimeSpan.FromSeconds(30)).ConfigureAwait(false);
 
-        var tempRoot = Path.Combine(_rootPath, "tmp", "addons", addon.Key, Guid.NewGuid().ToString("N"));
-        var archivePath = Path.Combine(tempRoot, "package.zip");
-        var extractPath = Path.Combine(tempRoot, "extract");
-        var stagingPath = Path.Combine(tempRoot, "staging");
+        if (Directory.Exists(addon.InstallPath) &&
+            Directory.EnumerateFileSystemEntries(addon.InstallPath).Any() &&
+            !AddonOwnership.IsOwned(_rootPath, addon))
+        {
+            throw new InvalidOperationException(
+                $"Refusing to install {addon.DisplayName} over '{addon.InstallPath}' because that directory is not owned by DevBox.");
+        }
 
+        var tempRoot = SafeManagedPath(
+            Path.Combine(_rootPath, "tmp", "addons", addon.Key, Guid.NewGuid().ToString("N")),
+            "Addon temporary directory cannot escape the DevBox root or traverse a reparse point.");
+        var archivePath = SafeManagedPath(
+            Path.Combine(tempRoot, "package.zip"),
+            "Addon download path cannot escape the DevBox root or traverse a reparse point.");
+        var extractPath = SafeManagedPath(
+            Path.Combine(tempRoot, "extract"),
+            "Addon extraction path cannot escape the DevBox root or traverse a reparse point.");
+        var stagingPath = SafeManagedPath(
+            Path.Combine(tempRoot, "staging"),
+            "Addon staging path cannot escape the DevBox root or traverse a reparse point.");
         Directory.CreateDirectory(tempRoot);
 
         try
@@ -41,34 +56,35 @@ public sealed class AddonInstaller : IDisposable
             VerifySha256(archivePath, addon.Sha256);
             ExtractZipSafely(archivePath, extractPath);
 
-            var sourcePath = Path.Combine(extractPath, addon.ArchiveRootDirectory);
+            var sourcePath = PathSafety.EnsureUnderRootWithoutReparsePoints(
+                extractPath,
+                Path.Combine(extractPath, addon.ArchiveRootDirectory),
+                "Addon archive root cannot escape the extraction directory or traverse a reparse point.");
             if (!Directory.Exists(sourcePath))
-            {
                 throw new InvalidDataException($"Archive root '{addon.ArchiveRootDirectory}' was not found.");
-            }
 
             CopyDirectory(sourcePath, stagingPath, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-
             if (!File.Exists(Path.Combine(stagingPath, "index.php")))
-            {
                 throw new InvalidDataException("Downloaded addon does not contain index.php.");
-            }
 
             cancellationToken.ThrowIfCancellationRequested();
             var backupPath = SwapInStagingDirectory(stagingPath, addon.InstallPath);
             try
             {
                 ConfigureAddon(addon);
+                AddonOwnership.WriteMarker(addon);
             }
-            catch
+            catch (Exception original)
             {
-                RollbackInstallation(addon.InstallPath, backupPath);
-                if (backupPath is null)
+                var rollbackActions = new List<Action>
                 {
-                    DeleteAddonNginxConfig(addon);
-                }
-                throw;
+                    () => RollbackInstallation(addon.InstallPath, backupPath)
+                };
+                if (backupPath is null)
+                    rollbackActions.Add(() => DeleteAddonNginxConfig(addon));
+                RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
+                throw new InvalidOperationException("Addon installation rollback executor returned unexpectedly.");
             }
 
             TryDeleteDirectory(backupPath);
@@ -88,11 +104,15 @@ public sealed class AddonInstaller : IDisposable
         using var addonLock = CrossProcessFileLock.Acquire(AddonLockPath(addon), TimeSpan.FromSeconds(30));
 
         if (!File.Exists(addon.EntryPointPath))
-        {
             throw new InvalidOperationException($"{addon.DisplayName} is not installed.");
+        if (!AddonOwnership.IsOwned(_rootPath, addon))
+        {
+            throw new InvalidOperationException(
+                $"{addon.InstallPath} exists but is not recognized as a DevBox-managed {addon.DisplayName} installation.");
         }
 
         ConfigureAddon(addon);
+        AddonOwnership.WriteMarker(addon);
         return Task.CompletedTask;
     }
 
@@ -104,24 +124,38 @@ public sealed class AddonInstaller : IDisposable
         EnsureInstallPathIsSafe(addon);
         using var addonLock = CrossProcessFileLock.Acquire(AddonLockPath(addon), TimeSpan.FromSeconds(30));
 
+        var owned = AddonOwnership.IsOwned(_rootPath, addon);
         string? trashPath = null;
         if (Directory.Exists(addon.InstallPath))
         {
-            var trashRoot = Path.Combine(_rootPath, "tmp", "addons", "trash");
+            if (!owned)
+            {
+                throw new InvalidOperationException(
+                    $"Refusing to remove '{addon.InstallPath}' because it is not recognized as a DevBox-managed addon directory.");
+            }
+
+            var trashRoot = SafeManagedPath(
+                Path.Combine(_rootPath, "tmp", "addons", "trash"),
+                "Addon trash directory cannot escape the DevBox root or traverse a reparse point.");
             Directory.CreateDirectory(trashRoot);
-            trashPath = Path.Combine(trashRoot, $"{addon.Key}-{Guid.NewGuid():N}");
+            trashPath = SafeManagedPath(
+                Path.Combine(trashRoot, $"{addon.Key}-{Guid.NewGuid():N}"),
+                "Addon trash path cannot escape the DevBox root or traverse a reparse point.");
             Directory.Move(addon.InstallPath, trashPath);
         }
 
         try
         {
-            DeleteAddonNginxConfig(addon);
+            if (owned)
+                DeleteAddonNginxConfig(addon);
         }
-        catch
+        catch (Exception original)
         {
+            var rollbackActions = new List<Action>();
             if (trashPath is not null && Directory.Exists(trashPath) && !Directory.Exists(addon.InstallPath))
-                Directory.Move(trashPath, addon.InstallPath);
-            throw;
+                rollbackActions.Add(() => Directory.Move(trashPath, addon.InstallPath));
+            RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
+            throw new InvalidOperationException("Addon uninstall rollback executor returned unexpectedly.");
         }
 
         TryDeleteDirectory(trashPath);
@@ -131,23 +165,16 @@ public sealed class AddonInstaller : IDisposable
     public void Dispose()
     {
         if (_disposed)
-        {
             return;
-        }
-
         _disposed = true;
         if (_ownsHttpClient)
-        {
             _httpClient.Dispose();
-        }
     }
 
     private async Task DownloadAsync(string url, string destination, CancellationToken cancellationToken)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
-        {
             throw new InvalidDataException("Addon download URL must use HTTPS.");
-        }
 
         await ArchiveSafety.DownloadToFileAsync(
             _httpClient,
@@ -162,9 +189,7 @@ public sealed class AddonInstaller : IDisposable
     {
         var normalizedExpectedSha256 = expectedSha256?.Trim();
         if (string.IsNullOrWhiteSpace(normalizedExpectedSha256) || normalizedExpectedSha256.Length != 64)
-        {
             throw new InvalidDataException("Invalid expected SHA-256 value.");
-        }
 
         byte[] expected;
         try
@@ -179,9 +204,7 @@ public sealed class AddonInstaller : IDisposable
         using var stream = File.OpenRead(filePath);
         var actual = SHA256.HashData(stream);
         if (!CryptographicOperations.FixedTimeEquals(actual, expected))
-        {
             throw new InvalidDataException($"SHA-256 verification failed. Expected {Convert.ToHexString(expected).ToLowerInvariant()}, got {Convert.ToHexString(actual).ToLowerInvariant()}.");
-        }
     }
 
     internal static void ExtractZipSafely(string archivePath, string destinationPath) =>
@@ -195,9 +218,7 @@ public sealed class AddonInstaller : IDisposable
     internal static bool IsPhpMyAdminConfigUsable(string content, int? expectedPort = null)
     {
         if (string.IsNullOrWhiteSpace(content) || !content.Contains("<?php", StringComparison.OrdinalIgnoreCase))
-        {
             return false;
-        }
 
         var requiredFragments = new[]
         {
@@ -219,13 +240,17 @@ public sealed class AddonInstaller : IDisposable
         WriteAddonNginxConfig(addon);
 
         if (!addon.Key.Equals("phpmyadmin", StringComparison.OrdinalIgnoreCase))
-        {
             return;
-        }
 
-        var tempDirectory = Path.Combine(addon.InstallPath, "tmp");
+        var tempDirectory = PathSafety.EnsureUnderRootWithoutReparsePoints(
+            addon.InstallPath,
+            Path.Combine(addon.InstallPath, "tmp"),
+            "Addon temporary application directory cannot traverse a reparse point.");
         Directory.CreateDirectory(tempDirectory);
-        var configPath = Path.Combine(addon.InstallPath, "config.inc.php");
+        var configPath = PathSafety.EnsureUnderRootWithoutReparsePoints(
+            addon.InstallPath,
+            Path.Combine(addon.InstallPath, "config.inc.php"),
+            "Addon configuration path cannot traverse a reparse point.");
         var databasePort = ResolvePhpMyAdminPort();
         if (File.Exists(configPath))
         {
@@ -269,19 +294,11 @@ $cfg['TempDir'] = 'tmp';
 
     private void WriteAddonNginxConfig(AddonDefinition addon)
     {
-        if (!Uri.TryCreate(addon.LocalUrl, UriKind.Absolute, out var uri) ||
-            uri.Scheme != Uri.UriSchemeHttp ||
-            !uri.Host.EndsWith(".test", StringComparison.OrdinalIgnoreCase) ||
-            !uri.IsDefaultPort)
-        {
-            throw new InvalidDataException("Addon local URL must use http:// on a valid .test host and the default HTTP port.");
-        }
+        var uri = AddonCatalog.ValidateLocalUrl(addon.LocalUrl, addon.Key);
 
         var relativeRoot = Path.GetRelativePath(_rootPath, addon.InstallPath).Replace('\\', '/');
         if (relativeRoot.StartsWith("../", StringComparison.Ordinal) || relativeRoot == "..")
-        {
             throw new InvalidOperationException("Addon install path escapes the DevBox root.");
-        }
 
         var configPath = GetAddonNginxConfigPath(addon);
         var config = $$"""
@@ -309,21 +326,23 @@ server {
     {
         var configPath = GetAddonNginxConfigPath(addon);
         if (File.Exists(configPath))
-        {
             File.Delete(configPath);
-        }
     }
 
     private string GetAddonNginxConfigPath(AddonDefinition addon)
     {
-        var host = new Uri(addon.LocalUrl).Host;
-        return Path.Combine(_rootPath, "config", "nginx", "sites-enabled", $"{host}.conf");
+        var host = AddonCatalog.ValidateLocalUrl(addon.LocalUrl, addon.Key).Host;
+        return SafeManagedPath(
+            Path.Combine(_rootPath, "config", "nginx", "sites-enabled", $"{host}.conf"),
+            "Addon Nginx configuration cannot escape the DevBox root or traverse a reparse point.");
     }
 
     private string AddonLockPath(AddonDefinition addon)
     {
         var safeKey = new string(addon.Key.Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '-').ToArray());
-        return Path.Combine(_rootPath, "tmp", "locks", $"addon-{safeKey}.lock");
+        return SafeManagedPath(
+            Path.Combine(_rootPath, "tmp", "locks", $"addon-{safeKey}.lock"),
+            "Addon lock path cannot escape the DevBox root or traverse a reparse point.");
     }
 
     private static void AtomicWrite(string path, string content)
@@ -335,20 +354,14 @@ server {
         {
             File.WriteAllText(tempPath, content);
             if (File.Exists(path))
-            {
                 File.Replace(tempPath, path, null);
-            }
             else
-            {
                 File.Move(tempPath, path);
-            }
         }
         finally
         {
             if (File.Exists(tempPath))
-            {
                 File.Delete(tempPath);
-            }
         }
     }
 
@@ -357,6 +370,7 @@ server {
         if (string.IsNullOrWhiteSpace(addon.Key) || addon.Key.Length > 64 ||
             addon.Key.Any(character => !char.IsLetterOrDigit(character) && character is not '-' and not '_'))
             throw new InvalidDataException("Addon key contains invalid characters or exceeds 64 characters.");
+
         _ = PathSafety.EnsureUnderRootWithoutReparsePoints(
             Path.Combine(_rootPath, "www"),
             addon.InstallPath,
@@ -365,32 +379,48 @@ server {
             addon.InstallPath,
             addon.EntryPointPath,
             "Addon entry point must remain inside the addon install directory and cannot traverse a reparse point.");
-        if (!Uri.TryCreate(addon.LocalUrl, UriKind.Absolute, out var uri) ||
-            uri.Scheme != Uri.UriSchemeHttp || !uri.Host.EndsWith(".test", StringComparison.OrdinalIgnoreCase) || !uri.IsDefaultPort)
-            throw new InvalidDataException("Addon local URL must use http:// on a valid .test host and the default HTTP port.");
+
+        _ = AddonCatalog.ValidateLocalUrl(addon.LocalUrl, addon.Key);
     }
+
+    private string SafeManagedPath(string path, string message) =>
+        PathSafety.EnsureUnderRootWithoutReparsePoints(_rootPath, path, message);
 
     private static void CopyDirectory(string sourcePath, string destinationPath, CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(destinationPath);
-        foreach (var directory in Directory.GetDirectories(sourcePath, "*", SearchOption.AllDirectories))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
-                throw new InvalidDataException("Addon package contains a reparse point.");
-            var relative = Path.GetRelativePath(sourcePath, directory);
-            Directory.CreateDirectory(Path.Combine(destinationPath, relative));
-        }
+        var sourceRoot = Path.GetFullPath(sourcePath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        cancellationToken.ThrowIfCancellationRequested();
+        if ((File.GetAttributes(sourceRoot) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("Addon package root cannot be a reparse point.");
 
-        foreach (var file in Directory.GetFiles(sourcePath, "*", SearchOption.AllDirectories))
+        Directory.CreateDirectory(destinationPath);
+        var pending = new Stack<string>();
+        pending.Push(sourceRoot);
+        while (pending.Count > 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
-                throw new InvalidDataException("Addon package contains a reparse point.");
-            var relative = Path.GetRelativePath(sourcePath, file);
-            var target = Path.Combine(destinationPath, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.Copy(file, target, overwrite: true);
+            var current = pending.Pop();
+
+            foreach (var file in Directory.EnumerateFiles(current, "*", SearchOption.TopDirectoryOnly))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException("Addon package contains a reparse point.");
+                var relative = Path.GetRelativePath(sourceRoot, file);
+                var target = Path.Combine(destinationPath, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(file, target, overwrite: true);
+            }
+
+            foreach (var directory in Directory.EnumerateDirectories(current, "*", SearchOption.TopDirectoryOnly))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException("Addon package contains a reparse point.");
+                var relative = Path.GetRelativePath(sourceRoot, directory);
+                Directory.CreateDirectory(Path.Combine(destinationPath, relative));
+                pending.Push(directory);
+            }
         }
     }
 
@@ -398,9 +428,7 @@ server {
     {
         var installParent = Path.GetDirectoryName(Path.GetFullPath(installPath));
         if (string.IsNullOrWhiteSpace(installParent))
-        {
             throw new InvalidOperationException("Addon install path has no parent directory.");
-        }
 
         Directory.CreateDirectory(installParent);
         string? backupPath = null;
@@ -415,13 +443,13 @@ server {
             Directory.Move(stagingPath, installPath);
             return backupPath;
         }
-        catch
+        catch (Exception original)
         {
+            var rollbackActions = new List<Action>();
             if (backupPath is not null && Directory.Exists(backupPath) && !Directory.Exists(installPath))
-            {
-                Directory.Move(backupPath, installPath);
-            }
-            throw;
+                rollbackActions.Add(() => Directory.Move(backupPath, installPath));
+            RollbackExecutor.RethrowAfterRollback(original, rollbackActions.ToArray());
+            throw new InvalidOperationException("Addon staging rollback executor returned unexpectedly.");
         }
     }
 
@@ -429,17 +457,13 @@ server {
     {
         DeleteDirectoryIfExists(installPath);
         if (backupPath is not null && Directory.Exists(backupPath))
-        {
             Directory.Move(backupPath, installPath);
-        }
     }
 
     private static void DeleteDirectoryIfExists(string? path)
     {
         if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
-        {
             return;
-        }
         Directory.Delete(path, recursive: true);
     }
 
@@ -449,11 +473,7 @@ server {
         {
             DeleteDirectoryIfExists(path);
         }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 }
