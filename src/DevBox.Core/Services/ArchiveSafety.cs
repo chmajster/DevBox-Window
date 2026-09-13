@@ -6,6 +6,7 @@ internal static class ArchiveSafety
 {
     private const long CompressionRatioCheckThreshold = 1024 * 1024;
     private const double MaximumCompressionRatio = 200d;
+    private const string InvalidWindowsFileNameCharacters = "\"<>|?*";
 
     public static async Task DownloadToFileAsync(
         HttpClient httpClient,
@@ -172,11 +173,47 @@ internal static class ArchiveSafety
             throw new InvalidDataException($"Unsafe ZIP entry detected in {packageName}: {entry.FullName}");
         }
 
+        ValidateWindowsCompatiblePathSegments(entry.FullName, packageName);
+
         var outputPath = ResolveOutputPath(entry, destinationPath);
         if (!outputPath.StartsWith(destinationRoot, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException($"Unsafe ZIP entry detected in {packageName}: {entry.FullName}");
         }
+    }
+
+    private static void ValidateWindowsCompatiblePathSegments(string entryName, string packageName)
+    {
+        foreach (var segment in entryName.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (segment is "." or ".." || segment[^1] is ' ' or '.')
+                throw new InvalidDataException($"Unsafe or ambiguous Windows ZIP entry detected in {packageName}: {entryName}");
+
+            if (segment.Any(character => character < ' ' || InvalidWindowsFileNameCharacters.Contains(character)))
+                throw new InvalidDataException($"ZIP entry contains a Windows-invalid filename segment in {packageName}: {entryName}");
+
+            if (IsReservedWindowsDeviceName(segment))
+                throw new InvalidDataException($"ZIP entry uses a reserved Windows device name in {packageName}: {entryName}");
+        }
+    }
+
+    private static bool IsReservedWindowsDeviceName(string segment)
+    {
+        var separator = segment.IndexOf('.');
+        var baseName = (separator >= 0 ? segment[..separator] : segment).TrimEnd(' ', '.');
+        if (baseName.Equals("CON", StringComparison.OrdinalIgnoreCase) ||
+            baseName.Equals("PRN", StringComparison.OrdinalIgnoreCase) ||
+            baseName.Equals("AUX", StringComparison.OrdinalIgnoreCase) ||
+            baseName.Equals("NUL", StringComparison.OrdinalIgnoreCase) ||
+            baseName.Equals("CLOCK$", StringComparison.OrdinalIgnoreCase) ||
+            baseName.Equals("CONIN$", StringComparison.OrdinalIgnoreCase) ||
+            baseName.Equals("CONOUT$", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return baseName.Length == 4 &&
+               (baseName.StartsWith("COM", StringComparison.OrdinalIgnoreCase) ||
+                baseName.StartsWith("LPT", StringComparison.OrdinalIgnoreCase)) &&
+               baseName[3] is >= '1' and <= '9';
     }
 
     private static string ResolveOutputPath(ZipArchiveEntry entry, string destinationPath) =>
