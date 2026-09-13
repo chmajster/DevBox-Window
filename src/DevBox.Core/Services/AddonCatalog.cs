@@ -5,6 +5,7 @@ namespace DevBox.Core.Services;
 
 public sealed class AddonCatalog
 {
+    private const long MaximumCatalogBytes = 2L * 1024 * 1024;
     private readonly string _rootPath;
     private readonly string _catalogPath;
 
@@ -29,7 +30,7 @@ public sealed class AddonCatalog
             var catalogPath = SafeManagedPath(
                 _catalogPath,
                 "Addon catalog cannot escape the DevBox root or traverse a reparse point.");
-            var json = File.ReadAllText(catalogPath);
+            var json = ReadCatalogText(catalogPath);
             var entries = JsonSerializer.Deserialize<List<AddonManifestEntry>>(json, JsonOptions)
                 ?? throw new InvalidDataException("Addon manifest is empty.");
             if (entries.Count == 0)
@@ -246,6 +247,14 @@ public sealed class AddonCatalog
         }
 
         return uri;
+    }
+
+    private static string ReadCatalogText(string path)
+    {
+        var info = new FileInfo(path);
+        if (info.Length > MaximumCatalogBytes)
+            throw new InvalidDataException("Addon manifest exceeds the 2 MiB safety limit.");
+        return File.ReadAllText(path);
     }
 
     private static string NormalizeRequiredPhpExtension(string extension)
