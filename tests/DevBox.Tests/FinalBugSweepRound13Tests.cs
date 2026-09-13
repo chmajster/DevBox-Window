@@ -20,7 +20,7 @@ public sealed class FinalBugSweepRound13Tests
             candidate,
             "candidate must remain under the filesystem root");
 
-        Assert.True(string.Equals(Path.GetFullPath(candidate), result, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(Path.GetFullPath(candidate), result, ignoreCase: true);
     }
 
     [Fact]
@@ -35,7 +35,7 @@ public sealed class FinalBugSweepRound13Tests
             "root should be allowed",
             allowRoot: true);
 
-        Assert.True(string.Equals(Path.GetFullPath(filesystemRoot), result, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(Path.GetFullPath(filesystemRoot), result, ignoreCase: true);
     }
 
     [Theory]
