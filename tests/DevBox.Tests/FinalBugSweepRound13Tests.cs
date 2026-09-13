@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Text.Json;
 using DevBox.Core.Models;
 using DevBox.Core.Services;
 using Xunit;
@@ -122,6 +123,81 @@ public sealed class FinalBugSweepRound13Tests
 
             Assert.False(Directory.Exists(Path.Combine(root, "www", "cancelled-project")));
             Assert.DoesNotContain(sites.GetSites(), item => item.Name.Equals("cancelled-project", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Delete(root);
+        }
+    }
+
+    [Fact]
+    public async Task EnvironmentLock_PreCanceledApply_DoesNotMutateManifestOrSite()
+    {
+        var root = NewRoot();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "www"));
+            var sites = new SiteManager(root);
+            var workspace = new ProjectWorkspaceService(
+                root,
+                sites,
+                new PhpExtensionInspector(root),
+                new LocalCertificateManager(root));
+            _ = workspace.Create(new ProjectCreateRequest(
+                Name: "app",
+                Domain: "app.test",
+                Kind: ProjectKind.Php,
+                Https: false,
+                DatabaseEngine: "none",
+                Addons: Array.Empty<string>()));
+            var project = Path.Combine(root, "www", "app");
+            var desired = new EnvironmentLockFile
+            {
+                ProjectName = "app",
+                Domain = "changed.test",
+                Runtimes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                Database = new EnvironmentDatabasePin("none", null, null),
+                Https = false,
+                Addons = [],
+                Services = [],
+                Actions = []
+            };
+            File.WriteAllText(
+                Path.Combine(project, EnvironmentLockService.LockFileName),
+                JsonSerializer.Serialize(desired));
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+
+            using var service = new EnvironmentLockService(root);
+            await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                service.ApplyLockAsync(project, cancellation.Token));
+
+            Assert.Equal("app.test", workspace.LoadManifest(project)!.Domain);
+            Assert.Equal("app.test", sites.GetSites().Single(item => item.Name == "app").Domain);
+        }
+        finally
+        {
+            Delete(root);
+        }
+    }
+
+    [Fact]
+    public async Task DatabaseRuntime_PreCanceledInitialization_DoesNotPersistRegistration()
+    {
+        var root = NewRoot();
+        try
+        {
+            var bin = Path.Combine(root, "runtime", "mysql", "8.4.99", "bin");
+            Directory.CreateDirectory(bin);
+            File.WriteAllBytes(Path.Combine(bin, "mysqld.exe"), []);
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+
+            using var service = new DatabaseRuntimeService(root);
+            await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                service.EnsureInitializedAsync("mysql", "8.4.99", 34077, cancellation.Token));
+
+            Assert.False(File.Exists(Path.Combine(root, "config", "database-runtimes.json")));
         }
         finally
         {
