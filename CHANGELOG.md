@@ -45,6 +45,10 @@ All notable changes to DevBox Windows are documented here.
 
 ### Fixed
 
+- Audit round 17 closes remaining bounded-metadata/direct-service gaps in Runtime Platform and Project Workspace: runtime catalogs, `devbox.json` and `composer.json` now have explicit size/path protections and are revalidated at the operation boundary.
+- Runtime Platform limits custom/release runtime catalogs to 2 MiB and re-runs reparse-aware root validation before every catalog read and mutation, preventing a post-construction `config` junction from redirecting catalog I/O.
+- `ProjectWorkspaceService.LoadManifest` and `SaveManifest` now operate only on reparse-safe projects inside DevBox `www`; `devbox.json` and `composer.json` reads are bounded to 2 MiB, and symlink/reparse `composer.json` files are rejected instead of followed.
+- Project create/import rollback refuses reparse-point project roots/content before recursive deletion, reducing data-loss risk if a managed project tree is replaced during a failing operation.
 - Audit round 16 hardens the remaining ADDONS/Marketplace/installer boundary cases: strict local-domain parsing, complete ownership markers, direct-service `config`/`tmp` reparse protection, bounded catalog/source reads and dedicated installation-root enforcement.
 - ADDON local URLs now use the same canonical `.test` domain policy as Sites/TLS and reject empty labels, leading/trailing hyphens, user-info, query strings and fragments instead of accepting any host that merely ends with `.test`.
 - ADDON ownership markers must contain both the expected addon key and a syntactically valid version line within a bounded marker file; incomplete one-line markers no longer authorize overwrite, Repair or uninstall while valid older-version markers still support upgrades.
@@ -162,6 +166,7 @@ All notable changes to DevBox Windows are documented here.
 
 ### Security
 
+- Runtime catalog and project metadata operations now repeat reparse-aware boundary validation at the actual read/write point and reject oversized local JSON metadata before materializing it in memory.
 - ADDON ownership, Marketplace catalogs and installer cleanup now fail closed on incomplete ownership evidence, malformed local domains, reparse/junction redirection and unverified/shared installation roots, reducing unintended overwrite/delete paths.
 - Direct service entry points for runtime install/import, database runtime state, self-update, Task Center history and managed environment-share output now enforce reparse-aware DevBox-root boundaries instead of assuming startup initialization already validated the filesystem.
 - Reparse-point/junction boundaries are enforced across project execution/archive operations, ADDONS, configuration, managed services, logs and runtime-layout initialization so DevBox cannot be redirected to read, truncate, execute, archive or delete content outside its managed roots.
