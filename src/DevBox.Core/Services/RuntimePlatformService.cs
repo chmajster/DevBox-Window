@@ -9,6 +9,7 @@ public sealed class RuntimePlatformService : IDisposable
 {
     private const long MaximumImportedRuntimeBytes = 4L * 1024 * 1024 * 1024;
     private const int MaximumImportedEntries = 100_000;
+    private const long MaximumCatalogBytes = 2L * 1024 * 1024;
     private readonly string _rootPath;
     private readonly string _catalogPath;
     private readonly string _releaseCatalogPath;
@@ -284,11 +285,14 @@ public sealed class RuntimePlatformService : IDisposable
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(package);
         ValidatePackage(package);
+        var catalogPath = SafeManagedPath(
+            _catalogPath,
+            "Runtime catalog cannot escape the DevBox root or traverse a reparse point.");
         var lockPath = SafeManagedPath(
-            _catalogPath + ".lock",
+            catalogPath + ".lock",
             "Runtime catalog lock cannot escape the DevBox root or traverse a reparse point.");
         using var mutationLock = CrossProcessFileLock.Acquire(lockPath, TimeSpan.FromSeconds(15));
-        var custom = LoadCatalog(_catalogPath, "config/runtime-catalog.json").ToList();
+        var custom = LoadCatalog(catalogPath, "config/runtime-catalog.json").ToList();
         var index = custom.FindIndex(item =>
             item.Key.Equals(package.Key, StringComparison.OrdinalIgnoreCase) &&
             item.Version.Equals(package.Version, StringComparison.OrdinalIgnoreCase) &&
@@ -298,8 +302,11 @@ public sealed class RuntimePlatformService : IDisposable
         else
             custom.Add(package);
 
-        Directory.CreateDirectory(Path.GetDirectoryName(_catalogPath)!);
-        AtomicWrite(_catalogPath, JsonSerializer.Serialize(custom, JsonOptions));
+        catalogPath = SafeManagedPath(
+            catalogPath,
+            "Runtime catalog cannot escape the DevBox root or traverse a reparse point.");
+        Directory.CreateDirectory(Path.GetDirectoryName(catalogPath)!);
+        AtomicWrite(catalogPath, JsonSerializer.Serialize(custom, JsonOptions));
     }
 
     public void Dispose()
@@ -337,10 +344,17 @@ public sealed class RuntimePlatformService : IDisposable
 
     private IReadOnlyList<RuntimePackageEntry> LoadCatalog(string path, string displayPath)
     {
+        path = SafeManagedPath(
+            path,
+            $"{displayPath} cannot escape the DevBox root or traverse a reparse point.");
         if (!File.Exists(path))
             return Array.Empty<RuntimePackageEntry>();
         try
         {
+            var info = new FileInfo(path);
+            if (info.Length > MaximumCatalogBytes)
+                throw new InvalidDataException($"{displayPath} exceeds the 2 MiB safety limit.");
+
             var packages = JsonSerializer.Deserialize<List<RuntimePackageEntry?>>(File.ReadAllText(path), JsonOptions)
                 ?? new List<RuntimePackageEntry?>();
             if (packages.Any(package => package is null))
