@@ -45,6 +45,22 @@ All notable changes to DevBox Windows are documented here.
 
 ### Fixed
 
+- Final audit rounds 10–15 add regression coverage for archive aliasing, strict environment/action/domain validation, process-output bounds, runtime/database reparse boundaries, diagnostics, Task Center lifecycle races, environment-share safety and self-update managed paths.
+- ZIP extraction rejects duplicate and case-insensitive alias output paths so later archive entries cannot overwrite previously validated runtime/ADDON files.
+- Protected-path validation rejects a managed root that is itself a junction or symbolic link; RuntimeManager, RuntimePlatformService, DatabaseManager and DatabaseRuntimeService now enforce reparse-aware boundaries even when called directly without startup initialization.
+- Self-update `tmp/updates`, Task Center `logs/task-center-history.json` and the managed environment-share backup directory now reject reparse-point traversal instead of relying only on `RuntimeLayout` startup checks.
+- MySQL temporary credential/clone paths, database runtime data/runtime/log/lock/default-backup paths and runtime import/install staging are constrained to the DevBox root before mutation.
+- Database-runtime restore rejects MySQL/MariaDB system schemas and PostgreSQL `postgres`, `template0` and `template1`; changing the registered port of a running database runtime is rejected to prevent configuration/listener drift.
+- Environment locks reject null collections/database definitions, malformed `.test` domains, missing database versions, unsafe addon/service keys and project actions that violate the canonical action policy.
+- Snapshot restore and project archive import validate rewritten `devbox.lock.json` data before persisting it, including explicit rejection of empty/null lock payloads.
+- Portable environment imports return controlled data errors for missing profiles or null action collections rather than `NullReferenceException`.
+- Project manifests, Git bootstrap and project transfers use the same strict `.test` domain policy as Sites/TLS, including empty-label and leading/trailing-hyphen rejection.
+- Developer tools, PHP extension checks, configuration validators, Git bootstrap, WP-CLI, project database clients, MySQL/database-runtime commands and service-stop/initialization helpers drain stdout/stderr with bounded capture instead of unbounded `ReadToEndAsync()` buffers.
+- Configuration read/restore enforces the 2 MiB safety limit before loading data into memory; Composer temporary cleanup and self-update temporary cleanup are best-effort so cleanup errors do not replace the primary operation failure.
+- Windows autostart updates roll back the HKCU Run value and in-memory setting when settings persistence fails, avoiding registry/configuration drift.
+- Elevated hosts-file helpers have a bounded lifetime and are terminated after timeout instead of leaving a privileged child process running indefinitely.
+- Task Center closes the initial publish/execution race, waits on an explicit completion signal, isolates history persistence failures from task execution and safely handles cancellation/disposal.
+- Advanced Diagnostics treats unsafe reparse roots as findings and does not recursively traverse an externally redirected `www`, `runtime`, `config` or temporary tree.
 - Clean reinstall now removes DevBox-managed runtime/module payloads as well as application files, verifies cleanup, and preserves directories that are not proven to be DevBox-owned.
 - Release-generated runtime catalogs keep PHP, Nginx and MySQL on verified HTTPS/SHA-256 delivery paths instead of silently accepting unverified remote packages.
 - Interrupted or oversized runtime downloads remove partial destination files, while runtime activation/import failures roll back newly installed payloads instead of leaving half-installed versions.
@@ -139,6 +155,7 @@ All notable changes to DevBox Windows are documented here.
 
 ### Security
 
+- Direct service entry points for runtime install/import, database runtime state, self-update, Task Center history and managed environment-share output now enforce reparse-aware DevBox-root boundaries instead of assuming startup initialization already validated the filesystem.
 - Reparse-point/junction boundaries are enforced across project execution/archive operations, ADDONS, configuration, managed services, logs and runtime-layout initialization so DevBox cannot be redirected to read, truncate, execute, archive or delete content outside its managed roots.
 - Mutable database operations protect MySQL/MariaDB system schemas and PostgreSQL maintenance/template databases from project-level create/drop/restore paths.
 - Composer installer/signature downloads are bounded before cryptographic verification, closing unbounded-memory/disk consumption paths while preserving the upstream SHA-384 trust check.
