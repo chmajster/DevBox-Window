@@ -1,0 +1,20 @@
+name: Audit round 13 temporary validation
+on:
+  push:
+    branches: [fix/audit-round13-changelog]
+    paths: [.github/workflows/audit-round13-temp.yml, .audit-round13-trigger]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: git archive --format=zip HEAD -o source.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audit-round13-source
+          path: source.zip
+          retention-days: 1
+  baseline:
+    uses: ./.github/workflows/ci.yml
