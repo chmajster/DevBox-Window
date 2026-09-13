@@ -64,6 +64,7 @@ public sealed class FinalBugSweepRound16Tests
                 return;
 
             Assert.Throws<InvalidOperationException>(() => new AddonCatalog(root));
+            Assert.Throws<InvalidOperationException>(() => new AddonMarketplaceService(root));
         }
         finally
         {
@@ -71,6 +72,23 @@ public sealed class FinalBugSweepRound16Tests
             Delete(root);
             Delete(external);
         }
+    }
+
+    [Fact]
+    public void AddonCatalog_RejectsOversizedManifestBeforeParsing()
+    {
+        var root = NewRoot();
+        try
+        {
+            var config = Path.Combine(root, "config");
+            Directory.CreateDirectory(config);
+            File.WriteAllText(Path.Combine(config, "addons.json"), new string(' ', 2 * 1024 * 1024 + 1));
+
+            var catalog = new AddonCatalog(root);
+            var error = Assert.Throws<InvalidDataException>(() => catalog.GetAddons());
+            Assert.Contains("2 MiB", error.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally { Delete(root); }
     }
 
     [Fact]
@@ -87,6 +105,31 @@ public sealed class FinalBugSweepRound16Tests
 
             using var installer = new AddonInstaller(root);
             var error = await Assert.ThrowsAsync<InvalidOperationException>(() => installer.InstallAsync(Definition(root)));
+            Assert.Contains("reparse", error.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            TryDeleteLink(tmp);
+            Delete(root);
+            Delete(external);
+        }
+    }
+
+    [Fact]
+    public void AddonMarketplace_DirectSaveRejectsReparseTmpValidationRoot()
+    {
+        var root = NewRoot();
+        var external = Path.Combine(Path.GetTempPath(), "devbox-marketplace-tmp-outside-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(external);
+        var tmp = Path.Combine(root, "tmp");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "config"));
+            if (!TryCreateDirectoryLink(tmp, external))
+                return;
+
+            using var marketplace = new AddonMarketplaceService(root);
+            var error = Assert.Throws<InvalidOperationException>(() => marketplace.SaveLocalCatalog([Definition(root)]));
             Assert.Contains("reparse", error.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally
