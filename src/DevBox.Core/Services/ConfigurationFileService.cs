@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text;
 using DevBox.Core.Models;
 
 namespace DevBox.Core.Services;
@@ -42,7 +43,7 @@ public sealed class ConfigurationFileService
     {
         ArgumentNullException.ThrowIfNull(content);
         var normalized = NormalizeKey(key);
-        if (content.Length > MaximumConfigurationBytes)
+        if (Encoding.UTF8.GetByteCount(content) > MaximumConfigurationBytes)
             return new ConfigurationValidationResult(false, normalized, null, "Configuration exceeds the 2 MiB safety limit.");
         if (content.Contains('\0'))
             return new ConfigurationValidationResult(false, normalized, null, "Configuration contains a NUL character.");
