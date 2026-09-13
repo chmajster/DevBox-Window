@@ -11,8 +11,8 @@ internal static class PathSafety
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(candidatePath);
 
-        var fullRoot = Path.GetFullPath(rootPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var fullCandidate = Path.GetFullPath(candidatePath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var fullRoot = NormalizePath(rootPath);
+        var fullCandidate = NormalizePath(candidatePath);
         if ((Directory.Exists(fullRoot) || File.Exists(fullRoot)) &&
             (File.GetAttributes(fullRoot) & FileAttributes.ReparsePoint) != 0)
             throw new InvalidOperationException($"{message} Protected root is a reparse point: {fullRoot}");
@@ -24,7 +24,9 @@ internal static class PathSafety
             return fullCandidate;
         }
 
-        var prefix = fullRoot + Path.DirectorySeparatorChar;
+        var prefix = Path.EndsInDirectorySeparator(fullRoot)
+            ? fullRoot
+            : fullRoot + Path.DirectorySeparatorChar;
         if (!fullCandidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(message);
 
@@ -40,5 +42,14 @@ internal static class PathSafety
         }
 
         return fullCandidate;
+    }
+
+    private static string NormalizePath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var pathRoot = Path.GetPathRoot(fullPath);
+        if (!string.IsNullOrEmpty(pathRoot) && fullPath.Equals(pathRoot, StringComparison.OrdinalIgnoreCase))
+            return fullPath;
+        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 }
