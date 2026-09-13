@@ -1,0 +1,64 @@
+name: Round 13 one-shot audit patch
+
+on:
+  push:
+    branches:
+      - fix/final-bug-sweep-round-13
+    paths:
+      - .github/workflows/round13-one-shot.yml
+      - scripts/round13-patch.ps1
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: round13-one-shot
+  cancel-in-progress: true
+
+jobs:
+  apply-validate-and-commit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-2025
+    steps:
+      - name: Checkout audit branch
+        uses: actions/checkout@v7
+        with:
+          ref: fix/final-bug-sweep-round-13
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: Apply audited patches
+        shell: pwsh
+        run: ./scripts/round13-patch.ps1
+
+      - name: Validate patch formatting
+        shell: pwsh
+        run: git diff --check
+
+      - name: Restore
+        run: dotnet restore DevBox.sln
+
+      - name: Build
+        run: dotnet build DevBox.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test DevBox.sln --configuration Release --no-build --logger "trx;LogFileName=round13-test-results.trx"
+
+      - name: Commit validated fixes and remove one-shot helpers
+        shell: pwsh
+        run: |
+          Remove-Item -LiteralPath scripts/round13-patch.ps1 -Force
+          Remove-Item -LiteralPath .github/workflows/round13-one-shot.yml -Force
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: complete final bug sweep round 13"
+          git push origin HEAD:fix/final-bug-sweep-round-13
