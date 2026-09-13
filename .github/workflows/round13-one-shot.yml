@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/round13-one-shot.yml
       - scripts/round13-patch.ps1
+      - scripts/round13-extra.ps1
   workflow_dispatch:
 
 permissions:
@@ -36,7 +37,9 @@ jobs:
 
       - name: Apply audited patches
         shell: pwsh
-        run: ./scripts/round13-patch.ps1
+        run: |
+          ./scripts/round13-patch.ps1
+          ./scripts/round13-extra.ps1
 
       - name: Validate patch formatting
         shell: pwsh
@@ -55,6 +58,7 @@ jobs:
         shell: pwsh
         run: |
           Remove-Item -LiteralPath scripts/round13-patch.ps1 -Force
+          Remove-Item -LiteralPath scripts/round13-extra.ps1 -Force
           Remove-Item -LiteralPath .github/workflows/round13-one-shot.yml -Force
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
