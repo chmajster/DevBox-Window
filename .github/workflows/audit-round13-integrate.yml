@@ -4,17 +4,65 @@ on:
     branches: [fix/audit-round13-changelog]
     paths: [.github/workflows/audit-round13-integrate.yml]
 permissions:
-  contents: read
+  contents: write
 jobs:
-  source:
-    runs-on: ubuntu-latest
+  integrate-and-verify:
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - run: git bundle create repository.bundle HEAD refs/remotes/origin/main
-      - uses: actions/upload-artifact@v4
+      - uses: actions/setup-dotnet@v6
         with:
-          name: audit-integration-source
-          path: repository.bundle
-          retention-days: 1
+          dotnet-version: 8.0.x
+      - name: Integrate the reviewed main without discarding either branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          audit_head=$(git rev-parse HEAD)
+          main_head=ad7d7e51f24aa20f63f477346f02f79b776c9914
+          test "$(git rev-parse origin/main)" = "$main_head"
+          cp .audit-integrate-resolve.py "$RUNNER_TEMP/resolve-integration.py"
+          git checkout --detach "$main_head"
+          set +e
+          git merge --no-commit --no-ff "$audit_head"
+          merge_result=$?
+          set -e
+          test "$merge_result" -eq 1
+          python "$RUNNER_TEMP/resolve-integration.py"
+          git restore --source=HEAD --staged --worktree -- .github
+          git rm -f --ignore-unmatch .audit-integrate-resolve.py
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --cached --check
+          git diff --cached --exit-code HEAD -- .github
+      - name: Build integrated Release
+        run: dotnet build DevBox.sln -c Release
+      - name: Run all tests from both branches
+        run: dotnet test DevBox.sln -c Release --no-build --logger "trx;LogFileName=integrated-tests.trx" --results-directory integration-results
+      - name: Verify CLI help on blocked runtime storage
+        shell: pwsh
+        run: |
+          $env:DEVBOX_ROOT = Join-Path $env:RUNNER_TEMP 'audit-integration-blocked-root'
+          Set-Content $env:DEVBOX_ROOT -Value 'file, not a directory'
+          dotnet src/DevBox.Cli/bin/Release/net8.0-windows/devbox.dll --help
+          if ($LASTEXITCODE -ne 0) { throw 'CLI help failed' }
+          dotnet src/DevBox.Cli/bin/Release/net8.0-windows/devbox.dll
+          if ($LASTEXITCODE -ne 0) { throw 'CLI without arguments failed' }
+          if ((Get-Content $env:DEVBOX_ROOT) -ne 'file, not a directory') { throw 'CLI modified runtime root' }
+      - name: Commit and fast-forward the audit branch after successful validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --cached --check
+          git commit -m 'fix: integrate audited boundaries with current module and runtime changes'
+          git push origin HEAD:fix/audit-round13-changelog
+          git rev-parse HEAD > integration-results/commit.txt
+          git archive --format=zip HEAD -o integration-results/integrated-source.zip
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audit-integrated-results
+          path: integration-results
+          retention-days: 7
