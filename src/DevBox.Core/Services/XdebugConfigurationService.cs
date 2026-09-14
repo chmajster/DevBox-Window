@@ -67,9 +67,12 @@ public sealed partial class XdebugConfigurationService
             return false;
         }
 
-        var value = normalized[(separator + 1)..].Trim().Trim('"', '\'');
-        return value.EndsWith("php_xdebug.dll", StringComparison.OrdinalIgnoreCase) ||
-               value.EndsWith("xdebug.dll", StringComparison.OrdinalIgnoreCase);
+        var value = ParseDirectiveValue(normalized[(separator + 1)..]);
+        // Match a complete basename, not unrelated modules such as not_xdebug.dll.
+        var name = value.Replace('\\', '/').Split('/')[^1];
+        return name.Equals("php_xdebug.dll", StringComparison.OrdinalIgnoreCase) ||
+               name.Equals("xdebug.dll", StringComparison.OrdinalIgnoreCase) ||
+               name.Equals("xdebug", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsEnabledZendExtension(string line) =>
@@ -77,6 +80,7 @@ public sealed partial class XdebugConfigurationService
 
     private static string? ReadDirective(IEnumerable<string> lines, string name)
     {
+        string? result = null;
         foreach (var line in lines)
         {
             var trimmed = line.Trim();
@@ -91,15 +95,32 @@ public sealed partial class XdebugConfigurationService
                 continue;
             }
 
-            var value = trimmed[(separator + 1)..];
-            var comment = value.IndexOf(';');
-            if (comment >= 0)
-            {
-                value = value[..comment];
-            }
-            return value.Trim().Trim('"', '\'');
+            // PHP uses the last active value for scalar INI directives.
+            result = ParseDirectiveValue(trimmed[(separator + 1)..]);
         }
-        return null;
+        return result;
+    }
+
+    private static string ParseDirectiveValue(string value)
+    {
+        char quote = '\0';
+        for (var index = 0; index < value.Length; index++)
+        {
+            var character = value[index];
+            if (quote != '\0')
+            {
+                if (character == quote)
+                    quote = '\0';
+            }
+            else if (character is '\'' or '"')
+                quote = character;
+            else if (character == ';')
+            {
+                value = value[..index];
+                break;
+            }
+        }
+        return value.Trim().Trim('"', '\'');
     }
 
     private static bool IsNamedDirective(string line, string name)

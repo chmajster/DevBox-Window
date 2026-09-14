@@ -85,6 +85,9 @@ public sealed partial class ManagedServiceCatalog
 
     private void SaveUnderLock(IReadOnlyCollection<ManagedServiceManifest> manifests)
     {
+        // Validate the resulting catalog, not just the item supplied to Upsert.
+        // A conflicting write must never replace a previously readable catalog.
+        ValidateAll(manifests);
         Directory.CreateDirectory(Path.GetDirectoryName(_manifestPath)!);
         AtomicWrite(_manifestPath, JsonSerializer.Serialize(manifests.OrderBy(item => item.Key), JsonOptions));
     }
@@ -154,6 +157,8 @@ public sealed partial class ManagedServiceCatalog
 
     private void Validate(ManagedServiceManifest manifest)
     {
+        if (manifest is null)
+            throw new InvalidDataException("Managed service catalog contains a null entry.");
         if (manifest.SchemaVersion != ManagedServiceManifest.CurrentSchemaVersion)
             throw new InvalidDataException($"Unsupported managed service schema version: {manifest.SchemaVersion}.");
         var manifestKey = manifest.Key ?? string.Empty;
@@ -207,7 +212,8 @@ public sealed partial class ManagedServiceCatalog
                         break;
                     }
                 }
-                if (portValue is null || !portValue.Value.TryGetInt32(out var registeredPort) || registeredPort is < 1 or > 65535)
+                if (portValue is null || portValue.Value.ValueKind != JsonValueKind.Number ||
+                    !portValue.Value.TryGetInt32(out var registeredPort) || registeredPort is < 1 or > 65535)
                     throw new InvalidDataException("config/database-runtimes.json contains an invalid or missing port.");
                 if (registeredPort == port)
                     return true;

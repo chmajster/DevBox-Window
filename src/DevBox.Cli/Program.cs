@@ -20,13 +20,13 @@ internal static class Program
         args = args.Where(value => !value.Equals("--json", StringComparison.OrdinalIgnoreCase)).ToArray();
         try
         {
-            var root = ResolveRoot();
-            RuntimeLayout.EnsureInitialized(root);
             if (args.Length == 0 || IsHelp(args[0]))
             {
                 PrintHelp();
                 return 0;
             }
+            var root = ResolveRoot();
+            RuntimeLayout.EnsureInitialized(root);
 
             return args[0].ToLowerInvariant() switch
             {
@@ -47,7 +47,7 @@ internal static class Program
                 _ => Fail($"Unknown command '{args[0]}'. Use 'devbox --help'.", json)
             };
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or HttpRequestException or ArgumentException or NotSupportedException or KeyNotFoundException or FormatException or OverflowException or System.ComponentModel.Win32Exception or System.Security.Cryptography.CryptographicException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or HttpRequestException or ArgumentException or NotSupportedException or KeyNotFoundException or FormatException or OverflowException or System.ComponentModel.Win32Exception or System.Security.Cryptography.CryptographicException or OperationCanceledException or TimeoutException)
         {
             return Fail(ex.Message, json, 1);
         }
@@ -88,7 +88,7 @@ internal static class Program
                 };
                 snapshots.Add(snapshot);
             }
-            catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or FileNotFoundException or System.ComponentModel.Win32Exception)
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or FileNotFoundException or System.ComponentModel.Win32Exception or TimeoutException or OperationCanceledException)
             {
                 failures.Add(new { service = definition.Key, error = ex.Message });
             }

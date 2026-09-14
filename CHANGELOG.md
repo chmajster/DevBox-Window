@@ -45,6 +45,17 @@ All notable changes to DevBox Windows are documented here.
 
 ### Fixed
 
+- Managed-service upserts validate the complete resulting catalog before an atomic write, preventing duplicate enabled ports from corrupting `services.json`; null entries and non-numeric database reservation ports produce controlled validation errors.
+- PHP extension status no longer treats a later commented example as disabling an earlier active extension.
+- Xdebug detection understands inline comments, quoted Windows paths and the `xdebug` module name, matches exact module basenames, and reads the last active scalar INI directive; disabling Xdebug removes all active matching declarations without touching unrelated modules.
+- Log listing, reading and clearing reject reparse-point paths; path validation also checks dangling links instead of assuming a failed `Exists()` call makes them safe. Empty log names are rejected consistently.
+- ZIP extraction rejects Windows trailing-dot/space aliases, reserved device names and unsafe path components before writing, and refuses pre-existing reparse-point destinations.
+- ZIP extraction enforces actual decompressed-byte limits before every write, rejects mismatched sizes, and verifies CRC32 to detect corrupted or silently truncated entries even when the framework caps reads at the declared length.
+- Update checks and installer downloads validate JSON object/string kinds before reading release and asset properties, returning controlled errors for malformed metadata.
+- Update UI handles network cancellation/timeouts and clears stale update actions when a new check starts instead of leaving a failed check stuck or retaining an outdated installer action.
+- CLI help no longer initializes or writes to the runtime root; timeout/cancellation failures return the normal CLI error response rather than an unhandled exception.
+- Added regression coverage for these catalog, INI, ZIP, path and updater boundaries; Windows baseline/reproduction/full-suite results are recorded in the pull request.
+
 - Audit round 17 closes remaining bounded-metadata/direct-service gaps in Runtime Platform and Project Workspace: runtime catalogs, `devbox.json` and `composer.json` now have explicit size/path protections and are revalidated at the operation boundary.
 - Runtime Platform limits custom/release runtime catalogs to 2 MiB and re-runs reparse-aware root validation before every catalog read and mutation, preventing a post-construction `config` junction from redirecting catalog I/O.
 - `ProjectWorkspaceService.LoadManifest` and `SaveManifest` now operate only on reparse-safe projects inside DevBox `www`; `devbox.json` and `composer.json` reads are bounded to 2 MiB, and symlink/reparse `composer.json` files are rejected instead of followed.

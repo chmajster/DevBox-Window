@@ -19,12 +19,23 @@ public sealed class LogReader
             return Array.Empty<string>();
 
         return Directory.GetFiles(logsRoot, "*.log", SearchOption.TopDirectoryOnly)
-            .Where(path => (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0)
+            .Where(IsRegularLogFile)
             .Select(Path.GetFileName)
             .Where(name => name is not null)
             .Select(name => name!)
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    internal static bool IsRegularLogFile(string path)
+    {
+        try
+        {
+            return (File.GetAttributes(path) & (FileAttributes.ReparsePoint | FileAttributes.Directory)) == 0;
+        }
+        // A process may rotate a log between enumeration and attribute lookup.
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException) { return false; }
     }
 
     public IReadOnlyList<string> ReadTail(string fileName, int maxLines = 500)
@@ -58,6 +69,7 @@ public sealed class LogReader
 
     private string ResolveSafePath(string fileName)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
         if (!fileName.Equals(Path.GetFileName(fileName), StringComparison.Ordinal) || !fileName.EndsWith(".log", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Only .log files directly inside the DevBox logs directory are allowed.", nameof(fileName));
 

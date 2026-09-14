@@ -48,8 +48,9 @@ public sealed partial class ApplicationUpdateService : IDisposable
         using (document)
         {
         var root = document.RootElement;
-        if (!root.TryGetProperty("tag_name", out var tagElement) ||
-            !root.TryGetProperty("html_url", out var urlElement))
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("tag_name", out var tagElement) || tagElement.ValueKind != JsonValueKind.String ||
+            !root.TryGetProperty("html_url", out var urlElement) || urlElement.ValueKind != JsonValueKind.String)
         {
             throw new InvalidDataException("GitHub release response is missing tag_name or html_url.");
         }
