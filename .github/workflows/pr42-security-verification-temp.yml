@@ -1,0 +1,23 @@
+name: PR 42 security verification
+on:
+  push:
+    branches: [fix/audit-round13-changelog]
+    paths: [.github/workflows/pr42-security-verification-temp.yml]
+permissions:
+  contents: read
+  checks: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read the security check annotations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/chmajster/DevBox-Window/check-runs/103817735975/annotations > annotations.json
+          cat annotations.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr42-security-annotations
+          path: annotations.json
+          retention-days: 1
