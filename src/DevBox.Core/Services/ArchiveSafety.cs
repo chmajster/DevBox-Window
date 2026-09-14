@@ -128,6 +128,10 @@ internal static class ArchiveSafety
         foreach (var entry in archive.Entries)
         {
             var outputPath = ResolveOutputPath(entry, destinationPath);
+            // Validate the exact normalized path used below, including the trailing
+            // directory separator so sibling directories cannot pass a prefix check.
+            if (!outputPath.StartsWith(destinationRoot, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"Unsafe ZIP output path detected in {packageName}: {entry.FullName}");
             EnsureSafeOutputPath(destinationPath, outputPath, packageName);
             if (entry.FullName.EndsWith('/') || entry.FullName.EndsWith('\\'))
             {
