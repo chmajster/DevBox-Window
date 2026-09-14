@@ -122,19 +122,68 @@ internal static class ArchiveSafety
             }
         }
 
+        EnsureSafeOutputPath(destinationPath, destinationPath, packageName, allowRoot: true);
         Directory.CreateDirectory(destinationPath);
+        long extractedBytes = 0;
         foreach (var entry in archive.Entries)
         {
             var outputPath = ResolveOutputPath(entry, destinationPath);
-            if (string.IsNullOrEmpty(entry.Name))
+            EnsureSafeOutputPath(destinationPath, outputPath, packageName);
+            if (entry.FullName.EndsWith('/') || entry.FullName.EndsWith('\\'))
             {
                 Directory.CreateDirectory(outputPath);
                 continue;
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-            entry.ExtractToFile(outputPath, overwrite: true);
+            using (var source = entry.Open())
+            using (var target = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                var buffer = new byte[81920];
+                long entryBytes = 0;
+                uint crc32 = uint.MaxValue;
+                int read;
+                while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    // ZIP size fields are untrusted: enforce limits before every write.
+                    if (read > maximumUncompressedBytes - extractedBytes || read > entry.Length - entryBytes)
+                        throw new InvalidDataException($"{packageName} archive expands beyond its declared or allowed size.");
+                    crc32 = UpdateCrc32(crc32, buffer.AsSpan(0, read));
+                    target.Write(buffer, 0, read);
+                    extractedBytes += read;
+                    entryBytes += read;
+                }
+                if (entryBytes != entry.Length)
+                    throw new InvalidDataException($"{packageName} archive contains a truncated entry: {entry.FullName}");
+                // Some framework versions cap reads at the declared size. CRC32
+                // also detects silently truncated or otherwise corrupted payloads.
+                if (~crc32 != entry.Crc32)
+                    throw new InvalidDataException($"{packageName} archive entry failed CRC32 validation: {entry.FullName}");
+            }
+            File.SetLastWriteTime(outputPath, entry.LastWriteTime.DateTime);
         }
+    }
+
+    private static readonly uint[] Crc32Table = CreateCrc32Table();
+
+    private static uint[] CreateCrc32Table()
+    {
+        var table = new uint[256];
+        for (var index = 0; index < table.Length; index++)
+        {
+            var value = (uint)index;
+            for (var bit = 0; bit < 8; bit++)
+                value = (value >> 1) ^ ((value & 1) != 0 ? 0xedb88320u : 0u);
+            table[index] = value;
+        }
+        return table;
+    }
+
+    private static uint UpdateCrc32(uint crc, ReadOnlySpan<byte> bytes)
+    {
+        foreach (var value in bytes)
+            crc = Crc32Table[(byte)(crc ^ value)] ^ (crc >> 8);
+        return crc;
     }
 
     private static async Task CopyToWithLimitAsync(
@@ -175,17 +224,50 @@ internal static class ArchiveSafety
 
     private static void ValidateEntryPath(ZipArchiveEntry entry, string destinationPath, string destinationRoot, string packageName)
     {
-        var normalizedEntry = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
-        if (Path.IsPathRooted(normalizedEntry) || normalizedEntry.Contains(':'))
+        var normalizedEntry = entry.FullName.Replace('\\', '/');
+        if (Path.IsPathRooted(normalizedEntry) || normalizedEntry.StartsWith('/') || normalizedEntry.Contains(':'))
+        {
             throw new InvalidDataException($"Unsafe ZIP entry detected in {packageName}: {entry.FullName}");
+        }
+
+        foreach (var segment in normalizedEntry.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (segment is "." or ".." || segment.EndsWith('.') || segment.EndsWith(' ') ||
+                segment.Any(character => character < 32 || "<>\"|?*".Contains(character)) || IsWindowsDeviceName(segment))
+                throw new InvalidDataException($"Unsafe Windows ZIP entry detected in {packageName}: {entry.FullName}");
+        }
 
         var outputPath = ResolveOutputPath(entry, destinationPath);
         if (!outputPath.StartsWith(destinationRoot, StringComparison.OrdinalIgnoreCase))
+        {
             throw new InvalidDataException($"Unsafe ZIP entry detected in {packageName}: {entry.FullName}");
+        }
+        EnsureSafeOutputPath(destinationPath, outputPath, packageName);
+    }
+
+    private static bool IsWindowsDeviceName(string segment)
+    {
+        var name = segment.Split('.')[0].TrimEnd(' ').ToUpperInvariant();
+        return name is "CON" or "PRN" or "AUX" or "NUL" or "CONIN$" or "CONOUT$" ||
+            (name.Length == 4 && (name.StartsWith("COM", StringComparison.Ordinal) || name.StartsWith("LPT", StringComparison.Ordinal)) &&
+             "123456789¹²³".Contains(name[3]));
+    }
+
+    private static void EnsureSafeOutputPath(string root, string output, string packageName, bool allowRoot = false)
+    {
+        try
+        {
+            _ = PathSafety.EnsureUnderRootWithoutReparsePoints(
+                root, output, $"{packageName} extraction cannot traverse a reparse point.", allowRoot);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new InvalidDataException(ex.Message, ex);
+        }
     }
 
     private static string ResolveOutputPath(ZipArchiveEntry entry, string destinationPath) =>
-        Path.GetFullPath(Path.Combine(destinationPath, entry.FullName.Replace('/', Path.DirectorySeparatorChar)));
+        Path.GetFullPath(Path.Combine(destinationPath, entry.FullName.Replace('\\', '/').Replace('/', Path.DirectorySeparatorChar)));
 
     private static void RejectSymbolicLink(ZipArchiveEntry entry, string packageName)
     {

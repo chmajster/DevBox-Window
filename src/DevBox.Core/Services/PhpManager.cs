@@ -121,7 +121,9 @@ public sealed partial class PhpManager
             var parsed = ParseExtensionLine(line);
             if (parsed.HasValue)
             {
-                configured[parsed.Value.Name] = parsed.Value.Enabled;
+                // A commented example does not unload an earlier active extension.
+                configured[parsed.Value.Name] = parsed.Value.Enabled ||
+                    (configured.TryGetValue(parsed.Value.Name, out var enabled) && enabled);
             }
         }
 

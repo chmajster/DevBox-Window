@@ -58,6 +58,8 @@ public sealed class UpdateWindowViewModel : ObservableObject
         try
         {
             Status = "Checking GitHub Releases...";
+            UpdateAvailable = false;
+            ReleaseUrl = null;
             var result = await _updates.CheckAsync();
             CurrentVersion = result.CurrentVersion.ToString(3);
             LatestVersion = result.LatestVersion.ToString(3);
@@ -65,7 +67,7 @@ public sealed class UpdateWindowViewModel : ObservableObject
             UpdateAvailable = result.UpdateAvailable;
             Status = result.UpdateAvailable ? "Update available" : "You are up to date";
         }
-        catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or InvalidOperationException)
+        catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or InvalidOperationException or OperationCanceledException or TimeoutException)
         {
             Status = "Update check failed";
             _dialogs.Error("Update check failed", ex.Message);
@@ -97,7 +99,7 @@ public sealed class UpdateWindowViewModel : ObservableObject
 
             App.RequestExit();
         }
-        catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or Win32Exception or PlatformNotSupportedException)
+        catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or Win32Exception or PlatformNotSupportedException or OperationCanceledException or TimeoutException)
         {
             Status = "Update installation failed";
             _dialogs.Error("Update installation failed", ex.Message);

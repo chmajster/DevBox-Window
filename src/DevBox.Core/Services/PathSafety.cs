@@ -13,8 +13,7 @@ internal static class PathSafety
 
         var fullRoot = Path.GetFullPath(rootPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var fullCandidate = Path.GetFullPath(candidatePath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if ((Directory.Exists(fullRoot) || File.Exists(fullRoot)) &&
-            (File.GetAttributes(fullRoot) & FileAttributes.ReparsePoint) != 0)
+        if (IsReparsePoint(fullRoot))
             throw new InvalidOperationException($"{message} Protected root is a reparse point: {fullRoot}");
 
         if (fullCandidate.Equals(fullRoot, StringComparison.OrdinalIgnoreCase))
@@ -33,12 +32,22 @@ internal static class PathSafety
         foreach (var segment in relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
         {
             current = Path.Combine(current, segment);
-            if (!Directory.Exists(current) && !File.Exists(current))
-                continue;
-            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            if (IsReparsePoint(current))
                 throw new InvalidOperationException($"{message} Reparse-point path segment is not allowed: {current}");
         }
 
         return fullCandidate;
+    }
+
+    private static bool IsReparsePoint(string path)
+    {
+        // Exists() follows links and returns false for dangling links. Inspect the
+        // entry itself before deciding that a path segment is safe to create.
+        try
+        {
+            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException) { return false; }
     }
 }
