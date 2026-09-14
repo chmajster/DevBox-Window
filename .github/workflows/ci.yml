@@ -38,6 +38,24 @@ jobs:
       - name: Test
         run: dotnet test DevBox.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --collect "XPlat Code Coverage"
 
+      - name: CLI help is independent of runtime storage
+        shell: pwsh
+        run: |
+          $oldRoot = $env:DEVBOX_ROOT
+          $blockedRoot = Join-Path $env:RUNNER_TEMP ("devbox-help-" + [guid]::NewGuid().ToString('N'))
+          try {
+            Set-Content -Path $blockedRoot -Value 'file, not a directory'
+            $env:DEVBOX_ROOT = $blockedRoot
+            dotnet src/DevBox.Cli/bin/Release/net8.0-windows/devbox.dll --help
+            if ($LASTEXITCODE -ne 0) { throw 'CLI help failed on blocked runtime storage' }
+            dotnet src/DevBox.Cli/bin/Release/net8.0-windows/devbox.dll
+            if ($LASTEXITCODE -ne 0) { throw 'CLI without arguments failed on blocked runtime storage' }
+            if ((Get-Content $blockedRoot) -ne 'file, not a directory') { throw 'CLI help modified runtime storage' }
+          } finally {
+            $env:DEVBOX_ROOT = $oldRoot
+            Remove-Item -LiteralPath $blockedRoot -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Publish GUI win-x64
         run: dotnet publish src/DevBox.App/DevBox.App.csproj --configuration Release --runtime win-x64 --self-contained true --output artifacts/win-x64
 
