@@ -423,14 +423,21 @@ public sealed class SupportBundleService
         if (!string.IsNullOrWhiteSpace(Environment.MachineName))
             result = result.Replace(Environment.MachineName, "<MACHINE>", StringComparison.OrdinalIgnoreCase);
 
-        result = PrivateKeyRegex.Replace(result, "<REDACTED_PRIVATE_KEY>");
-        result = AuthorizationRegex.Replace(result, "$1<REDACTED>");
-        result = BearerRegex.Replace(result, "Bearer <REDACTED>");
-        result = UrlCredentialRegex.Replace(result, "$1<REDACTED>@");
-        result = JwtRegex.Replace(result, "<REDACTED_JWT>");
-        result = SecretAssignmentRegex.Replace(result, match =>
-            match.Groups[1].Value + match.Groups[2].Value + "<REDACTED>");
-        return result;
+        try
+        {
+            result = PrivateKeyRegex.Replace(result, "<REDACTED_PRIVATE_KEY>");
+            result = AuthorizationRegex.Replace(result, "$1<REDACTED>");
+            result = BearerRegex.Replace(result, "Bearer <REDACTED>");
+            result = UrlCredentialRegex.Replace(result, "$1<REDACTED>@");
+            result = JwtRegex.Replace(result, "<REDACTED_JWT>");
+            result = SecretAssignmentRegex.Replace(result, match =>
+                match.Groups[1].Value + match.Groups[2].Value + "<REDACTED>");
+            return result;
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return "<REDACTION_FAILED>";
+        }
     }
 
     private static bool IsSensitiveProperty(string name)

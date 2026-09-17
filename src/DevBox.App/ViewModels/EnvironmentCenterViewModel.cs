@@ -23,6 +23,7 @@ public sealed class EnvironmentCenterViewModel : ObservableObject, IDisposable
     private string _transferPath = string.Empty;
     private string _gitUrl = string.Empty;
     private string _gitProjectName = string.Empty;
+    private string _supportBundlePath = string.Empty;
     private string _configurationKey = "php";
     private string _configurationText = string.Empty;
     private string _secretKey = string.Empty;
@@ -61,6 +62,7 @@ public sealed class EnvironmentCenterViewModel : ObservableObject, IDisposable
         TransferImportCommand = new AsyncRelayCommand(TransferImportAsync);
         GitBootstrapCommand = new AsyncRelayCommand(GitBootstrapAsync);
         DiagnosticsCommand = new RelayCommand(RefreshDiagnostics);
+        SupportBundleCommand = new AsyncRelayCommand(CreateSupportBundleAsync);
         ConfigurationLoadCommand = new RelayCommand(ConfigurationLoad);
         ConfigurationSaveCommand = new AsyncRelayCommand(ConfigurationSaveAsync);
         SecretSetCommand = new RelayCommand(SecretSet);
@@ -93,6 +95,7 @@ public sealed class EnvironmentCenterViewModel : ObservableObject, IDisposable
     public string BackupPath { get => _backupPath; set => SetProperty(ref _backupPath, value); }
     public string SnapshotPath { get => _snapshotPath; set => SetProperty(ref _snapshotPath, value); }
     public string TransferPath { get => _transferPath; set => SetProperty(ref _transferPath, value); }
+    public string SupportBundlePath { get => _supportBundlePath; set => SetProperty(ref _supportBundlePath, value); }
     public string GitUrl { get => _gitUrl; set => SetProperty(ref _gitUrl, value); }
     public string GitProjectName { get => _gitProjectName; set => SetProperty(ref _gitProjectName, value); }
     public string ConfigurationKey { get => _configurationKey; set => SetProperty(ref _configurationKey, value); }
@@ -126,6 +129,7 @@ public sealed class EnvironmentCenterViewModel : ObservableObject, IDisposable
     public ICommand TransferImportCommand { get; }
     public ICommand GitBootstrapCommand { get; }
     public ICommand DiagnosticsCommand { get; }
+    public ICommand SupportBundleCommand { get; }
     public ICommand ConfigurationLoadCommand { get; }
     public ICommand ConfigurationSaveCommand { get; }
     public ICommand SecretSetCommand { get; }
@@ -275,6 +279,21 @@ public sealed class EnvironmentCenterViewModel : ObservableObject, IDisposable
         var report = new AdvancedDiagnosticsService(_rootPath).Run();
         Replace(DiagnosticFindings, report.Findings);
         Status = report.HasErrors ? "Diagnostics found errors." : report.HasWarnings ? "Diagnostics found warnings." : "Diagnostics passed.";
+    }
+
+    private async Task CreateSupportBundleAsync()
+    {
+        try
+        {
+            Status = "Creating redacted support bundle...";
+            var result = await Task.Run(() => new SupportBundleService(_rootPath).Create());
+            SupportBundlePath = result.ArchivePath;
+            Status = $"Support bundle created: {result.ArchivePath} ({result.IncludedFileCount} entries, {result.IncludedLogCount} log(s)).";
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or ArgumentException or PlatformNotSupportedException or System.ComponentModel.Win32Exception or System.Text.RegularExpressions.RegexMatchTimeoutException)
+        {
+            Status = ex.Message;
+        }
     }
 
     private void ConfigurationLoad() => RunUiAction(() =>
