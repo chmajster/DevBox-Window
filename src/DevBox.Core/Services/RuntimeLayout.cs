@@ -33,6 +33,8 @@ public static class RuntimeLayout
             Directory.CreateDirectory(path);
         }
 
+        ConfigurationMigrationService.EnsureMigrated(root);
+
         WriteIfMissing(SafePath(root, "config/nginx/nginx.conf"), NginxConfig);
         WriteIfMissing(SafePath(root, "config/nginx/fastcgi_params"), FastCgiParams);
         WriteIfMissing(SafePath(root, "config/php/php.ini"), PhpIni);
