@@ -236,15 +236,26 @@ end;
 function HasDevBoxInstallEvidence(const BaseDir: String): Boolean;
 var
   RootPrefix: String;
+  RegisteredUninstaller: String;
 begin
   Result := False;
   if not IsSafeManagedRoot(BaseDir) then
     Exit;
 
   RootPrefix := AddBackslash(RemoveBackslashUnlessRoot(BaseDir));
+  if not FileExists(RootPrefix + '{#MyAppExeName}') then
+    Exit;
+
+  if FileExists(RootPrefix + 'unins000.exe') then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  RegisteredUninstaller := ExistingUninstallerPath;
   Result :=
-    FileExists(RootPrefix + '{#MyAppExeName}') and
-    FileExists(RootPrefix + 'unins000.exe');
+    (RegisteredUninstaller <> '') and
+    SameNormalizedPath(ExtractFileDir(RegisteredUninstaller), BaseDir);
 end;
 
 function HasExactDirective(const Lines: TArrayOfString; const Directive: String): Boolean;
