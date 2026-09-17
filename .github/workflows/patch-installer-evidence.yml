@@ -1,0 +1,86 @@
+name: Patch installer evidence
+
+on:
+  push:
+    branches: [ test/installer-smoke-e2e ]
+    paths:
+      - '.github/workflows/patch-installer-evidence.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v7
+        with:
+          ref: test/installer-smoke-e2e
+
+      - name: Accept registered Inno uninstaller in install evidence
+        shell: pwsh
+        run: |
+          $path = 'installer/DevBox.iss'
+          $text = (Get-Content -LiteralPath $path -Raw).Replace("`r`n", "`n")
+          $old = @'
+          function HasDevBoxInstallEvidence(const BaseDir: String): Boolean;
+          var
+            RootPrefix: String;
+          begin
+            Result := False;
+            if not IsSafeManagedRoot(BaseDir) then
+              Exit;
+
+            RootPrefix := AddBackslash(RemoveBackslashUnlessRoot(BaseDir));
+            Result :=
+              FileExists(RootPrefix + '{#MyAppExeName}') and
+              FileExists(RootPrefix + 'unins000.exe');
+          end;
+          '@.Replace("`r`n", "`n")
+          $new = @'
+          function HasDevBoxInstallEvidence(const BaseDir: String): Boolean;
+          var
+            RootPrefix: String;
+            RegisteredUninstaller: String;
+          begin
+            Result := False;
+            if not IsSafeManagedRoot(BaseDir) then
+              Exit;
+
+            RootPrefix := AddBackslash(RemoveBackslashUnlessRoot(BaseDir));
+            if not FileExists(RootPrefix + '{#MyAppExeName}') then
+              Exit;
+
+            if FileExists(RootPrefix + 'unins000.exe') then
+            begin
+              Result := True;
+              Exit;
+            end;
+
+            RegisteredUninstaller := ExistingUninstallerPath;
+            Result :=
+              (RegisteredUninstaller <> '') and
+              SameNormalizedPath(ExtractFileDir(RegisteredUninstaller), BaseDir);
+          end;
+          '@.Replace("`r`n", "`n")
+
+          if (-not $text.Contains($old)) {
+            throw 'Expected HasDevBoxInstallEvidence implementation was not found.'
+          }
+
+          $updated = $text.Replace($old, $new)
+          Set-Content -LiteralPath $path -Value $updated -Encoding utf8 -NoNewline
+          git diff --check
+
+      - name: Commit patch
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add installer/DevBox.iss
+          if (git diff --cached --quiet) {
+            throw 'Installer patch produced no change.'
+          }
+          git commit -m 'fix: recognize registered maintenance uninstaller'
+          git push origin HEAD:test/installer-smoke-e2e
