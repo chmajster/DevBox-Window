@@ -1,0 +1,143 @@
+name: Patch support bundle resilience
+
+on:
+  push:
+    branches: [ feat/support-bundle ]
+    paths:
+      - '.github/workflows/patch-support-bundle-resilience.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v7
+        with:
+          ref: feat/support-bundle
+
+      - name: Patch support bundle JSON readability and partial-failure handling
+        shell: pwsh
+        run: |
+          function Replace-Required([string] $Path, [string] $Old, [string] $New) {
+            $text = (Get-Content -LiteralPath $Path -Raw).Replace("`r`n", "`n")
+            $oldLf = $Old.Replace("`r`n", "`n")
+            $newLf = $New.Replace("`r`n", "`n")
+            if (-not $text.Contains($oldLf)) { throw "Expected text was not found in $Path" }
+            Set-Content -LiteralPath $Path -Value ($text.Replace($oldLf, $newLf)) -Encoding utf8 -NoNewline
+          }
+
+          $service = 'src/DevBox.Core/Services/SupportBundleService.cs'
+          Replace-Required $service @'
+          using System.Text;
+          using System.Text.Json;
+          '@ @'
+          using System.Text;
+          using System.Text.Encodings.Web;
+          using System.Text.Json;
+          '@
+
+          Replace-Required $service @'
+              private static readonly JsonSerializerOptions JsonOptions = new()
+              {
+                  WriteIndented = true,
+                  PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+              };
+          '@ @'
+              private static readonly JsonSerializerOptions JsonOptions = new()
+              {
+                  WriteIndented = true,
+                  PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                  Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+              };
+          '@
+
+          Replace-Required $service @'
+                          AddJsonEntry(archive, entries, "diagnostics.json", BuildDiagnostics());
+                          AddJsonEntry(archive, entries, "system.json", BuildSystemSummary(createdAt));
+                          AddJsonEntry(archive, entries, "services.json", BuildServiceSummary());
+                          AddJsonEntry(archive, entries, "runtime-status.json", BuildRuntimeSummary());
+                          AddJsonEntry(archive, entries, "database-status.json", BuildDatabaseSummary());
+          '@ @'
+                          AddJsonEntry(archive, entries, "diagnostics.json", BuildSafeSection("diagnostics", BuildDiagnostics));
+                          AddJsonEntry(archive, entries, "system.json", BuildSafeSection("system", () => BuildSystemSummary(createdAt)));
+                          AddJsonEntry(archive, entries, "services.json", BuildSafeSection("services", BuildServiceSummary));
+                          AddJsonEntry(archive, entries, "runtime-status.json", BuildSafeSection("runtimes", BuildRuntimeSummary));
+                          AddJsonEntry(archive, entries, "database-status.json", BuildSafeSection("databases", BuildDatabaseSummary));
+          '@
+
+          Replace-Required $service @'
+              private object BuildDiagnostics()
+          '@ @'
+              private object BuildSafeSection(string section, Func<object> builder)
+              {
+                  try
+                  {
+                      return builder();
+                  }
+                  catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException or ArgumentException or PlatformNotSupportedException or JsonException or System.ComponentModel.Win32Exception or System.Security.Cryptography.CryptographicException or RegexMatchTimeoutException)
+                  {
+                      return new
+                      {
+                          section,
+                          available = false,
+                          error = RedactText(ex.Message)
+                      };
+                  }
+              }
+
+              private object BuildDiagnostics()
+          '@
+
+          Replace-Required $service @'
+                  using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true }))
+          '@ @'
+                  using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+          '@
+
+          $tests = 'tests/DevBox.Tests/SupportBundleServiceTests.cs'
+          Replace-Required $tests @'
+              [Fact]
+              public void Create_UsesUniqueAtomicArchives()
+          '@ @'
+              [Fact]
+              public void Create_ContinuesWhenAStatusSectionIsCorrupted()
+              {
+                  var root = TemporaryRoot();
+                  try
+                  {
+                      RuntimeLayout.EnsureInitialized(root);
+                      File.WriteAllText(Path.Combine(root, "config", "services.json"), "{ invalid-json");
+
+                      var result = new SupportBundleService(root).Create();
+
+                      using var archive = ZipFile.OpenRead(result.ArchivePath);
+                      var services = ReadEntry(archive, "services.json");
+                      Assert.Contains("\"available\": false", services, StringComparison.Ordinal);
+                      Assert.Contains("\"section\": \"services\"", services, StringComparison.Ordinal);
+                      Assert.Contains("diagnostics.json", archive.Entries.Select(entry => entry.FullName));
+                      Assert.Contains("manifest.json", archive.Entries.Select(entry => entry.FullName));
+                  }
+                  finally
+                  {
+                      DeleteRoot(root);
+                  }
+              }
+
+              [Fact]
+              public void Create_UsesUniqueAtomicArchives()
+          '@
+
+          git diff --check
+
+      - name: Commit resilience fixes
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/DevBox.Core/Services/SupportBundleService.cs tests/DevBox.Tests/SupportBundleServiceTests.cs
+          if (git diff --cached --quiet) { throw 'Support bundle resilience patch produced no change.' }
+          git commit -m 'fix: keep support bundles readable during partial failures'
+          git push origin HEAD:feat/support-bundle
