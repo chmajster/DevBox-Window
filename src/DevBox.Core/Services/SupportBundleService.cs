@@ -48,7 +48,7 @@ public sealed class SupportBundleService
         TimeSpan.FromSeconds(1));
 
     private static readonly Regex SecretAssignmentRegex = new(
-        @"(?im)\b(password|passwd|pwd|secret|token|api[_-]?key|cookie|connectionstring|private[_-]?key|credential)\b(\s*[:=]\s*)(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s;\r\n]+)",
+        "(?im)\\b(password|passwd|pwd|secret|token|api[_-]?key|cookie|connectionstring|private[_-]?key|credential)\\b(\\s*[:=]\\s*)(?:\"[^\"\\r\\n]*\"|'[^'\\r\\n]*'|[^\\s;\\r\\n]+)",
         RegexOptions.CultureInvariant,
         TimeSpan.FromSeconds(1));
 
@@ -418,6 +418,11 @@ public sealed class SupportBundleService
         if (!string.IsNullOrWhiteSpace(userProfile))
             result = result.Replace(userProfile, "<USERPROFILE>", StringComparison.OrdinalIgnoreCase);
 
+        if (!string.IsNullOrWhiteSpace(Environment.UserName))
+            result = result.Replace(Environment.UserName, "<USER>", StringComparison.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(Environment.MachineName))
+            result = result.Replace(Environment.MachineName, "<MACHINE>", StringComparison.OrdinalIgnoreCase);
+
         result = PrivateKeyRegex.Replace(result, "<REDACTED_PRIVATE_KEY>");
         result = AuthorizationRegex.Replace(result, "$1<REDACTED>");
         result = BearerRegex.Replace(result, "Bearer <REDACTED>");
@@ -529,11 +534,12 @@ public sealed class SupportBundleService
 
     private static void AddTextEntry(ZipArchive archive, List<string> entries, string name, string value)
     {
-        var entry = archive.CreateEntry(name.Replace('\\', '/'), CompressionLevel.Optimal);
+        var entryName = name.Replace('\\', '/');
+        var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
         entry.LastWriteTime = DateTimeOffset.UtcNow;
         using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         writer.Write(value);
-        entries.Add(name.Replace('\\', '/'));
+        entries.Add(entryName);
     }
 
     private static void TryDelete(string path)
