@@ -50,7 +50,7 @@ public sealed class SupportBundleService
         TimeSpan.FromSeconds(1));
 
     private static readonly Regex SecretAssignmentRegex = new(
-        "(?im)\\b(password|passwd|pwd|secret|token|api[_-]?key|cookie|connectionstring|private[_-]?key|credential)\\b(\\s*[:=]\\s*)(?:\"[^\"\\r\\n]*\"|'[^'\\r\\n]*'|[^\\s;\\r\\n]+)",
+        "(?im)([\"']?)([A-Za-z0-9_.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|cookie|connectionstring|private[_-]?key|credential))\\1(\\s*[:=]\\s*)(?:\"[^\"\\r\\n]*\"|'[^'\\r\\n]*'|[^\\s;\\r\\n]+)",
         RegexOptions.CultureInvariant,
         TimeSpan.FromSeconds(1));
 
@@ -321,12 +321,20 @@ public sealed class SupportBundleService
         if (!Directory.Exists(logsRoot))
             return 0;
 
-        var candidates = new List<FileInfo>();
-        foreach (var path in EnumerateFilesWithoutReparsePoints(logsRoot).Take(MaxLogCandidates))
+        var candidates = new PriorityQueue<(string Path, DateTime LastWriteTimeUtc), long>();
+        foreach (var path in EnumerateFilesWithoutReparsePoints(logsRoot))
         {
             try
             {
-                candidates.Add(new FileInfo(path));
+                var info = new FileInfo(path);
+                info.Refresh();
+                if (!info.Exists)
+                    continue;
+
+                var candidate = (Path: path, LastWriteTimeUtc: info.LastWriteTimeUtc);
+                candidates.Enqueue(candidate, candidate.LastWriteTimeUtc.Ticks);
+                if (candidates.Count > MaxLogCandidates)
+                    _ = candidates.Dequeue();
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -336,21 +344,27 @@ public sealed class SupportBundleService
 
         long totalBytes = 0;
         var included = 0;
-        foreach (var info in candidates
+        foreach (var candidate in candidates.UnorderedItems
+                     .Select(item => item.Element)
                      .OrderByDescending(item => item.LastWriteTimeUtc)
-                     .ThenBy(item => item.FullName, StringComparer.OrdinalIgnoreCase))
+                     .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase))
         {
             if (included >= MaxLogFiles)
                 break;
 
-            var budget = Math.Min(info.Length, MaxLogBytes);
-            if (totalBytes + budget > MaxTotalLogBytes)
-                continue;
-
             try
             {
-                var text = ReadTailText(info.FullName, MaxLogBytes, out var truncated);
-                var relative = Path.GetRelativePath(logsRoot, info.FullName).Replace('\\', '/');
+                var info = new FileInfo(candidate.Path);
+                info.Refresh();
+                if (!info.Exists)
+                    continue;
+
+                var budget = Math.Min(info.Length, MaxLogBytes);
+                if (totalBytes + budget > MaxTotalLogBytes)
+                    continue;
+
+                var text = ReadTailText(candidate.Path, MaxLogBytes, out var truncated);
+                var relative = Path.GetRelativePath(logsRoot, candidate.Path).Replace('\\', '/');
                 var archiveName = "logs/" + relative;
                 var redacted = RedactText(text);
                 if (truncated)
@@ -361,7 +375,7 @@ public sealed class SupportBundleService
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or DecoderFallbackException)
             {
-                var safeName = "logs/" + Path.GetFileName(info.Name) + ".omitted.txt";
+                var safeName = "logs/" + Path.GetFileName(candidate.Path) + ".omitted.txt";
                 AddTextEntry(archive, entries, safeName, "Omitted: " + RedactText(ex.Message));
             }
         }
@@ -450,7 +464,7 @@ public sealed class SupportBundleService
             result = UrlCredentialRegex.Replace(result, "$1<REDACTED>@");
             result = JwtRegex.Replace(result, "<REDACTED_JWT>");
             result = SecretAssignmentRegex.Replace(result, match =>
-                match.Groups[1].Value + match.Groups[2].Value + "<REDACTED>");
+                match.Groups[1].Value + match.Groups[2].Value + match.Groups[1].Value + match.Groups[3].Value + "<REDACTED>");
             return result;
         }
         catch (RegexMatchTimeoutException)
@@ -467,7 +481,8 @@ public sealed class SupportBundleService
             .Replace(".", string.Empty, StringComparison.Ordinal)
             .ToLowerInvariant();
 
-        return normalized.Contains("password", StringComparison.Ordinal) ||
+        return normalized.EndsWith("arguments", StringComparison.Ordinal) ||
+               normalized.Contains("password", StringComparison.Ordinal) ||
                normalized.Contains("passwd", StringComparison.Ordinal) ||
                normalized == "pwd" ||
                normalized.Contains("secret", StringComparison.Ordinal) ||

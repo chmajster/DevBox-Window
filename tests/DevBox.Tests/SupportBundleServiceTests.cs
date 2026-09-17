@@ -169,6 +169,88 @@ public sealed class SupportBundleServiceTests
     }
 
     [Fact]
+    public void Create_RedactsArgumentArraysCompoundKeysAndMalformedJson()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            RuntimeLayout.EnsureInitialized(root);
+            File.WriteAllText(
+                Path.Combine(root, "config", "services.json"),
+                """
+                [
+                  {
+                    "key": "custom",
+                    "arguments": ["--password", "argument-secret", "--safe", "visible"],
+                    "stopArguments": ["--token", "stop-token-secret"]
+                  }
+                ]
+                """);
+            File.WriteAllText(
+                Path.Combine(root, "config", "appsettings.json"),
+                "{ \"password\": \"malformed-json-secret\", garbage");
+            File.WriteAllText(
+                Path.Combine(root, "logs", "compound.log"),
+                "MYSQL_PASSWORD=mysql-secret\nCLIENT_SECRET=client-secret\nACCESS_TOKEN=access-token-secret\nsafe=value\n");
+
+            var result = new SupportBundleService(root).Create();
+
+            using var archive = ZipFile.OpenRead(result.ArchivePath);
+            var services = ReadEntry(archive, "config-redacted/services.json");
+            Assert.Contains("<REDACTED>", services, StringComparison.Ordinal);
+            Assert.DoesNotContain("argument-secret", services, StringComparison.Ordinal);
+            Assert.DoesNotContain("stop-token-secret", services, StringComparison.Ordinal);
+
+            var appSettings = ReadEntry(archive, "config-redacted/appsettings.json");
+            Assert.DoesNotContain("malformed-json-secret", appSettings, StringComparison.Ordinal);
+            Assert.Contains("<REDACTED>", appSettings, StringComparison.Ordinal);
+
+            var log = ReadEntry(archive, "logs/compound.log");
+            Assert.DoesNotContain("mysql-secret", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("client-secret", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("access-token-secret", log, StringComparison.Ordinal);
+            Assert.Contains("safe=value", log, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void Create_SelectsNewestLogsAcrossTheBoundedCandidateSet()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            RuntimeLayout.EnsureInitialized(root);
+            var baseline = DateTime.UtcNow.AddDays(-2);
+            for (var index = 0; index < 520; index++)
+            {
+                var path = Path.Combine(root, "logs", $"log-{index:D3}.log");
+                File.WriteAllText(path, $"log {index}");
+                File.SetLastWriteTimeUtc(path, baseline.AddMinutes(index));
+            }
+
+            var result = new SupportBundleService(root).Create();
+
+            using var archive = ZipFile.OpenRead(result.ArchivePath);
+            var names = archive.Entries
+                .Where(entry => entry.FullName.StartsWith("logs/", StringComparison.OrdinalIgnoreCase))
+                .Select(entry => entry.FullName)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            Assert.Equal(20, result.IncludedLogCount);
+            Assert.Contains("logs/log-519.log", names);
+            Assert.Contains("logs/log-500.log", names);
+            Assert.DoesNotContain("logs/log-000.log", names);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public void Create_UsesUniqueAtomicArchives()
     {
         var root = TemporaryRoot();
