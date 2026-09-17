@@ -86,7 +86,15 @@
                 <DataGrid Margin="12" ItemsSource="{Binding Tasks}" AutoGenerateColumns="True" IsReadOnly="True"/>
             </TabItem>
             <TabItem Header="Diagnostics">
-                <Grid Margin="12"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><Button Content="Run diagnostics" HorizontalAlignment="Left" Style="{StaticResource Primary}" Command="{Binding DiagnosticsCommand}"/><DataGrid Grid.Row="1" ItemsSource="{Binding DiagnosticFindings}" AutoGenerateColumns="True" IsReadOnly="True" Margin="0,10,0,0"/></Grid>
+                <Grid Margin="12">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <WrapPanel>
+                        <Button Content="Run diagnostics" HorizontalAlignment="Left" Style="{StaticResource Primary}" Command="{Binding DiagnosticsCommand}"/>
+                        <Button Content="Export support bundle" HorizontalAlignment="Left" Command="{Binding SupportBundleCommand}"/>
+                    </WrapPanel>
+                    <TextBox Grid.Row="1" Text="{Binding SupportBundlePath}" IsReadOnly="True" Margin="4,6,4,0" ToolTip="Latest redacted support bundle path"/>
+                    <DataGrid Grid.Row="2" ItemsSource="{Binding DiagnosticFindings}" AutoGenerateColumns="True" IsReadOnly="True" Margin="0,10,0,0"/>
+                </Grid>
             </TabItem>
             <TabItem Header="Configuration">
                 <Grid Margin="12"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><WrapPanel><TextBlock Text="Configuration" VerticalAlignment="Center"/><ComboBox Width="140" SelectedValuePath="Content" SelectedValue="{Binding ConfigurationKey}"><ComboBoxItem Content="nginx"/><ComboBoxItem Content="php"/><ComboBoxItem Content="mysql"/></ComboBox><Button Content="Load" Command="{Binding ConfigurationLoadCommand}"/><Button Content="Validate &amp; save" Style="{StaticResource Primary}" Command="{Binding ConfigurationSaveCommand}"/></WrapPanel><TextBox Grid.Row="1" Text="{Binding ConfigurationText, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" AcceptsTab="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" Margin="0,10,0,0"/></Grid>
