@@ -31,6 +31,40 @@ function Invoke-CheckedProcess {
     }
 }
 
+function Get-DevBoxUninstaller {
+    param(
+        [switch] $Optional
+    )
+
+    $candidates = @(
+        Get-ChildItem -LiteralPath $installDir -Filter 'unins*.exe' -File -ErrorAction SilentlyContinue |
+            Sort-Object Name
+    )
+
+    if ($candidates.Count -eq 0) {
+        if ($Optional) {
+            return $null
+        }
+
+        $installedFiles = @(
+            Get-ChildItem -LiteralPath $installDir -File -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty Name |
+                Sort-Object
+        )
+        Write-Host "Files in install root after setup: $($installedFiles -join ', ')"
+        throw "DevBox installer did not create an Inno Setup uninstaller in: $installDir"
+    }
+
+    if ($candidates.Count -gt 1) {
+        Write-Host "Multiple uninstallers detected after maintenance: $($candidates.Name -join ', ')"
+    }
+    else {
+        Write-Host "Detected uninstaller: $($candidates[0].Name)"
+    }
+
+    return $candidates[-1].FullName
+}
+
 function Invoke-Setup {
     param(
         [Parameter(Mandatory = $true)]
@@ -49,12 +83,13 @@ function Invoke-Setup {
 
     $gui = Join-Path $installDir 'DevBox.exe'
     $cli = Join-Path $installDir 'cli\devbox.exe'
-    $uninstaller = Join-Path $installDir 'unins000.exe'
-    foreach ($required in @($gui, $cli, $uninstaller)) {
+    foreach ($required in @($gui, $cli)) {
         if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
             throw "Installer did not create required file: $required"
         }
     }
+
+    [void](Get-DevBoxUninstaller)
 }
 
 function Invoke-InstalledCliHelp {
@@ -90,10 +125,7 @@ function Wait-UntilMissing {
 }
 
 function Invoke-Uninstall {
-    $uninstaller = Join-Path $installDir 'unins000.exe'
-    if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
-        throw "DevBox uninstaller was not found: $uninstaller"
-    }
+    $uninstaller = Get-DevBoxUninstaller
 
     Invoke-CheckedProcess -FilePath $uninstaller -Description 'DevBox uninstall' -Arguments @(
         '/VERYSILENT',
@@ -156,8 +188,8 @@ try {
     }
 }
 finally {
-    $uninstaller = Join-Path $installDir 'unins000.exe'
-    if (Test-Path -LiteralPath $uninstaller -PathType Leaf) {
+    $uninstaller = Get-DevBoxUninstaller -Optional
+    if ($null -ne $uninstaller) {
         try {
             Start-Process -FilePath $uninstaller -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait | Out-Null
         }
