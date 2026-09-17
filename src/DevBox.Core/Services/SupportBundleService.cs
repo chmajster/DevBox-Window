@@ -50,7 +50,7 @@ public sealed class SupportBundleService
         TimeSpan.FromSeconds(1));
 
     private static readonly Regex SecretAssignmentRegex = new(
-        "(?im)([\"']?)([A-Za-z0-9_.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|cookie|connectionstring|private[_-]?key|credential))\\1(\\s*[:=]\\s*)(?:\"[^\"\\r\\n]*\"|'[^'\\r\\n]*'|[^\\s;\\r\\n]+)",
+        "(?im)(?<![A-Za-z0-9_.-])([\"']?)([A-Za-z0-9_.-]{0,128}(?:password|passwd|pwd|secret|token|api[_-]?key|cookie|connectionstring|private[_-]?key|credential))\\1(\\s*[:=]\\s*)(?:\"[^\"\\r\\n]*\"|'[^'\\r\\n]*'|[^\\s;\\r\\n]+)",
         RegexOptions.CultureInvariant,
         TimeSpan.FromSeconds(1));
 
