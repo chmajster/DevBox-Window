@@ -148,6 +148,21 @@ function Set-ManagedCleanupSentinels {
     return @($runtimeSentinel, $tempRuntimeSentinel)
 }
 
+function Assert-ManagedPayloadRemoved {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]] $ManagedSentinels,
+        [Parameter(Mandatory = $true)]
+        [string] $OperationName
+    )
+
+    foreach ($sentinel in $ManagedSentinels) {
+        if (Test-Path -LiteralPath $sentinel) {
+            throw "$OperationName did not remove DevBox-owned managed payload: $sentinel"
+        }
+    }
+}
+
 function Assert-ReinstallState {
     param(
         [Parameter(Mandatory = $true)]
@@ -164,11 +179,8 @@ function Assert-ReinstallState {
     if ((Get-Content -LiteralPath $UserSentinel -Raw) -ne 'preserve-user-project') {
         throw "$CycleName modified user-owned project content."
     }
-    foreach ($sentinel in $ManagedSentinels) {
-        if (Test-Path -LiteralPath $sentinel) {
-            throw "$CycleName did not remove DevBox-owned managed payload: $sentinel"
-        }
-    }
+
+    Assert-ManagedPayloadRemoved -ManagedSentinels $ManagedSentinels -OperationName $CycleName
 }
 
 try {
@@ -201,8 +213,9 @@ try {
     Assert-ReinstallState -UserSentinel $userSentinel -ManagedSentinels $managedSentinels -CycleName 'Second same-version reinstall'
     Invoke-InstalledCliHelp
 
-    # Final uninstall must remove the application and DevBox-owned modules while
-    # preserving user-owned project files left inside the selected DevBox root.
+    # Seed managed content again so final uninstall proves that the uninstall
+    # callback cleans DevBox-owned runtime/tmp payloads, not only application files.
+    $managedSentinels = Set-ManagedCleanupSentinels
     Invoke-Uninstall
 
     if (-not (Test-Path -LiteralPath $userSentinel -PathType Leaf)) {
@@ -211,6 +224,7 @@ try {
     if (Test-Path -LiteralPath (Join-Path $installDir 'DevBox.exe')) {
         throw 'Uninstall left DevBox.exe behind.'
     }
+    Assert-ManagedPayloadRemoved -ManagedSentinels $managedSentinels -OperationName 'Final uninstall'
 }
 finally {
     $uninstaller = Get-DevBoxUninstaller -Optional
