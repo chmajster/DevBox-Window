@@ -145,6 +145,30 @@ public sealed class SupportBundleServiceTests
     }
 
     [Fact]
+    public void Create_ContinuesWhenAStatusSectionIsCorrupted()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            RuntimeLayout.EnsureInitialized(root);
+            File.WriteAllText(Path.Combine(root, "config", "services.json"), "{ invalid-json");
+
+            var result = new SupportBundleService(root).Create();
+
+            using var archive = ZipFile.OpenRead(result.ArchivePath);
+            var services = ReadEntry(archive, "services.json");
+            Assert.Contains("\"available\": false", services, StringComparison.Ordinal);
+            Assert.Contains("\"section\": \"services\"", services, StringComparison.Ordinal);
+            Assert.Contains("diagnostics.json", archive.Entries.Select(entry => entry.FullName));
+            Assert.Contains("manifest.json", archive.Entries.Select(entry => entry.FullName));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public void Create_UsesUniqueAtomicArchives()
     {
         var root = TemporaryRoot();

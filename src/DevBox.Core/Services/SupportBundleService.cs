@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using DevBox.Core.Models;
@@ -39,7 +40,8 @@ public sealed class SupportBundleService
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
     private static readonly Regex AuthorizationRegex = new(
@@ -100,11 +102,11 @@ public sealed class SupportBundleService
             using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
             using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: false))
             {
-                AddJsonEntry(archive, entries, "diagnostics.json", BuildDiagnostics());
-                AddJsonEntry(archive, entries, "system.json", BuildSystemSummary(createdAt));
-                AddJsonEntry(archive, entries, "services.json", BuildServiceSummary());
-                AddJsonEntry(archive, entries, "runtime-status.json", BuildRuntimeSummary());
-                AddJsonEntry(archive, entries, "database-status.json", BuildDatabaseSummary());
+                AddJsonEntry(archive, entries, "diagnostics.json", BuildSafeSection("diagnostics", BuildDiagnostics));
+                AddJsonEntry(archive, entries, "system.json", BuildSafeSection("system", () => BuildSystemSummary(createdAt)));
+                AddJsonEntry(archive, entries, "services.json", BuildSafeSection("services", BuildServiceSummary));
+                AddJsonEntry(archive, entries, "runtime-status.json", BuildSafeSection("runtimes", BuildRuntimeSummary));
+                AddJsonEntry(archive, entries, "database-status.json", BuildSafeSection("databases", BuildDatabaseSummary));
 
                 AddRedactedConfigurations(archive, entries);
                 includedLogCount = AddRedactedLogs(archive, entries);
@@ -151,6 +153,23 @@ public sealed class SupportBundleService
         {
             TryDelete(temporaryPath);
             throw;
+        }
+    }
+
+    private object BuildSafeSection(string section, Func<object> builder)
+    {
+        try
+        {
+            return builder();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException or ArgumentException or PlatformNotSupportedException or JsonException or System.ComponentModel.Win32Exception or System.Security.Cryptography.CryptographicException or RegexMatchTimeoutException)
+        {
+            return new
+            {
+                section,
+                available = false,
+                error = RedactText(ex.Message)
+            };
         }
     }
 
@@ -361,7 +380,7 @@ public sealed class SupportBundleService
                 MaxDepth = 64
             });
             using var buffer = new MemoryStream();
-            using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true }))
+            using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
                 WriteRedactedJson(writer, document.RootElement);
             return Encoding.UTF8.GetString(buffer.ToArray());
         }
