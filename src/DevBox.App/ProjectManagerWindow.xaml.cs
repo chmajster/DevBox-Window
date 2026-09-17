@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Controls;
 using DevBox.App.Services;
 using DevBox.App.ViewModels;
 using DevBox.Core.Abstractions;
@@ -21,6 +22,7 @@ public partial class ProjectManagerWindow : Window
     {
         InitializeComponent();
         _dialogs = dialogs;
+        AddDeveloperToolsBar();
 
         var root = App.DevBoxRoot;
         var sites = new SiteManager(root);
@@ -54,6 +56,40 @@ public partial class ProjectManagerWindow : Window
 
     private ProjectSiteRow? SelectedProject =>
         (DataContext as ProjectManagerWindowViewModel)?.SelectedProject;
+
+    private void AddDeveloperToolsBar()
+    {
+        if (Content is not Grid rootGrid)
+            return;
+
+        rootGrid.RowDefinitions.Insert(0, new RowDefinition { Height = GridLength.Auto });
+        foreach (UIElement child in rootGrid.Children.Cast<UIElement>().ToArray())
+            Grid.SetRow(child, Grid.GetRow(child) + 1);
+
+        var bar = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 0, 0, 10)
+        };
+        bar.Children.Add(CreateToolButton("VS Code", OpenVsCode_Click));
+        bar.Children.Add(CreateToolButton("PhpStorm", OpenPhpStorm_Click));
+        bar.Children.Add(CreateToolButton("Terminal", OpenTerminal_Click));
+
+        Grid.SetRow(bar, 0);
+        rootGrid.Children.Add(bar);
+    }
+
+    private static Button CreateToolButton(string content, RoutedEventHandler handler)
+    {
+        var button = new Button
+        {
+            Content = content,
+            ToolTip = $"Open the selected project in {content}"
+        };
+        button.Click += handler;
+        return button;
+    }
 
     private void OpenVsCode_Click(object sender, RoutedEventArgs e) =>
         LaunchSelectedProject("VS Code", _developerTools.OpenVsCode);
