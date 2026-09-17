@@ -1,0 +1,248 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [string] $InstallerPath
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$installer = (Resolve-Path -LiteralPath $InstallerPath).Path
+$testRoot = Join-Path $env:RUNNER_TEMP ("devbox-installer-smoke-" + [guid]::NewGuid().ToString('N'))
+$installDir = Join-Path $testRoot 'DevBox'
+$runtimeRoot = Join-Path $testRoot 'runtime-root'
+$logDir = Join-Path $testRoot 'logs'
+
+New-Item -ItemType Directory -Force $testRoot, $logDir | Out-Null
+
+function Invoke-CheckedProcess {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $FilePath,
+        [Parameter(Mandatory = $true)]
+        [string[]] $Arguments,
+        [Parameter(Mandatory = $true)]
+        [string] $Description
+    )
+
+    $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+        throw "$Description failed with exit code $($process.ExitCode)."
+    }
+}
+
+function Get-DevBoxUninstaller {
+    param(
+        [switch] $Optional
+    )
+
+    $candidates = @(
+        Get-ChildItem -LiteralPath $installDir -Filter 'unins*.exe' -File -ErrorAction SilentlyContinue |
+            Sort-Object Name
+    )
+
+    if ($candidates.Count -eq 0) {
+        if ($Optional) {
+            return $null
+        }
+
+        $installedFiles = @(
+            Get-ChildItem -LiteralPath $installDir -File -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty Name |
+                Sort-Object
+        )
+        Write-Host "Files in install root after setup: $($installedFiles -join ', ')"
+        throw "DevBox installer did not create an Inno Setup uninstaller in: $installDir"
+    }
+
+    if ($candidates.Count -gt 1) {
+        Write-Host "Multiple uninstallers detected after maintenance: $($candidates.Name -join ', ')"
+    }
+    else {
+        Write-Host "Detected uninstaller: $($candidates[0].Name)"
+    }
+
+    return $candidates[-1].FullName
+}
+
+function Invoke-Setup {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $LogName
+    )
+
+    $setupLog = Join-Path $logDir $LogName
+    Invoke-CheckedProcess -FilePath $installer -Description "DevBox Setup ($LogName)" -Arguments @(
+        '/VERYSILENT',
+        '/SUPPRESSMSGBOXES',
+        '/NORESTART',
+        "/DIR=`"$installDir`"",
+        '/MERGETASKS="!desktopicon,!startmenuicon,!launchafterinstall"',
+        "/LOG=`"$setupLog`""
+    )
+
+    $gui = Join-Path $installDir 'DevBox.exe'
+    $cli = Join-Path $installDir 'cli\devbox.exe'
+    foreach ($required in @($gui, $cli)) {
+        if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+            throw "Installer did not create required file: $required"
+        }
+    }
+
+    [void](Get-DevBoxUninstaller)
+}
+
+function Invoke-InstalledCliHelp {
+    $cli = Join-Path $installDir 'cli\devbox.exe'
+    $oldRoot = $env:DEVBOX_ROOT
+    try {
+        $env:DEVBOX_ROOT = $runtimeRoot
+        & $cli --help | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "Installed CLI --help failed with exit code $LASTEXITCODE."
+        }
+    }
+    finally {
+        $env:DEVBOX_ROOT = $oldRoot
+    }
+}
+
+function Wait-UntilMissing {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Path,
+        [int] $TimeoutSeconds = 15
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ((Test-Path -LiteralPath $Path) -and ([DateTime]::UtcNow -lt $deadline)) {
+        Start-Sleep -Milliseconds 250
+    }
+
+    if (Test-Path -LiteralPath $Path) {
+        throw "Path was not removed within $TimeoutSeconds seconds: $Path"
+    }
+}
+
+function Invoke-Uninstall {
+    $uninstaller = Get-DevBoxUninstaller
+
+    Invoke-CheckedProcess -FilePath $uninstaller -Description 'DevBox uninstall' -Arguments @(
+        '/VERYSILENT',
+        '/SUPPRESSMSGBOXES',
+        '/NORESTART'
+    )
+
+    Wait-UntilMissing -Path (Join-Path $installDir 'DevBox.exe')
+}
+
+function Set-ManagedCleanupSentinels {
+    $runtimeSentinel = Join-Path $installDir 'runtime\smoke\remove.txt'
+    New-Item -ItemType Directory -Force (Split-Path -Parent $runtimeSentinel) | Out-Null
+    Set-Content -LiteralPath $runtimeSentinel -Value 'remove-runtime' -NoNewline
+
+    $tempRuntimeSentinel = Join-Path $installDir 'tmp\runtimes\smoke\remove.txt'
+    New-Item -ItemType Directory -Force (Split-Path -Parent $tempRuntimeSentinel) | Out-Null
+    Set-Content -LiteralPath $tempRuntimeSentinel -Value 'remove-temp-runtime' -NoNewline
+
+    return @($runtimeSentinel, $tempRuntimeSentinel)
+}
+
+function Assert-ManagedPayloadRemoved {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]] $ManagedSentinels,
+        [Parameter(Mandatory = $true)]
+        [string] $OperationName
+    )
+
+    foreach ($sentinel in $ManagedSentinels) {
+        if (Test-Path -LiteralPath $sentinel) {
+            throw "$OperationName did not remove DevBox-owned managed payload: $sentinel"
+        }
+    }
+}
+
+function Assert-ReinstallState {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $UserSentinel,
+        [Parameter(Mandatory = $true)]
+        [string[]] $ManagedSentinels,
+        [Parameter(Mandatory = $true)]
+        [string] $CycleName
+    )
+
+    if (-not (Test-Path -LiteralPath $UserSentinel -PathType Leaf)) {
+        throw "$CycleName removed user-owned project content."
+    }
+    if ((Get-Content -LiteralPath $UserSentinel -Raw) -ne 'preserve-user-project') {
+        throw "$CycleName modified user-owned project content."
+    }
+
+    Assert-ManagedPayloadRemoved -ManagedSentinels $ManagedSentinels -OperationName $CycleName
+}
+
+try {
+    # Clean installation.
+    Invoke-Setup -LogName 'install.log'
+    Invoke-InstalledCliHelp
+
+    # User-owned content must survive maintenance reinstalls, while DevBox-owned
+    # downloaded runtime/temp payloads must be removed by each reinstall path.
+    $userProject = Join-Path $installDir 'www\user-project'
+    New-Item -ItemType Directory -Force $userProject | Out-Null
+    $userSentinel = Join-Path $userProject 'keep.txt'
+    Set-Content -LiteralPath $userSentinel -Value 'preserve-user-project' -NoNewline
+
+    $managedSentinels = Set-ManagedCleanupSentinels
+
+    # Running the same-version installer selects the installer maintenance
+    # "Reinstall" path by default. This exercises its uninstaller + managed cleanup
+    # + reinstall transaction rather than merely copying files over the old install.
+    Invoke-Setup -LogName 'reinstall.log'
+    Assert-ReinstallState -UserSentinel $userSentinel -ManagedSentinels $managedSentinels -CycleName 'First same-version reinstall'
+    Invoke-InstalledCliHelp
+
+    # Inno may increment the uninstaller filename (for example unins001.exe) after
+    # maintenance. A second consecutive reinstall verifies that DevBox trusts the
+    # registered uninstaller in the same safe installation directory instead of
+    # incorrectly requiring unins000.exe forever.
+    $managedSentinels = Set-ManagedCleanupSentinels
+    Invoke-Setup -LogName 'reinstall-again.log'
+    Assert-ReinstallState -UserSentinel $userSentinel -ManagedSentinels $managedSentinels -CycleName 'Second same-version reinstall'
+    Invoke-InstalledCliHelp
+
+    # Seed managed content again so final uninstall proves that the uninstall
+    # callback cleans DevBox-owned runtime/tmp payloads, not only application files.
+    $managedSentinels = Set-ManagedCleanupSentinels
+    Invoke-Uninstall
+
+    if (-not (Test-Path -LiteralPath $userSentinel -PathType Leaf)) {
+        throw 'Uninstall removed user-owned project content.'
+    }
+    if (Test-Path -LiteralPath (Join-Path $installDir 'DevBox.exe')) {
+        throw 'Uninstall left DevBox.exe behind.'
+    }
+    Assert-ManagedPayloadRemoved -ManagedSentinels $managedSentinels -OperationName 'Final uninstall'
+}
+finally {
+    $uninstaller = Get-DevBoxUninstaller -Optional
+    if ($null -ne $uninstaller) {
+        try {
+            Start-Process -FilePath $uninstaller -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait | Out-Null
+        }
+        catch {
+            Write-Warning "Cleanup uninstall failed: $($_.Exception.Message)"
+        }
+    }
+
+    try {
+        if (Test-Path -LiteralPath $testRoot) {
+            Remove-Item -LiteralPath $testRoot -Recurse -Force
+        }
+    }
+    catch {
+        Write-Warning "Smoke-test cleanup failed: $($_.Exception.Message)"
+    }
+}

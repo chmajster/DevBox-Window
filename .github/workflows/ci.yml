@@ -109,3 +109,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "Inno Setup failed with exit code $LASTEXITCODE"
           }
+
+      - name: Installer install, reinstall and uninstall smoke test
+        shell: pwsh
+        run: |
+          ./packaging/Test-InstallerSmoke.ps1 -InstallerPath "artifacts/installer/DevBox-0.0.0-ci-win-x64-setup.exe"
