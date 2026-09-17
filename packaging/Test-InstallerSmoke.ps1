@@ -136,18 +136,7 @@ function Invoke-Uninstall {
     Wait-UntilMissing -Path (Join-Path $installDir 'DevBox.exe')
 }
 
-try {
-    # Clean installation.
-    Invoke-Setup -LogName 'install.log'
-    Invoke-InstalledCliHelp
-
-    # User-owned content must survive a same-version reinstall, while DevBox-owned
-    # downloaded runtime/temp payloads must be removed by the reinstall path.
-    $userProject = Join-Path $installDir 'www\user-project'
-    New-Item -ItemType Directory -Force $userProject | Out-Null
-    $userSentinel = Join-Path $userProject 'keep.txt'
-    Set-Content -LiteralPath $userSentinel -Value 'preserve-user-project' -NoNewline
-
+function Set-ManagedCleanupSentinels {
     $runtimeSentinel = Join-Path $installDir 'runtime\smoke\remove.txt'
     New-Item -ItemType Directory -Force (Split-Path -Parent $runtimeSentinel) | Out-Null
     Set-Content -LiteralPath $runtimeSentinel -Value 'remove-runtime' -NoNewline
@@ -156,24 +145,60 @@ try {
     New-Item -ItemType Directory -Force (Split-Path -Parent $tempRuntimeSentinel) | Out-Null
     Set-Content -LiteralPath $tempRuntimeSentinel -Value 'remove-temp-runtime' -NoNewline
 
+    return @($runtimeSentinel, $tempRuntimeSentinel)
+}
+
+function Assert-ReinstallState {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $UserSentinel,
+        [Parameter(Mandatory = $true)]
+        [string[]] $ManagedSentinels,
+        [Parameter(Mandatory = $true)]
+        [string] $CycleName
+    )
+
+    if (-not (Test-Path -LiteralPath $UserSentinel -PathType Leaf)) {
+        throw "$CycleName removed user-owned project content."
+    }
+    if ((Get-Content -LiteralPath $UserSentinel -Raw) -ne 'preserve-user-project') {
+        throw "$CycleName modified user-owned project content."
+    }
+    foreach ($sentinel in $ManagedSentinels) {
+        if (Test-Path -LiteralPath $sentinel) {
+            throw "$CycleName did not remove DevBox-owned managed payload: $sentinel"
+        }
+    }
+}
+
+try {
+    # Clean installation.
+    Invoke-Setup -LogName 'install.log'
+    Invoke-InstalledCliHelp
+
+    # User-owned content must survive maintenance reinstalls, while DevBox-owned
+    # downloaded runtime/temp payloads must be removed by each reinstall path.
+    $userProject = Join-Path $installDir 'www\user-project'
+    New-Item -ItemType Directory -Force $userProject | Out-Null
+    $userSentinel = Join-Path $userProject 'keep.txt'
+    Set-Content -LiteralPath $userSentinel -Value 'preserve-user-project' -NoNewline
+
+    $managedSentinels = Set-ManagedCleanupSentinels
+
     # Running the same-version installer selects the installer maintenance
     # "Reinstall" path by default. This exercises its uninstaller + managed cleanup
     # + reinstall transaction rather than merely copying files over the old install.
     Invoke-Setup -LogName 'reinstall.log'
+    Assert-ReinstallState -UserSentinel $userSentinel -ManagedSentinels $managedSentinels -CycleName 'First same-version reinstall'
+    Invoke-InstalledCliHelp
 
-    if (-not (Test-Path -LiteralPath $userSentinel -PathType Leaf)) {
-        throw 'Same-version reinstall removed user-owned project content.'
-    }
-    if ((Get-Content -LiteralPath $userSentinel -Raw) -ne 'preserve-user-project') {
-        throw 'Same-version reinstall modified user-owned project content.'
-    }
-    if (Test-Path -LiteralPath $runtimeSentinel) {
-        throw 'Same-version reinstall did not remove DevBox-owned runtime payloads.'
-    }
-    if (Test-Path -LiteralPath $tempRuntimeSentinel) {
-        throw 'Same-version reinstall did not remove DevBox-owned temporary runtime payloads.'
-    }
-
+    # Inno may increment the uninstaller filename (for example unins001.exe) after
+    # maintenance. A second consecutive reinstall verifies that DevBox trusts the
+    # registered uninstaller in the same safe installation directory instead of
+    # incorrectly requiring unins000.exe forever.
+    $managedSentinels = Set-ManagedCleanupSentinels
+    Invoke-Setup -LogName 'reinstall-again.log'
+    Assert-ReinstallState -UserSentinel $userSentinel -ManagedSentinels $managedSentinels -CycleName 'Second same-version reinstall'
     Invoke-InstalledCliHelp
 
     # Final uninstall must remove the application and DevBox-owned modules while
