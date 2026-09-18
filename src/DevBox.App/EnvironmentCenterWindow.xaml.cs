@@ -30,8 +30,8 @@ public partial class EnvironmentCenterWindow : Window
 
         var bar = new StackPanel
         {
-            Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right,
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
             Margin = new Thickness(0, 0, 0, 10)
         };
         bar.Children.Add(CreateBackupButton("Backup configuration", false));
@@ -57,7 +57,7 @@ public partial class EnvironmentCenterWindow : Window
     {
         if (includeProjects)
         {
-            var confirmed = MessageBox.Show(
+            var confirmed = System.Windows.MessageBox.Show(
                 "Include all project files under DevBox www? The archive may be large.",
                 "Environment backup",
                 MessageBoxButton.YesNo,
@@ -72,7 +72,7 @@ public partial class EnvironmentCenterWindow : Window
         try
         {
             var result = await Task.Run(() => new EnvironmentBackupService(App.DevBoxRoot).Create(includeProjects));
-            MessageBox.Show(
+            System.Windows.MessageBox.Show(
                 $"Backup created successfully.\n\n{result.ArchivePath}\n\nFiles: {result.FileCount}\nProjects: {result.ProjectCount}\nArchive: {FormatBytes(result.ArchiveBytes)}",
                 "Environment backup",
                 MessageBoxButton.OK,
@@ -80,7 +80,7 @@ public partial class EnvironmentCenterWindow : Window
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
         {
-            MessageBox.Show(ex.Message, "Environment backup failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            System.Windows.MessageBox.Show(ex.Message, "Environment backup failed", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
