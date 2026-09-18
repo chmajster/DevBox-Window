@@ -69,8 +69,8 @@ public partial class ProjectManagerWindow : Window
 
         var bar = new StackPanel
         {
-            Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right,
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
             Margin = new Thickness(0, 0, 0, 10)
         };
         bar.Children.Add(CreateToolButton("VS Code", OpenVsCode_Click));
