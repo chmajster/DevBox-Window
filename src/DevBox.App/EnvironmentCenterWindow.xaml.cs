@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using Button = System.Windows.Controls.Button;
 using DevBox.App.ViewModels;
 using DevBox.Core.Services;
 
