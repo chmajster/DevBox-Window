@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Text.Json;
 using DevBox.Core.Services;
+using Xunit;
 
 namespace DevBox.Tests;
 
